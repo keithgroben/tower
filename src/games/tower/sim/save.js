@@ -1,62 +1,78 @@
 /**
- * Saving a tower, and refusing to load one that no longer fits.
+ * Saving a tower, and getting it back.
  *
- * A save is a **snapshot**, not a replay. The sim is deterministic and its
- * whole state JSONs cleanly, so the honest way to resume a six-hour tower is
- * to write the state down and put it back — measured, not assumed: a 150-day
- * tower snapshotted, reparsed and stepped 60 more days produces a
- * byte-identical log (`test/save.test.js`). Replaying an action tape would
- * take as long as the session did.
+ * Rewritten for the `{tower, ledger}` world. The previous file came across from
+ * the predecessor repo and **could not even be imported** — it began
+ * `import { boot } from './index.js'`, and there is no `sim/index.js` in this
+ * repo. It also read `state.log`, `state.day`, `state.floors`, `state.money`
+ * and `starTier()`, none of which exist. So this is not a port; the old one was
+ * a module that threw on load, which is why nothing calling it went unnoticed.
  *
- * The one thing JSON cannot carry is the rng, which is a closure. Its cursor
- * is exposed as a `get seed()` / `set seed(v)` pair for exactly this reason,
- * so the snapshot stores the cursor and `restore` rebuilds the generator
- * around it. Get that wrong and the tower resumes into a *different* future
- * while looking perfectly correct — the worst class of save bug.
+ * Pure and Node-runnable like everything else under `sim/`. The browser half —
+ * which store, which slot — is `ui/save-store.js`.
  *
- * ## Why this refuses rather than repairs
+ * ## The two things JSON silently loses
  *
- * The sim's state shape changed four times on 2026-09-01 alone — floor range,
- * support rule, empty rooms, `everLet`. A save written either side of one of
- * those is not a tower this build can run, and half-loading it produces a
- * plausible-looking wreck rather than an error. So `restore` compares the
- * save's keys against a **freshly booted state from the current code** and
- * names what is missing. That check maintains itself: it has nothing to
- * hand-update when the shape changes again.
+ * A tower is not a plain object, and both of the ways it is not are invisible
+ * failures rather than errors:
  *
- * `SAVE_VERSION` covers what keys cannot see — a change in what a key *means*
- * rather than whether it exists. Bump it by hand for those.
+ * 1. **`tower.objects` is a `Map`.** `JSON.stringify` turns a Map into `{}`.
+ *    Not an error, not a warning — a save that "worked", and a tower that comes
+ *    back with no rooms in it and its people pointing at nothing.
+ * 2. **`tower.rng` is a closure.** It stringifies to `{}` as well, and a tower
+ *    restored with a fresh generator replays a different future from the same
+ *    position, which is the one thing `CLAUDE.md` says determinism must never
+ *    do. Only the 32-bit cursor travels; `makeRng` rebuilds the rest.
  *
- * Pure and Node-runnable, like everything else under `sim/`. The browser half
- * (IndexedDB slots, files, the panel) lives in `ui/`.
+ * 3. **`carrier.liveRequests` is a `Set`.** Same failure, one level down, and
+ *    found by the round-trip test rather than by reading: a restored carrier
+ *    came back with `{}` and threw `liveRequests.has is not a function` on the
+ *    first ride. Had it merely come back *empty* it would not have thrown at
+ *    all — it would have let every rider queue twice again, which is the
+ *    duplicate-boarding bug that cost a day to find the first time.
+ *
+ * `routeTables` is deliberately NOT saved. It is derived from the carriers and
+ * segments and is rebuilt at the start-of-day checkpoint; storing it would be
+ * a second copy of something already in the file, free to disagree with it.
+ *
+ * `test/save.test.js` walks the live tower for anything else JSON cannot
+ * carry, so the fourth one fails a test instead of a playthrough.
  */
-import { boot } from './index.js';
 import { makeRng } from './rng.js';
-import { basementDepth, population, starTier } from './state.js';
+import { createActor, createObject, isRented, population } from './state.js';
 
-export const SAVE_SCHEMA = 'lift-save/v1';
+export const SAVE_SCHEMA = 'tower-save/v1';
 
 /**
  * Bumped by hand when the sim's *rules* change in a way the key check cannot
- * see, so old saves are refused rather than resumed into the wrong game.
- * The key names surviving a change is not the same as the tower still meaning
- * what it did.
+ * see, so old saves are refused rather than resumed into the wrong game. The
+ * keys surviving a change is not the same as the tower still meaning what it
+ * did.
+ *
+ * v1 is this repo's first working save. Nothing from `lift-save/v1` can be
+ * read — a different state model entirely — and it is refused by schema, not
+ * by version, which is why the message can say something useful.
  */
 export const SAVE_VERSION = 1;
 
-/** Keys that never travel in a save, because they cannot survive JSON. */
-const NOT_SERIALISABLE = new Set(['rng']);
+/**
+ * Tower keys that never travel as themselves. Each is rebuilt in `restore`,
+ * and each would otherwise stringify to `{}` without complaint.
+ */
+const REBUILT = new Set(['objects', 'rng', 'routeTables']);
 
 /**
- * The state, minus what JSON would silently drop, plus the rng cursor beside
- * it. Deep-cloned through JSON so the snapshot can never alias the live
- * tower — a save that shares an array with the running game is a save that
- * keeps changing after you took it.
+ * A save blob: plain JSON, deep-cloned so it can never alias the running tower.
+ * A snapshot that shares an array with the live game is a snapshot that keeps
+ * changing after you took it.
+ *
+ * @param {{tower: object, ledger: object}} world
  */
-export function snapshot(state, config, { tape = [], name = '', now = Date.now() } = {}) {
+export function snapshot(world, { name = '', now = Date.now() } = {}) {
+  const { tower, ledger } = world;
   const plain = {};
-  for (const [key, value] of Object.entries(state)) {
-    if (NOT_SERIALISABLE.has(key)) continue;
+  for (const [key, value] of Object.entries(tower)) {
+    if (REBUILT.has(key)) continue;
     plain[key] = value;
   }
   return {
@@ -64,191 +80,130 @@ export function snapshot(state, config, { tape = [], name = '', now = Date.now()
     version: SAVE_VERSION,
     name,
     savedAt: now,
-    /** The rng cursor. Not the seed the tower started from — that is in the state. */
-    rngSeed: state.rng?.seed ?? state.seed ?? 1,
-    /** What the tower was tuned to. Restored with it, and reported when it differs. */
-    config: JSON.parse(JSON.stringify(config)),
-    state: JSON.parse(JSON.stringify(plain)),
-    /** The snapshot resumes; the tape reproduces. Both, or neither is useful. */
-    tape: JSON.parse(JSON.stringify(tape)),
-    summary: summarise(state, config),
+    /** The generator's cursor, not the seed. The seed alone only reproduces a
+     *  run from tick zero; resuming needs the position. */
+    rngState: tower.rng.state,
+    tower: plainTower(plain),
+    /** The Map, as entries. See the header — this is the one that fails silently. */
+    objects: JSON.parse(JSON.stringify([...tower.objects.values()])),
+    ledger: JSON.parse(JSON.stringify(ledger)),
+    summary: summarise(world),
   };
 }
 
 /**
- * What a save looks like in a list, computed once at save time so opening the
- * slot list never has to parse a two-megabyte state to draw a row.
+ * The tower's plain half, with the collections JSON cannot carry turned into
+ * something it can. Only `carrier.liveRequests` needs it at this level; the
+ * Map and the generator are handled a level up because they are the tower's
+ * own keys rather than a carrier's.
  */
-export function summarise(state, config) {
-  const last = state.log?.[state.log.length - 1] ?? null;
+function plainTower(plain) {
+  const out = JSON.parse(JSON.stringify(plain));
+  out.carriers = (plain.carriers ?? []).map((carrier, i) => ({
+    ...out.carriers[i],
+    liveRequests: [...carrier.liveRequests],
+  }));
+  return out;
+}
+
+/**
+ * What a save looks like in a list, computed once at save time so opening the
+ * list never has to parse a whole tower to draw a row.
+ */
+export function summarise({ tower, ledger }) {
+  let let_ = 0, leasable = 0;
+  for (const o of tower.objects.values()) {
+    if (o.occupants.length === 0) continue;
+    leasable++;
+    if (o.occupiedFlag && isRented(o.unitStatus)) let_++;
+  }
   return {
-    day: state.day ?? 0,
-    floors: state.floors ?? 0,
-    basements: basementDepth(state),
-    population: population(state),
-    money: state.money ?? 0,
-    star: starTier(state, config)?.name ?? '',
-    seed: state.seed ?? 1,
-    over: !!state.over,
-    deliveryRate: last?.deliveryRate ?? null,
+    day: tower.clock.dayCounter,
+    dayTick: tower.clock.dayTick,
+    population: population(tower),
+    let: let_,
+    leasable,
+    cash: ledger.cash,
+    stars: tower.starCount,
   };
 }
 
 /**
  * Read a save back. Returns `{ok:false, reason}` with a sentence a player can
- * act on, or `{ok:true, state, configPatch, summary}`.
+ * act on, or `{ok:true, world, summary}`.
  *
- * `configPatch` is *returned, not applied* — writing to the live config is the
- * caller's move, and keeping it out of here is what lets a test ask what a
- * save would change without changing anything.
- *
- * @param {object} blob   the parsed save
- * @param {object} config the config this build is running
+ * Every refusal is written for somebody who just lost a tower, so it says what
+ * the file is rather than what the parser wanted.
  */
-export function restore(blob, config) {
+export function restore(blob) {
   if (!blob || typeof blob !== 'object' || Array.isArray(blob)) {
-    return { ok: false, reason: 'this is not a Lift save file.' };
+    return { ok: false, reason: 'that is not a saved tower.' };
   }
   if (blob.schema !== SAVE_SCHEMA) {
     const found = typeof blob.schema === 'string' ? blob.schema : 'nothing';
-    // The tape export is the file most likely to be dropped here by mistake,
-    // and it deserves to be told apart from a corrupt save.
-    const hint = found === 'lift-tape/v1'
-      ? ' That is an action tape, not a save — tapes replay a session, they do not resume one.'
+    // A save from the predecessor repo is the file most likely to turn up here,
+    // and it deserves to be told apart from a corrupt one.
+    const hint = found.startsWith('lift-')
+      ? ' That is a save from Lift, which modelled its tower completely differently — it cannot be converted.'
       : '';
-    return { ok: false, reason: 'this file says it is "' + found + '", not a Lift save.' + hint };
+    return { ok: false, reason: 'this file says it is "' + found + '", not a saved tower.' + hint };
   }
   if (!Number.isInteger(blob.version)) {
-    return { ok: false, reason: 'this save does not say which version of Lift wrote it.' };
+    return { ok: false, reason: 'this save does not say which version wrote it.' };
   }
   if (blob.version !== SAVE_VERSION) {
     const direction = blob.version > SAVE_VERSION ? 'a newer' : 'an older';
     return {
       ok: false,
-      reason: 'this save was written by ' + direction + ' version of Lift (save v' + blob.version
-        + ', this build reads v' + SAVE_VERSION + '). The tower’s rules changed since; loading it '
-        + 'would produce a tower that plays by neither set.',
+      reason: 'this save was written by ' + direction + ' version (save v' + blob.version
+        + ', this build reads v' + SAVE_VERSION + '). The tower\'s rules changed since, so resuming it'
+        + ' would be playing a different game from the one that was saved.',
     };
   }
-  if (!blob.state || typeof blob.state !== 'object' || Array.isArray(blob.state)) {
-    return { ok: false, reason: 'this save has no tower in it.' };
+  if (!blob.tower || !Array.isArray(blob.objects) || !blob.ledger) {
+    return { ok: false, reason: 'this save is missing part of its tower and cannot be resumed.' };
   }
 
-  const missing = missingKeys(blob.state, config);
-  if (missing.length) {
-    return {
-      ok: false,
-      reason: 'this save is missing ' + list(missing) + '. The simulation’s shape changed after '
-        + 'it was written, so there is no honest way to resume it.',
-    };
+  const tower = { ...blob.tower };
+  tower.objects = new Map(blob.objects.map((o) => [o.id, o]));
+  tower.rng = makeRng(blob.rngState ?? 1);
+  // A carrier's dedup set. Empty rather than absent is the dangerous case: it
+  // would not throw, it would let every rider queue twice.
+  for (const carrier of tower.carriers ?? []) {
+    carrier.liveRequests = new Set(Array.isArray(carrier.liveRequests) ? carrier.liveRequests : []);
   }
+  // Derived, and deliberately absent from the file. `rebuildRouteTables` runs
+  // at the start-of-day checkpoint; leaving it undefined until then is the same
+  // state a freshly created tower is in.
+  delete tower.routeTables;
 
-  // Cloned again on the way in: loading the same blob twice must produce two
-  // independent towers, not two views of one.
-  const state = JSON.parse(JSON.stringify(blob.state));
-  state.rng = makeRng(state.seed ?? 1);
-  const cursor = Number(blob.rngSeed);
-  if (!Number.isFinite(cursor)) {
-    return { ok: false, reason: 'this save has no random-number cursor, so it cannot resume the same future.' };
-  }
-  state.rng.seed = cursor;
-
-  return {
-    ok: true,
-    state,
-    configPatch: configDiff(config, blob.config),
-    summary: blob.summary ?? summarise(state, config),
-  };
+  reserveIdsAbove(tower);
+  return { ok: true, world: { tower, ledger: { ...blob.ledger } }, summary: blob.summary ?? summarise({ tower, ledger: blob.ledger }) };
 }
 
 /**
- * Keys a freshly booted tower has that this save does not. Computed from the
- * running code, so it needs no maintenance when the state grows a field —
- * which is the point, given how often it has.
+ * Push the id allocators past everything the save brought back.
  *
- * Extra keys in the save are fine and deliberately unreported: a field the sim
- * stopped reading is dead weight, not a broken tower.
+ * ⚠️ Without this the first thing built after a load **overwrites a restored
+ * room**. `createObject` counts from 1 in module scope; a fresh page restoring
+ * a tower whose objects are ids 1..42 hands the next build id 1, and
+ * `tower.objects.set(1, …)` replaces the old one while its six workers go on
+ * pointing at an id that now means something else. No error, and the room only
+ * disappears when you build.
+ *
+ * Done by allocating and discarding, because the counters are module-private
+ * and `state.js` exposes only `__resetIds()`, which resets to 1. It is the
+ * sim's own allocator being used for exactly what an allocator is for, and the
+ * cost is one cheap object per id — but a `reserveIds(n)` seam would say what
+ * this means instead of demonstrating it. Requested.
  */
-export function missingKeys(saved, config) {
-  const reference = boot(config, 1);
-  const missing = [];
-  for (const key of Object.keys(reference)) {
-    if (NOT_SERIALISABLE.has(key)) continue;
-    if (!(key in saved)) missing.push(key);
-  }
-  // `today` is the one nested shape the sim rebuilds wholesale every day, so a
-  // save missing one of its counters crashes at the next day close rather than
-  // at load. Check it here, where the message can still be useful.
-  const today = saved.today;
-  if (!today || typeof today !== 'object') {
-    if (!missing.includes('today')) missing.push('today');
-  } else {
-    for (const key of Object.keys(reference.today ?? {})) {
-      if (!(key in today)) missing.push('today.' + key);
-    }
-  }
-  return missing;
-}
+function reserveIdsAbove(tower) {
+  let maxObject = 0;
+  for (const o of tower.objects.values()) if (o.id > maxObject) maxObject = o.id;
+  let maxActor = 0;
+  for (const a of tower.actors) if (a && a.id > maxActor) maxActor = a.id;
 
-const list = (items) => items.length === 1
-  ? items[0]
-  : items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
-
-/**
- * Leaf paths where the save's tuning differs from this build's. Arrays count
- * as leaves — a config array is a table (star tiers, the palette), and half a
- * table is worse than either whole one.
- *
- * Paths the current config no longer has are dropped: a knob we deleted is not
- * a knob a save gets to resurrect. Paths the save lacks keep today's default,
- * so a tower saved before a knob existed plays with it rather than without it.
- */
-export function configDiff(current, saved, prefix = '') {
-  if (!saved || typeof saved !== 'object') return [];
-  const out = [];
-  for (const [key, currentValue] of Object.entries(current ?? {})) {
-    if (!(key in saved)) continue;
-    const savedValue = saved[key];
-    const path = prefix ? prefix + '.' + key : key;
-    const nested = currentValue && typeof currentValue === 'object' && !Array.isArray(currentValue);
-    if (nested) {
-      out.push(...configDiff(currentValue, savedValue, path));
-    } else if (JSON.stringify(currentValue) !== JSON.stringify(savedValue)) {
-      out.push({ path, from: currentValue, to: savedValue });
-    }
-  }
-  return out;
-}
-
-/** Write a `configDiff` into a live config object, in place. */
-export function applyConfigPatch(config, patch) {
-  for (const { path, to } of patch ?? []) {
-    const parts = path.split('.');
-    const last = parts.pop();
-    let node = config;
-    for (const part of parts) {
-      if (node == null || typeof node !== 'object') { node = null; break; }
-      node = node[part];
-    }
-    if (node && typeof node === 'object') node[last] = JSON.parse(JSON.stringify(to));
-  }
-  return config;
-}
-
-/**
- * Should the autosave fire now?
- *
- * Two gates, and both are needed. Days alone would write once every 3.75
- * seconds of wall clock at 12x — a two-megabyte write on a tower that size.
- * Wall clock alone would write repeatedly into a paused game. So: at least
- * `minDays` of tower have passed, AND at least `minMs` of the player's life.
- *
- * `lastSavedDay: null` means nothing has been autosaved yet, which always
- * qualifies — the first day close of a session is exactly when losing the tab
- * costs the most relative to what it took to get there.
- */
-export function shouldAutosave({ day, now, lastSavedDay = null, lastSavedAt = 0, minDays = 1, minMs = 20000 }) {
-  if (!Number.isFinite(day) || !Number.isFinite(now)) return false;
-  if (lastSavedDay == null) return true;
-  return (day - lastSavedDay) >= minDays && (now - lastSavedAt) >= minMs;
+  const spare = { family: 0, floor: 0, left: 0, right: 0 };
+  while (createObject(spare).id <= maxObject) { /* burn one id */ }
+  while (createActor({ family: 0, anchorFloor: 0, objectId: 0, occupantIndex: 0 }).id <= maxActor) { /* burn one */ }
 }

@@ -75,7 +75,26 @@
   }
   #readouts > * { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #clock { flex-shrink: 0; }
-  #cash, #pace, #speeds { flex: 0 0 auto; }
+  #cash, #pace, #speeds, #saved, #restart { flex: 0 0 auto; }
+
+  /* Autosaving silently is not reassuring — a save you cannot see is a save you
+     cannot trust. This is deliberately quiet and deliberately present. */
+  #saved { color: #56687d; font-size: 11px; }
+
+  #restart {
+    font: 600 11px var(--mono);
+    color: #56687d;
+    background: none;
+    border: 1px solid #2c3948;
+    border-radius: 3px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  #restart:hover { color: var(--ink); border-color: #3d4d60; }
+  /* Armed. Losing an hour to a misclick is the failure saving exists to
+     prevent, so the button asks once — and it asks in the colour of the thing
+     it is about to do. */
+  #restart.armed { color: var(--bg); background: var(--bad); border-color: var(--bad); }
 
   #clock { font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
   #day { color: var(--info); font-weight: 700; }
@@ -207,6 +226,8 @@
       <span id="people">—</span>
     </span>
     <span id="cash">—</span>
+    <span id="saved"></span>
+    <button id="restart" title="throw this tower away and start a new one">New tower</button>
     <span id="pace">—</span>
     <span id="speeds">
       <button data-speed="0" title="pause (space or q)">||</button>

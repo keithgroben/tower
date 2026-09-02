@@ -27,7 +27,13 @@ const code = (rel) => read(rel)
 
 /** Platform and language builtins a browser module may call freely. */
 const BUILTIN = new Set([
+  // Keywords that can be followed by `(` and so read as calls to the regex.
+  // `async` is the one that turned up — `async () => {}` in an event handler —
+  // but it is the class that matters, not the instance: every keyword here can
+  // take a parenthesis after it, and a checker that rejects one of them rejects
+  // correct code with a message about a missing import.
   'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'await', 'super', 'function',
+  'async', 'void', 'new', 'delete', 'yield',
   'requestAnimationFrame', 'cancelAnimationFrame', 'setTimeout', 'clearTimeout',
   'setInterval', 'clearInterval', 'parseFloat', 'parseInt', 'isNaN', 'addEventListener',
   'removeEventListener', 'queueMicrotask', 'structuredClone', 'fetch', 'alert',
