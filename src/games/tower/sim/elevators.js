@@ -342,6 +342,71 @@ export function createCarrier({
  * shaft was started, later ones where the player clicked. Returns `null` when
  * the shaft already has its eight.
  */
+/**
+ * Move a carrier's served range, keeping its five per-floor tables in step.
+ *
+ * ⚠️ **`extend_shaft` used to write `bottomFloor`/`topFloor` on their own**, and
+ * nothing grew `stopEnabled`, `queues`, `upAssignedCar`, `downAssignedCar` or
+ * `slotCount` with them. The failure that produces is worse than a short
+ * array, because the two halves disagree in opposite directions:
+ * `carrierStopsAtFloor` reads `stopEnabled[slot] !== 0` and `undefined !== 0`
+ * is **true**, so the carrier cheerfully claims to serve the new floor — and
+ * then the first rider standing on it takes `carrier.queues[slot].down` and
+ * throws `Cannot read properties of undefined`.
+ *
+ * A rider *going to* the new floor is fine, which is why this survived: the
+ * seeded tower's stranded bank is above the lift, extending reaches it, the
+ * offices rent, and only when somebody tries to come back **down** does it
+ * fall over. Reproduced on the seed with nothing but
+ * `extend_shaft(top: 7)` and a route from F7.
+ *
+ * The remap is by **floor**, not by index, because the slot map for a standard
+ * shaft is `floor - bottomFloor`: lowering the bottom shifts every existing
+ * slot, so copying the arrays across would silently move each floor's queued
+ * riders onto a different floor. Express is exempt — `EXPRESS_SLOT_COUNT` is a
+ * fixed 16-entry map keyed off the floor itself and does not move.
+ */
+export function resizeCarrierServedRange(carrier, bottomFloor, topFloor) {
+  if (topFloor < bottomFloor) {
+    throw new RangeError(`carrier ${carrier.id}: top floor ${topFloor} is below bottom ${bottomFloor}`);
+  }
+  if (carrier.mode !== CARRIER_MODE.EXPRESS && topFloor - bottomFloor + 1 > MAX_SERVED_SPAN) {
+    throw new RangeError(
+      `carrier ${carrier.id}: ${topFloor - bottomFloor + 1} floors exceeds the ${MAX_SERVED_SPAN}-floor limit`,
+    );
+  }
+
+  const oldBottom = carrier.bottomFloor;
+  const oldTop = carrier.topFloor;
+  carrier.bottomFloor = bottomFloor;
+  carrier.topFloor = topFloor;
+  if (carrier.mode === CARRIER_MODE.EXPRESS) return carrier;
+
+  const slotCount = topFloor - bottomFloor + 1;
+  const stopEnabled = new Array(slotCount).fill(1);
+  const queues = Array.from({ length: slotCount }, () => ({ up: createRing(), down: createRing() }));
+  const upAssignedCar = new Array(slotCount).fill(0);
+  const downAssignedCar = new Array(slotCount).fill(0);
+
+  for (let floor = Math.max(oldBottom, bottomFloor); floor <= Math.min(oldTop, topFloor); floor++) {
+    const from = floor - oldBottom;
+    const to = floor - bottomFloor;
+    stopEnabled[to] = carrier.stopEnabled[from];
+    // The ring object itself, not a copy: riders already queued on this floor
+    // are still queued on it, and the cars hold their ids.
+    queues[to] = carrier.queues[from];
+    upAssignedCar[to] = carrier.upAssignedCar[from];
+    downAssignedCar[to] = carrier.downAssignedCar[from];
+  }
+
+  carrier.slotCount = slotCount;
+  carrier.stopEnabled = stopEnabled;
+  carrier.queues = queues;
+  carrier.upAssignedCar = upAssignedCar;
+  carrier.downAssignedCar = downAssignedCar;
+  return carrier;
+}
+
 export function addCar(carrier, homeFloor = carrier.homeFloor) {
   if (carrier.cars.length >= MAX_CARS_PER_CARRIER) return null;
   const car = {

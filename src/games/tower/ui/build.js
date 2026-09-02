@@ -202,6 +202,13 @@ export function preview(world, tool, target) {
     const right = command.left + spec.width - 1;
     const footprint = { kind: 'room', floor: command.floor, left: command.left, right };
     if (!floorExists(command.floor)) return refuse('that floor is outside the tower', { cost, footprint });
+    // In the seam's own order — after the floor check, before the span check —
+    // and in the seam's own words. A refusal the sim has and the ghost does not
+    // is the "passes through 12 rooms" bug again: a green ghost over a
+    // basement, and a click that does nothing.
+    if (spec.aboveGrade && command.floor <= GROUND_FLOOR) {
+      return refuse('a ' + spec.label.toLowerCase() + ' has to go above the ground floor', { cost, footprint });
+    }
     if (spanBlocked(tower, command.floor, command.left, right)) {
       return refuse('something is already built there', { cost, footprint });
     }

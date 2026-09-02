@@ -643,6 +643,24 @@ const isActive = (unit) => unit.unitStatus <= ACTIVE_BAND_MAX;
 const REQUIRES_PRIOR_RENTAL = new Set(['office']);
 
 /**
+ * Families whose income is realized by an **event**, not by this cadence.
+ *
+ * A condo is bought, not rented: `specs/facility/CONDO.md` § Sale effect puts
+ * the whole $150,000 on `finalize_condo_sale`, and § Reactivation nuance is
+ * explicit about what this pass does instead — *"the shared activation pass for
+ * family 9 only increments `activation_tick_count`; it does not call the sale
+ * helper"*.
+ *
+ * ⚠️ Without this the activation sweep would pay a condo its **full sale price
+ * again every third day, for ever**. It is the same seam an office's rent comes
+ * through and it reads the same payout table, so nothing would look wrong: one
+ * sold condo would simply earn $50,000 a day and the tower would print money.
+ * The unit still ages and still takes the once-per-cycle mark — only the money
+ * is withheld.
+ */
+const REALIZED_ON_EVENT = new Set(['condo']);
+
+/**
  * The money half of deactivation: subtract the unit's recurring contribution
  * back out of cash and take its people off the population ledger.
  *
@@ -706,8 +724,11 @@ export function deactivateFamilyCashflowIfUnpaired(ledger, unit, { daypart = 6 }
  *
  * Activation pays rent and ages the unit. It does **not** add population: the
  * `+6` belongs to the reopen path, which runs when a worker actually arrives.
+ * A family in {@link REALIZED_ON_EVENT} is aged but not paid — its money
+ * already arrived on its own event.
  *
- * @returns {boolean} whether the unit was paid
+ * @returns {boolean} whether the unit was activated (aged, and paid unless its
+ *   family realizes income on an event instead)
  */
 export function activateFamilyCashflowIfOperational(ledger, unit, dayCounter) {
   const guard = dayCounter + 1;
@@ -718,6 +739,8 @@ export function activateFamilyCashflowIfOperational(ledger, unit, dayCounter) {
 
   unit.cycleMark = guard;
   unit.activationTicks = Math.min(ACTIVATION_TICK_CAP, (unit.activationTicks ?? 0) + 1);
+  // The condo's sale money was paid once, on the sale. See REALIZED_ON_EVENT.
+  if (REALIZED_ON_EVENT.has(unit.family)) return true;
   addIncome(ledger, unit.family, payout(unit.family, unit.rentTier ?? DEFAULT_RENT_TIER));
   return true;
 }

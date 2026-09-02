@@ -17,10 +17,11 @@
  * `check_construction_funds_available_for_floor_range`.
  */
 import {
-  FAMILY, OBJECT_TYPE, floorExists, isRented, placeObject, spanBlocked,
+  FAMILY, GROUND_FLOOR, OBJECT_TYPE, floorExists, isUnitLet, placeObject, spanBlocked,
 } from './state.js';
 import {
   CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier,
+  resizeCarrierServedRange,
 } from './elevators.js';
 import { CONSTRUCTION_COST, chargeConstruction, placementCost } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
@@ -30,6 +31,36 @@ import { createSimTripRecord } from './stress.js';
 export const BUILDABLE = {
   lobby: { family: FAMILY.lobby, type: OBJECT_TYPE.lobby, cost: 'lobby', width: 1, label: 'Lobby' },
   office: { family: FAMILY.office, type: OBJECT_TYPE.office, cost: 'office', width: 6, label: 'Office' },
+  /**
+   * A condo is bought outright, not rented — and the money comes back out if
+   * its residents cannot get about. `sim/condo.js` has the whole account.
+   *
+   * TODO(parity): **the spec set gives no condo tile span.** `OFFICE.md` states
+   * the office's 6 outright; nothing states this one. 16 is the reference
+   * *implementation*'s `TILE_WIDTHS.condo`, which is the only recovered figure,
+   * and it is taken unscaled even though the same table calls an office 9 —
+   * scaling it to our 6 would be a number of our own invention, which is worse
+   * than a number of theirs. `spec/DEVIATIONS.md` A22.
+   */
+  condo: {
+    family: FAMILY.condo,
+    type: OBJECT_TYPE.condo,
+    cost: 'condo',
+    width: 16,
+    label: 'Condo',
+    /**
+     * `specs/COMMANDS.md`: *"hotel rooms, offices, and condos must be above
+     * grade (`floor > 0`) or reject with `0x0a`"*.
+     *
+     * TODO(parity): that line names **offices** too, and this build does not
+     * enforce it for them. Turning it on for family 7 changes a shipped
+     * family's placement rules and would refuse builds the seam accepts today,
+     * so it belongs to that family rather than to this change. Declared as a
+     * field rather than an `if` on the family code so the office is one word
+     * away, not one rediscovery away.
+     */
+    aboveGrade: true,
+  },
 };
 
 /** Elevator kinds a player can place. */
@@ -128,6 +159,10 @@ const ACTIONS = {
     // of money will buy sends someone away to earn money for nothing.
     const locked = lockReason(tower, spec.cost, spec.label);
     if (locked) return refuse(locked);
+
+    if (spec.aboveGrade && floor <= GROUND_FLOOR) {
+      return refuse('a ' + spec.label.toLowerCase() + ' has to go above the ground floor');
+    }
 
     const right = left + spec.width - 1;
     if (spanBlocked(tower, floor, left, right)) return refuse('something is already built there');
@@ -239,8 +274,11 @@ const ACTIONS = {
       if (blocked) return refuse(blocked);
     }
 
-    carrier.bottomFloor = newBottom;
-    carrier.topFloor = newTop;
+    // NOT two field writes. The carrier's five per-floor tables are indexed off
+    // `bottomFloor` and have to move with it — `sim/elevators.js` owns that
+    // list, and writing the two fields here left the new floors with no queue
+    // at all while `carrierStopsAtFloor` reported they were served.
+    resizeCarrierServedRange(carrier, newBottom, newTop);
     tower.routeTablesDirty = true;
     return { ok: true, cost: 0, bottom: newBottom, top: newTop };
   },
@@ -271,7 +309,11 @@ const ACTIONS = {
   demolish({ tower }, { objectId }) {
     const object = tower.objects.get(objectId);
     if (!object) return refuse('nothing there');
-    if (isRented(object.unitStatus)) return refuse('that unit is let — you cannot evict a tenant');
+    // `isUnitLet`, not `isRented`: a sold condo sits at `0x10` overnight, which
+    // is outside the OFFICE's let band — so the office reading would let a
+    // player bulldoze a condo they had been paid $150,000 for, and keep the
+    // money.
+    if (isUnitLet(object)) return refuse('that unit is let — you cannot evict a tenant');
 
     tower.objects.delete(objectId);
     tower.actors = tower.actors.filter((a) => a.objectId !== objectId);
@@ -284,6 +326,15 @@ const ACTIONS = {
     const object = tower.objects.get(objectId);
     if (!object) return refuse('nothing there');
     if (!Number.isInteger(tier) || tier < 0 || tier > 3) return refuse('rent tiers run 0 to 3');
+    // `specs/ECONOMY.md` § Pricing Tiers: *"Condo (family 9) guard: rent level
+    // can only be changed while unsold (`unit_status >= 0x18`)"*, restated in
+    // `specs/COMMANDS.md` § price-change commands. The tier is the **sale
+    // price**, and a condo's sale price is settled at the sale: without this a
+    // player could sell at $40,000, re-tier to $200,000, and be refunded five
+    // times what they were paid.
+    if (object.family === FAMILY.condo && isUnitLet(object)) {
+      return refuse('that condo is sold — you can only price one that is still for sale');
+    }
     object.rentLevel = tier;
     object.dirty = true;
     return { ok: true, tier };

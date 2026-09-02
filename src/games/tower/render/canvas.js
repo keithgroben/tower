@@ -40,7 +40,7 @@ import { clockTime } from '../sim/clock.js';
 import { CARRIER_MODE } from '../sim/elevators.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, TILES_PER_FLOOR,
-  floorExists, floorLabel, isBasement, isInTransit, isRented, isSkyLobbyFloor,
+  floorExists, floorLabel, isBasement, isInTransit, isSkyLobbyFloor, isUnitLet,
 } from '../sim/state.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import FEEL from './feel.js';
@@ -216,19 +216,30 @@ export function minimapContains(metrics, screenX, screenY) {
  * placed and unmeasured, measured but nobody could get there, and let. The
  * middle one is the state this whole build exists to make visible.
  *
- * The band half goes through `isRented()` and never through a hand-written
- * comparison against `0x0f`, so the threshold has exactly one home.
+ * The band half goes through `isUnitLet()` and never through a hand-written
+ * comparison against `0x0f`, so the threshold has exactly one home — and it
+ * has to, because the threshold is **per family**. A condo is sold up to
+ * `0x17` and sits at `0x10` every night, so `isRented()` here drew every sold
+ * condo in the tower as FOR SALE from dusk to dawn.
  */
 export function officeIsLet(object) {
   if (!object) return false;
-  return Boolean(object.occupiedFlag) && isRented(object.unitStatus);
+  return Boolean(object.occupiedFlag) && isUnitLet(object);
 }
 
-/** The tag written over a leasable unit. Empty string when it carries none. */
+/**
+ * The tag written over a leasable unit. Empty string when it carries none.
+ *
+ * A condo is **bought**, not rented, so it says so — `specs/facility/CONDO.md`
+ * § Placement And Stored State describes the same split in the reference's own
+ * status panel. The word is the whole difference between "somebody will move
+ * in eventually" and "this is $150,000 you have not been paid".
+ */
 export function objectStatusTag(object) {
   if (!object) return '';
   if (!LEASABLE.has(object.family)) return '';
-  return officeIsLet(object) ? '' : 'FOR RENT';
+  if (officeIsLet(object)) return '';
+  return object.family === FAMILY.condo ? 'FOR SALE' : 'FOR RENT';
 }
 
 /** Families that can be let, and therefore carry a status tag and a stress

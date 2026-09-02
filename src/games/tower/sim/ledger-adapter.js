@@ -47,13 +47,14 @@
  * the whole point of the flag.
  */
 import { CARRIER_MODE } from './elevators.js';
-import { FAMILY, isRented } from './state.js';
+import { FAMILY, isUnitLet } from './state.js';
 import { deactivateIfFailing, offices, recomputeOfficeOperationalStatus } from './office.js';
+import { condos, recomputeCondoOperationalStatus, revertCondoToUnsold } from './condo.js';
 import { resetFacilitySimTripCounters } from './stress.js';
 import {
-  EXPENSE_BUCKETS, INCOME_BUCKETS, POPULATION_BY_FAMILY, TYPE_CODES,
-  activateFamilyCashflowIfOperational, isCashflowDay, reverseCashflowOnDeactivation,
-  runLedgerCheckpoint,
+  DEFAULT_RENT_TIER, EXPENSE_BUCKETS, INCOME_BUCKETS, POPULATION_BY_FAMILY, TYPE_CODES,
+  activateFamilyCashflowIfOperational, addIncome, isCashflowDay, payout,
+  reverseCashflowOnDeactivation, runLedgerCheckpoint,
 } from './economy.js';
 
 // ------------------------------------------------------------- the ledger
@@ -147,8 +148,15 @@ export function cashflowUnitFor(object, occupants = []) {
      * top of it, which is the reference's own condition
      * (`activate_family_cashflow_if_operational` skips a stress-vacated unit
      * whose flag has been cleared).
+     *
+     * ⚠️ Through `isUnitLet(object)`, not `isRented(object.unitStatus)`. **The
+     * lease band is per family**: a condo is sold up to `0x17` and sits at
+     * `0x10` every night (`specs/facility/CONDO.md` § Placement And Stored
+     * State). Reading the office band here makes every sold condo go
+     * non-operational at dusk, which stops its ageing and — far worse — makes
+     * `revertCondoToUnsold` refuse the refund it is standing in front of.
      */
-    get operational() { return isRented(object.unitStatus) && object.occupiedFlag === true; },
+    get operational() { return isUnitLet(object) && object.occupiedFlag === true; },
     set operational(value) { object.occupiedFlag = value; },
     get evalLevel() { return object.evalLevel; },
     set evalLevel(value) { object.evalLevel = value; },
@@ -253,14 +261,90 @@ export function officeCashflowHooks(tower) {
   };
 }
 
+/**
+ * The two moments a **condo** moves money, and they are the same amount in
+ * opposite directions.
+ *
+ * `specs/facility/CONDO.md` § Sale effect: the sale *"adds the family-9 YEN
+ * `#1001` value for the current `rent_level`"* and *"adds `+3` to the primary
+ * family ledger"*. § Refund effect: the reversal *"calls
+ * `remove_cashflow_from_family_resource(9, rent_level)`"*, *"the reversed
+ * amount is exactly the original sale value"*, and it *"adds `-3` to the
+ * primary family ledger"*.
+ *
+ * ⚠️ **`addIncome`, not `activateFamilyCashflowIfOperational`.** An office's
+ * reopen hook routes its rent through the guarded activation helper so the
+ * 3-day sweep cannot pay it twice on the same day. A condo must not: the sale
+ * is a one-off, the sweep never pays it (`REALIZED_ON_EVENT` in
+ * `sim/economy.js`), and going through the guard would additionally burn the
+ * `cycleMark` so the unit stopped ageing.
+ *
+ * The `+3`/`-3` land on `tower.populationLedger`, which `sim/progression.js`
+ * sums into tower activity — so selling a condo genuinely moves the star
+ * ladder, and refunding one moves it back. That is intended:
+ * `specs/ECONOMY.md` § Ledgers calls that ledger "live per-family active-unit
+ * counts (drives star thresholds)".
+ */
+export function condoCashflowHooks(tower) {
+  const ledger = ledgerFor(tower);
+  return {
+    onSale(_tower, object) {
+      const unit = cashflowUnitFor(object);
+      if (!unit.family) return;
+      ledger.population[unit.family] += POPULATION_BY_FAMILY[unit.family] ?? 0;
+      addIncome(ledger, unit.family, payout(unit.family, unit.rentTier ?? DEFAULT_RENT_TIER));
+    },
+    onRefund(_tower, object) {
+      const unit = cashflowUnitFor(object);
+      if (!unit.family) return;
+      // The same helper the generic deactivation path uses: cash down by the
+      // payout, the income bucket down by the same, population down by 3. One
+      // rule, and the refund is exactly the sale reversed.
+      reverseCashflowOnDeactivation(ledger, unit);
+    },
+  };
+}
+
 // ------------------------------------------------------- checkpoint 2533
+
+/**
+ * The scored families, and what each does at the checkpoint.
+ *
+ * `runLedgerCheckpoint` owns the **order** — recompute, then deactivate, then
+ * activate — and this table owns the *what*, per family. A single `deactivate`
+ * seam that only knew about offices would have quietly skipped every condo
+ * refund: the generic `deactivateFamilyCashflowIfUnpaired` writes the office's
+ * `0x10`/`0x18` vacancy bands, and a condo written to `0x10` is still **sold**.
+ * The unit would have lost its rent, kept its sale, and reported a deactivation
+ * that never happened.
+ */
+const CASHFLOW_FAMILIES = [
+  {
+    units: offices,
+    recompute: recomputeOfficeOperationalStatus,
+    // Closure stays with the family: `sim/office.js` resets its six workers to
+    // `seekingWork` so the room can be let again, which the economy has no
+    // business writing. The money half is shared — `onVacate` calls the same
+    // `reverseCashflowOnDeactivation` the generic path calls.
+    close: (tower, object, occupants, hooks) =>
+      deactivateIfFailing(tower, object, occupants, hooks.office),
+  },
+  {
+    units: condos,
+    recompute: recomputeCondoOperationalStatus,
+    // A refund is not a vacancy. It writes the condo's own unsold bands
+    // (`0x18`/`0x20`) and reverses the **sale price**, not a rent instalment.
+    close: (tower, object, occupants, hooks) =>
+      revertCondoToUnsold(tower, object, occupants, hooks.condo),
+  },
+];
 
 /**
  * The checkpoint-2533 body, wired to a real tower.
  *
  * `specs/TIME.md` § 2533 owns the order and `economy.js`'s
- * `runLedgerCheckpoint` enforces it; this supplies the four seams that need to
- * know what an office is.
+ * `runLedgerCheckpoint` enforces it; this supplies the seams that need to know
+ * what an office and a condo are.
  *
  * ## The trip-counter reset: measure, act, THEN clear
  *
@@ -300,33 +384,42 @@ export function officeCashflowHooks(tower) {
  *
  * ## Closure stays with the family
  *
- * `deactivate` is `sim/office.js`'s `deactivateIfFailing`, not the economy's
- * generic path, because the office owns state the economy has no business
- * writing — resetting its six workers to `seekingWork` so the room can be let
- * again. The money half is shared: `onVacate` calls the same
- * `reverseCashflowOnDeactivation` the generic path calls. One rule, one copy.
+ * `deactivate` dispatches through {@link CASHFLOW_FAMILIES} rather than calling
+ * the economy's generic path, because each family owns state the economy has no
+ * business writing — an office resets its six workers to `seekingWork`; a condo
+ * writes its own unsold band and gives back the sale. The money half is shared:
+ * both `onVacate` and `onRefund` reach the same
+ * `reverseCashflowOnDeactivation`. One rule, one copy.
  *
  * @returns {{cashflow: boolean, deactivated: number, activated: number, expenses: number}}
  */
 export function runTowerLedgerCheckpoint(tower) {
   const ledger = ledgerFor(tower);
-  const hooks = officeCashflowHooks(tower);
+  const hooks = { office: officeCashflowHooks(tower), condo: condoCashflowHooks(tower) };
   const dayCounter = tower.clock.dayCounter;
   const cashflow = isCashflowDay(dayCounter);
-  const units = offices(tower).map(({ object, occupants }) => cashflowUnitFor(object, occupants));
+
+  // One flat list, each entry carrying the family behaviour it was built from,
+  // so the seams below dispatch without a second lookup that could disagree
+  // with this one.
+  const units = [];
+  for (const family of CASHFLOW_FAMILIES) {
+    for (const { object, occupants } of family.units(tower)) {
+      const unit = cashflowUnitFor(object, occupants);
+      unit.behaviour = family;
+      units.push(unit);
+    }
+  }
 
   const report = runLedgerCheckpoint(ledger, {
     units,
 
     recompute(unit) {
-      recomputeOfficeOperationalStatus(tower, unit.object, unit.occupants);
+      unit.behaviour.recompute(tower, unit.object, unit.occupants);
     },
 
-    // The same `onVacate` the browser hands the family machine, not a second
-    // copy of it — `officeCashflowHooks` is the one definition of what vacating
-    // costs, and both callers reach it through this one function.
     deactivate: (_ledger, unit) =>
-      deactivateIfFailing(tower, unit.object, unit.occupants, hooks),
+      unit.behaviour.close(tower, unit.object, unit.occupants, hooks),
 
     items: chargeableItems(tower),
     carriers: chargeableCarriers(tower),
@@ -336,9 +429,12 @@ export function runTowerLedgerCheckpoint(tower) {
     daypart: tower.clock.daypart,
   }, dayCounter);
 
-  // Last, and for every office whatever its fate: the three days just judged
-  // are spent. See the note above — before the measurement this is a deadlock,
-  // and gated on the occupied flag it is a different one.
+  // Last, and for every scored unit whatever its fate: the three days just
+  // judged are spent. See the note above — before the measurement this is a
+  // deadlock, and gated on the occupied flag it is a different one.
+  // `specs/FACILITIES.md` § occupied_flag names condos in the same breath as
+  // offices ("re-set every 3 days for offices/condos/retail"), and a refunded
+  // condo that kept its history could never grade its way back to a sale.
   if (cashflow) for (const unit of units) resetFacilitySimTripCounters(unit.occupants);
 
   return report;

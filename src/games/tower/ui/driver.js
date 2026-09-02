@@ -22,7 +22,10 @@
  */
 import { FAMILY } from '../sim/state.js';
 import { officeArrival, officeFamilyHandler } from '../sim/office.js';
-import { officeCashflowHooks } from '../sim/ledger-adapter.js';
+import {
+  CONDO_RESET_TICK, condoArrival, condoDailyReset, condoFamilyHandler,
+} from '../sim/condo.js';
+import { condoCashflowHooks, officeCashflowHooks } from '../sim/ledger-adapter.js';
 import { resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
   CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
@@ -90,12 +93,14 @@ export function makeDriver(world) {
   // office is vacated. Both go through `sim/ledger-adapter.js` onto the tower's
   // own `cash`, which is the number the HUD draws — one balance, not two.
   const cashflow = officeCashflowHooks(tower);
+  const condoCashflow = condoCashflowHooks(tower);
   const applyRoutingDelay = makeDelayPricer(tower);
+  const resolveRoute = (t, actor, from, to, clock, options) =>
+    resolveRouteBetweenFloors(t, actor, from, to, clock, options);
 
   const scheduler = makeTowerScheduler(tower, {
     [FAMILY.office]: officeFamilyHandler({
-      resolveRoute: (t, actor, from, to, clock, options) =>
-        resolveRouteBetweenFloors(t, actor, from, to, clock, options),
+      resolveRoute,
       // Every delay the router reports is priced by the stress pipeline, which
       // owns those constants. The router reports events; it never prices them.
       onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
@@ -106,9 +111,29 @@ export function makeDriver(world) {
       // a cashflow day is paid once, not twice.
       onRent: cashflow.onRent,
     }),
+    // **The sale moment, and the only one.** `sim/condo.js` calls `onSale` the
+    // instant a resident's trip out of the building resolves; the hook banks
+    // the whole $150,000 and puts three people on the population ledger. There
+    // is no recurring payment behind it — `sim/economy.js`'s activation sweep
+    // deliberately withholds the money for this family — so if this seam is not
+    // wired, a condo sells for nothing and the loop has no upside at all.
+    [FAMILY.condo]: condoFamilyHandler({
+      resolveRoute,
+      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+      onSale: condoCashflow.onSale,
+    }),
   }, {
     [FAMILY.office]: officeArrival,
-  }, applyRoutingDelay);
+    // The arrival handlers are called `(actor, floor)`; the condo's needs its
+    // object to step the countdown, and only the tower can answer that.
+    [FAMILY.condo]: (actor, floor) => condoArrival(tower, actor, floor),
+  }, applyRoutingDelay, {
+    // `specs/TIME.md` § 2500. Sold condos clamp back to the sync sentinel and
+    // every resident goes back to its band's starting state — which is what
+    // puts a refunded condo's residents back on the sale path. Without it a
+    // refunded condo runs yesterday's errands for ever and can never resell.
+    [CONDO_RESET_TICK]: condoDailyReset,
+  });
 
-  return { scheduler, applyRoutingDelay, cashflow };
+  return { scheduler, applyRoutingDelay, cashflow, condoCashflow };
 }

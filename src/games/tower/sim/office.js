@@ -141,14 +141,31 @@ export const OFFICE_NOISE_RADIUS = 10;
  * next to the family it describes.
  */
 export function noiseSourceNear(tower, object) {
-  const NOISE_FAMILIES = new Set([FAMILY.fastFood, FAMILY.retail]);
+  return noiseSourceWithin(tower, object, OFFICE_NOISE_RADIUS, OFFICE_NOISE_FAMILIES);
+}
+
+/** `specs/FACILITIES.md` § Noise Source Matching, the office row. */
+export const OFFICE_NOISE_FAMILIES = new Set([FAMILY.fastFood, FAMILY.retail]);
+
+/**
+ * § Noise Search, the geometry — *"scans placed-object slots on the same floor
+ * in both directions ... comparing tile positions against a per-family radius,
+ * and returns the first qualifying noise-source family found"*.
+ *
+ * The **radius and the source set are per-family and the walk is not**, so the
+ * walk lives here once and each family supplies its own two values. A condo's
+ * radius is 30 to an office's 10, and a condo counts offices and hotels as
+ * noise where an office counts neither — copying eight lines of gap arithmetic
+ * per family is how `CLAUDE.md`'s "a rule written in four places drifts" starts.
+ */
+export function noiseSourceWithin(tower, object, radius, families) {
   for (const other of tower.objects.values()) {
     if (other.floor !== object.floor || other.id === object.id) continue;
-    if (!NOISE_FAMILIES.has(other.family)) continue;
+    if (!families.has(other.family)) continue;
     // Gap between spans, on whichever side the neighbour sits.
     const gap = other.left > object.right ? other.left - object.right
       : object.left > other.right ? object.left - other.right : 0;
-    if (gap <= OFFICE_NOISE_RADIUS) return true;
+    if (gap <= radius) return true;
   }
   return false;
 }

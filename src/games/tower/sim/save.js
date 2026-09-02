@@ -40,7 +40,7 @@
  */
 import { makeRng } from './rng.js';
 import { ledgerFor } from './ledger-adapter.js';
-import { createActor, createObject, isRented, population } from './state.js';
+import { createActor, createObject, isUnitLet, population } from './state.js';
 
 export const SAVE_SCHEMA = 'tower-save/v1';
 
@@ -116,7 +116,8 @@ export function summarise({ tower, ledger }) {
   for (const o of tower.objects.values()) {
     if (o.occupants.length === 0) continue;
     leasable++;
-    if (o.occupiedFlag && isRented(o.unitStatus)) let_++;
+    // Per family: a sold condo's band runs to 0x17, an office's to 0x0f.
+    if (o.occupiedFlag && isUnitLet(o)) let_++;
   }
   return {
     day: tower.clock.dayCounter,
