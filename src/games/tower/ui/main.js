@@ -84,7 +84,7 @@ const scheduler = makeTowerScheduler(tower, {
   }),
 }, {
   [FAMILY.office]: officeArrival,
-});
+}, applyRoutingDelay);
 
 let rentedThisFrame = 0;
 

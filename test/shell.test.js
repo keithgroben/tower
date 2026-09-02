@@ -8,7 +8,11 @@
  * are catchable here in a second.
  */
 import { TICKS_PER_DAY } from '../src/games/tower/sim/clock.js';
-import { CARRIER_MODE, MAX_CARS_PER_CARRIER } from '../src/games/tower/sim/elevators.js';
+import { CARRIER_MODE, MAX_CARS_PER_CARRIER, enqueueRequest } from '../src/games/tower/sim/elevators.js';
+import {
+  ELAPSED_CLAMP, accumulateElapsedDelayIntoCurrentSim,
+  computeRuntimeTileStressAverage, stampRouteStart,
+} from '../src/games/tower/sim/stress.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, OCCUPANTS, STATE_UNPLACED_OCCUPANT,
   TILES_PER_FLOOR, floorExists, population,
@@ -111,6 +115,82 @@ export const tests = {
     // to do, so they must sit still rather than wander.
     assert(tower.carriers[0].cars.every((c) => c.currentFloor === GROUND_FLOOR),
       'an idle car parks where it is, it does not drive off to a basement');
+  },
+
+  /**
+   * ⚠️ The regression this file exists for now.
+   *
+   * `makeCarrierContext` builds `ctx.emitDelay` only when an `onDelay` is
+   * supplied, and `drainFloorQueue` emits through `ctx.emitDelay?.(…)`. Wire no
+   * consumer and the optional call is a silent no-op: every carrier stress
+   * event — including **boarding**, the one that measures the wait on the floor
+   * and re-arms the route-start stamp — is thrown away.
+   *
+   * The consequence is not subtle and it is completely invisible. With
+   * `last_trip_tick` never re-armed it stays `0`, so the arrival rebase reads
+   * `elapsed + day_tick - 0` and charges the whole day tick, which clamps to
+   * 300. Measured in the browser on a six-floor tower with three working cars,
+   * the MEDIAN worker stress was 300 — the maximum a trip can cost. Every
+   * office failed evaluation on day two and the tower never recovered.
+   *
+   * Nothing errored, no counter went negative, every car arrived. It reads as
+   * "the clamp is working".
+   */
+  'the carrier\'s stress events reach the consumer'() {
+    const tower = seedDemoTower();
+    const carrier = tower.carriers[0];
+    const rider = tower.actors[0];
+
+    const seen = [];
+    const scheduler = makeTowerScheduler(tower, {}, {}, (delay, actor) => seen.push({ delay, actor }));
+
+    // Put one rider in the queue by hand: no family handler is needed to prove
+    // that a car which loads somebody reports having done so.
+    rider.destinationFloor = 4;
+    rider.waitingFloor = GROUND_FLOOR;
+    enqueueRequest(carrier, rider.id, GROUND_FLOOR, 1);
+    scheduler.advance(tower, 60);
+
+    const boarding = seen.find((e) => e.delay.kind === 'boarding');
+    assert(boarding, 'no boarding event arrived: ' + (seen.map((e) => e.delay.kind).join(', ') || 'nothing at all'));
+    assert(boarding.actor === rider, 'the event has to name the rider it happened to');
+    assert(boarding.delay.sourceFloor === GROUND_FLOOR, 'and the floor they boarded on');
+    // `makeCarrierContext` folds this in so the consumer has everything the
+    // tall-lobby rebate asks for without reaching back into the tower.
+    assert(boarding.delay.lobbyHeight === tower.lobbyHeight, 'and the lobby height for the rebate');
+  },
+
+  '⚠️ a short ride does not cost the 300-tick clamp'() {
+    // The symptom-level half, and the one that actually fails when the seam
+    // above is unplugged. A ride of a few dozen ticks must score a few dozen —
+    // if it scores 300 the model has stopped being able to tell a good tower
+    // from a bad one, and every downstream number is decoration.
+    const tower = seedDemoTower();
+    const carrier = tower.carriers[0];
+    const rider = tower.actors[0];
+
+    // The pricing `ui/main.js` applies, in miniature: measure the wait, then
+    // re-arm the stamp so the ride is measured too (spec/DEVIATIONS.md A9).
+    const scheduler = makeTowerScheduler(tower, {}, {}, (delay, actor) => {
+      if (delay.kind !== 'boarding' || !actor) return;
+      accumulateElapsedDelayIntoCurrentSim(actor, tower.clock.dayTick, {
+        sourceFloor: delay.sourceFloor,
+        lobbyHeight: delay.lobbyHeight,
+        carrierMode: delay.carrierMode,
+      });
+      stampRouteStart(actor, tower.clock.dayTick);
+    });
+
+    stampRouteStart(rider, tower.clock.dayTick);
+    rider.destinationFloor = 4;
+    rider.waitingFloor = GROUND_FLOOR;
+    enqueueRequest(carrier, rider.id, GROUND_FLOOR, 1);
+    scheduler.advance(tower, 200);
+
+    assert(rider.tripCount > 0, 'the rider never completed a leg');
+    const stress = computeRuntimeTileStressAverage(rider);
+    assert(stress < ELAPSED_CLAMP, 'a four-floor ride cost the full clamp: ' + stress);
+    assert(stress < 150, 'a four-floor ride scored ' + stress + ', which would fail evaluation on its own');
   },
 
   'a frame draws against the real sheets without throwing'() {
