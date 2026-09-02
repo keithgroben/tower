@@ -33,7 +33,7 @@ import {
   applyLocalSegmentDelay, applyQueueFullDelay, computeRuntimeTileStressAverage,
   recordNoRouteFailure, stampRouteStart,
 } from '../src/games/tower/sim/stress.js';
-import { seedDemoTower } from '../src/games/tower/ui/seed.js';
+import { seedDemoWorld } from '../src/games/tower/ui/seed.js';
 import { makeTowerScheduler } from '../src/games/tower/ui/tick.js';
 
 const assert = (c, m) => { if (!c) throw new Error(m); };
@@ -65,7 +65,7 @@ function priceDelay(tower, delay, actor) {
 
 /** A real seeded tower with the real family machine, running the real router. */
 function liveTower({ days = 2 } = {}) {
-  const tower = seedDemoTower({ seed: 1 });
+  const { tower } = seedDemoWorld({ seed: 1 });
   const seen = { delays: new Map(), codes: new Map() };
 
   const scheduler = makeTowerScheduler(
@@ -168,7 +168,7 @@ export const tests = {
    * above passes for a tower that rents everything unconditionally.
    */
   'strip the lift and nothing rents'() {
-    const tower = seedDemoTower({ seed: 1 });
+    const { tower } = seedDemoWorld({ seed: 1 });
     tower.carriers = [];
     tower.segments = [];
 
