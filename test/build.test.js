@@ -32,6 +32,33 @@ const world = () => seedDemoWorld({ seed: 1 });
 const at = (floor, tile, extra = {}) => ({ floor, tile, object: null, carrier: null, ...extra });
 const tool = (id) => toolById(id);
 
+/**
+ * A column with nothing built in it on any floor, wide enough for a shaft.
+ *
+ * ⚠️ This was the literal `110` in seven places, which silently coupled every
+ * shaft test to the seed's geometry. The day the lunch venue moved to the
+ * ground floor and the podium reached tile 117, three tests began asserting
+ * that "a clear column" was buildable while pointing straight at a fast food.
+ *
+ * Derived from the tower, so a seed that grows sideways moves the tests with
+ * it instead of breaking them.
+ */
+function clearColumn(tower) {
+  const used = new Set();
+  for (const o of tower.objects.values()) for (let x = o.left; x <= o.right; x++) used.add(x);
+  for (const c of tower.carriers) for (let x = 0; x < SHAFT_WIDTH[c.mode]; x++) used.add(c.column + x);
+  const width = SHAFT_WIDTH[SHAFT_KIND.standard.mode];
+  for (let x = 0; x + width <= TILES_PER_FLOOR; x++) {
+    let ok = true;
+    // A margin either side, so the 8-tile separation rule cannot be what
+    // refuses a column this helper has promised is clear.
+    for (let i = -8; i < width + 8 && ok; i++) if (used.has(x + i)) ok = false;
+    if (ok) return x;
+  }
+  throw new Error('the seed leaves no clear column for a shaft — every test using one is now a lie');
+}
+const CLEAR = clearColumn(seedDemoWorld({ seed: 1 }).tower);
+
 /** An empty floor high above anything the seed built. */
 const EMPTY_FLOOR = 40;
 
@@ -80,7 +107,7 @@ export const tests = {
       ['an office above the world', 'office', () => at(MAX_FLOOR + 5, 20)],
       ['an office at the right edge', 'office', () => at(EMPTY_FLOOR, TILES_PER_FLOOR - 2)],
       ['a lobby on empty air', 'lobby', () => at(EMPTY_FLOOR, 30)],
-      ['a shaft to a high floor', 'shaft-standard', () => at(20, 110)],
+      ['a shaft to a high floor', 'shaft-standard', () => at(20, CLEAR)],
       // ⚠️ This case is the one that was missing, and its absence is why the
       // ghost went on saying "passes through 12 rooms" for a whole commit after
       // the sim started refusing it. The test that was supposed to catch it
@@ -115,7 +142,7 @@ export const tests = {
     for (const [toolId, target] of [
       ['office', at(EMPTY_FLOOR, 20)],
       ['lobby', at(EMPTY_FLOOR, 30)],
-      ['shaft-standard', at(20, 110)],
+      ['shaft-standard', at(20, CLEAR)],
     ]) {
       const w = world();
       const cashBefore = w.ledger.cash;
@@ -217,14 +244,14 @@ export const tests = {
     const { tower } = world();
     assert(lowestBuiltFloor(tower) === LAYOUT.carrierBottom,
       'a new shaft starts at the bottom of the tower, got ' + lowestBuiltFloor(tower));
-    const command = commandFor(tower, tool('shaft-standard'), at(7, 110));
+    const command = commandFor(tower, tool('shaft-standard'), at(7, CLEAR));
     assert(command.bottom < GROUND_FLOOR, 'it passes the lobby on its way up');
     assert(command.top === 7, 'and stops where the player clicked');
   },
 
   'the shaft footprint is the width the carrier model gives it'() {
     const w = world();
-    const guess = preview(w, tool('shaft-standard'), at(20, 110));
+    const guess = preview(w, tool('shaft-standard'), at(20, CLEAR));
     assert(guess.footprint.kind === 'shaft', 'a shaft draws as a shaft');
     assert(guess.footprint.width === SHAFT_WIDTH[SHAFT_KIND.standard.mode],
       'the ghost is the width the shaft will actually be');
@@ -241,7 +268,7 @@ export const tests = {
     assert(blocked.reason.includes('not clear'), 'and it says why: ' + blocked.reason);
     assert(blocked.footprint, 'a refused ghost still draws where it would have gone');
 
-    const clear = preview(w, tool('shaft-standard'), at(6, 110));
+    const clear = preview(w, tool('shaft-standard'), at(6, CLEAR));
     assert(clear.ok, 'a clear column is still buildable: ' + clear.reason);
   },
 
@@ -255,7 +282,7 @@ export const tests = {
     const lobby = [...w.tower.objects.values()].find((o) => o.family === BUILDABLE.lobby.family);
     assert(lobby && lobby.right - lobby.left > 40, 'precondition: the seed has a wide ground lobby');
 
-    const guess = preview(w, tool('shaft-standard'), at(8, 110));
+    const guess = preview(w, tool('shaft-standard'), at(8, CLEAR));
     assert(guess.ok, 'a shaft to the ground floor must be allowed: ' + guess.reason);
     assert(guess.footprint.bottom <= GROUND_FLOOR, 'and it does reach the lobby');
   },
@@ -379,7 +406,7 @@ export const tests = {
     assert(office === CONSTRUCTION_COST.office + BUILDABLE.office.width * CONSTRUCTION_COST.floorTile,
       'an office is priced with its floor, got ' + office);
     assert(office === 43000, 'and that is $43,000, got ' + office);
-    const shaft = costOf(tower, commandFor(tower, tool('shaft-standard'), at(20, 110)));
+    const shaft = costOf(tower, commandFor(tower, tool('shaft-standard'), at(20, CLEAR)));
     assert(shaft === CONSTRUCTION_COST.elevatorStandard, 'a shaft is priced as a shaft, got ' + shaft);
   },
 };

@@ -97,8 +97,27 @@ export const LAYOUT = {
    * It also leaves the discovery intact rather than pre-empting it: a player
    * who builds a second office bank still has to work out that it wants feeding.
    */
-  fastFoodFloor: 3,
-  fastFoodLeft: 94,
+  fastFoodFloor: GROUND_FLOOR,
+  /**
+   * ⚠️ On the ground, and to the RIGHT of the lobby's own span.
+   *
+   * It sat on F3 at 94..109, and the first look at a rendered frame showed why
+   * that was wrong: **nothing was underneath it.** The lobby stops at 101 and
+   * F1/F2 are empty past 93, so sixteen tiles of lit food court hung in the sky
+   * off the side of the building. It routed correctly and every test passed —
+   * the sim has no opinion about what is below a room — and it read as a
+   * mistake to anybody looking at it.
+   *
+   * The ground floor cannot float, by construction, which is why it is the fix
+   * rather than "extend the lobby under it": a wider lobby would have left the
+   * venue two storeys up over a void, and a rule enforced by geometry beats one
+   * enforced by remembering.
+   *
+   * Measured, and it costs nothing — sixteen days, sampled off the cashflow
+   * reset, median 84-94 against 84-93 on F3, and 36/43 let on every single day.
+   * The building now has a podium: ground floor 48..117, tower 54..93 above it.
+   */
+  fastFoodLeft: 102,
   /**
    * Retail in the basement, on purpose.
    *
