@@ -19,6 +19,9 @@
  */
 import { DAYPART_LABELS, formatClock } from '../sim/clock.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
+import { starGateStatus } from '../sim/progression.js';
+import { BUILDABLE } from '../sim/actions.js';
+import { evictionNotice, starClause, starGlyph, stressReadout } from './readout.js';
 import { STRESS_COLORS, makeRenderer, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
 import { applyAction } from '../sim/actions.js';
@@ -118,6 +121,20 @@ let hudDueMs = 0;
 /** Previous frame's let count, so the HUD can react to a change rather than
  *  merely display one. `-1` so the first read is never mistaken for a move. */
 let lastLetCount = -1;
+/** The last real stress reading, held across the three-day counter reset. */
+let lastStress = null;
+
+/**
+ * Can the palette actually make one of these?
+ *
+ * `BUILDABLE` is the sim's own list of what a `build` command accepts, so this
+ * is the palette answering for itself rather than a second table of what exists
+ * — the day fast food lands, this starts returning true for it with no edit.
+ *
+ * It is what stops the goal clause naming a security office as though a player
+ * could go and place one. Nothing in this build can.
+ */
+const isBuildable = (kind) => Object.hasOwn(BUILDABLE, kind);
 
 // ------------------------------------------------------------------- speed
 
@@ -369,7 +386,15 @@ function drawHud() {
   // counter says how the tower is doing overall, and a number that changes
   // without moving is a number nobody notices changing.
   const leasesEl = $('leases');
-  if (lastLetCount >= 0 && let_ !== lastLetCount) bumpLeases(leasesEl, let_ > lastLetCount);
+  if (lastLetCount >= 0 && let_ !== lastLetCount) {
+    bumpLeases(leasesEl, let_ > lastLetCount);
+    // A fall in the let count is always an eviction — `applyAction` refuses to
+    // demolish a let unit — and it used to happen in silence, taking the seed
+    // from 78 tenants to 24 with no explanation on screen. Not softened: the
+    // eviction is the loop working. It just gets its cause said out loud.
+    const notice = evictionNotice(lastLetCount - let_);
+    if (notice) say(notice, false);
+  }
   lastLetCount = let_;
   leasesEl.textContent = `${let_}/${leasable} let`;
   // ⚠️ NOT `population(tower)`. That sums occupants over `occupiedFlag`, and
@@ -389,27 +414,28 @@ function drawHud() {
   //
   // People with no trips are excluded — `computeRuntimeTileStressAverage`
   // scores them 0, the BEST value, so counting them makes a tower that cannot
-  // move anybody read as a perfect one.
-  //
-  // The median, not the mean, and for a measured reason. A worker in an office
-  // nobody can reach fails a route every service tick, and `trip_count` is a
-  // byte: over three days it laps 256 while `accumulated_elapsed` keeps
-  // climbing, so their average comes out in the thousands rather than at the
-  // 300-tick clamp. Thirty-six of those against two hundred healthy commuters
-  // drags a mean to ~350 and puts "stress 350" on the bar of a tower that is
-  // almost entirely fine. The median says what a typical worker actually
-  // experiences and is not moved by the stranded ones — who are already saying
-  // so themselves, in red, over their own rooms.
+  // move anybody read as a perfect one. The median and the phrasing both live
+  // in `ui/readout.js`, with the reasons; the short version is that this used
+  // to say "no trips yet" about three hundred commuters every third day.
   const scores = [];
   for (const actor of tower.actors) {
     if (!actor || actor.tripCount === 0) continue;
     scores.push(computeRuntimeTileStressAverage(actor));
   }
-  scores.sort((a, b) => a - b);
-  const typical = scores.length ? scores[Math.floor(scores.length / 2)] : null;
+  const stress = stressReadout(scores, lastStress);
+  if (!stress.measuring) lastStress = stress.value;
   const stressEl = $('stress');
-  stressEl.textContent = typical === null ? 'no trips yet' : `stress ${typical} (${stressBand(typical)})`;
-  stressEl.style.color = typical === null ? '' : STRESS_COLORS[stressBand(typical)];
+  stressEl.textContent = stress.text;
+  stressEl.style.color = stress.band ? STRESS_COLORS[stress.band] : '';
+  stressEl.style.opacity = stress.measuring ? '0.6' : '';
+
+  // The goal. One glyph and one clause, per CLAUDE.md's no-sidebar rule — and
+  // the clause is the whole point: the tower sat at star 1 forever, 84 activity
+  // short, and the game never said so.
+  const goal = starGateStatus(tower);
+  $('stars').textContent = starGlyph(goal.star);
+  $('stars').title = goal.activity + ' tower activity';
+  $('goal').textContent = starClause(goal, isBuildable);
 
   let waiting = 0;
   for (const actor of tower.actors) if (actor && actor.waitingFloor != null) waiting++;
