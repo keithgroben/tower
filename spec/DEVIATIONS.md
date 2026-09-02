@@ -11,7 +11,12 @@ A row here is not a defeat. It is the difference between a decision and a drift.
 
 | # | Rule | Reference | Ours | Why | Decided |
 |---|---|---|---|---|---|
-| — | *(none yet)* | | | | |
+| D1 | Multi-floor lobby premium rate | **Not stated anywhere.** `ECONOMY.md` § Floor Construction Premium says the path multiplies "the recovered high-band base rate" by `lobby_height` without giving that rate; `facility/LOBBY.md` points back at `ECONOMY.md` "for the exact pricing". The two cite each other in a circle, and the reference *implementation* does not implement the premium at all. | `$500`/tile — the floor-tile base rate — giving `$1,000`/tile at height 2 and `$1,500` at height 3 | It is the only recovered per-tile rate in the whole spec set (`facility/METRO.md` derives a per-floor base as `span × YEN[0]`). And `rate × lobby_height` then really is a premium over the normal $500, which is what the spec says the mechanic is *for*. **This is an invented number** — one constant to change if the real one is ever recovered. | 2026-09-02 |
+
+⚠️ **D1 is the only number in the build so far that we made up.** It matters to
+the player: lobby height is the one building-shape decision that directly buys
+down stress (−25 ticks at height 2, −50 at height 3), so its price sets whether
+that trade is worth taking. Worth Keith's eye once the loop runs.
 
 ---
 
@@ -27,6 +32,7 @@ than a thing someone finds later and assumes was arbitrary.
 | A2 | Is the 300-tick no-route penalty charged before or after the trip counters drain? | `ROUTING.md:64` and `PEOPLE.md:128` each describe one half, neither states the order | **charge, then drain** | Draining first discards the 300, so a failed trip costs nothing and a tower with no elevator posts the *best* stress in the game. The old repo shipped exactly this bug once: stranded riders logged as zero wait. |
 | A3 | Does the stress average truncate? | `PEOPLE.md:182` writes the division without saying | **integer division** | The original divides 16-bit words. And the colour bands are integer ranges (`< 80`, `80–119`, `120–300`) that only tile the number line if the score is an integer — 119.5 belongs to no band as written. |
 | A4 | Family-5 (suite) score divisor: 2 or 3? | `FACILITIES.md:39` and `PEOPLE.md:190` say 2; `PEOPLE.md:280` says a suite holds 3 entities | **2** | Two sources against one, and the two agree on the question actually being asked. Not on the current build path — offices first — so cheap to revisit. |
+| A6 | Shaft construction price | The reference's binary-derived table says `0x01` $200,000 / `0x2a` $400,000 / `0x2b` $100,000, but the reference's own *implementation* charges a flat $200,000 for all three | **the table** | The table came from the original binary; the implementation may have simplified. Where a reference contradicts itself, prefer the half that was recovered from the thing we are actually copying. |
 | A5 | Sky-lobby floors | `ELEVATORS.md` + `DATA-MODEL.md`'s worked example give logical 14/29/44; `DATA-MODEL.md` prose says 15/30/45 | **14/29/44** | The EXE-derived value comes with its own arithmetic (`(exe − 10) % 15 == 14`) and an explicit translation example (EXE 24 ⇒ logical 14). The prose reads like a human-facing round number — logical 14 is the fifteenth storey if you count the ground floor as one. One constant if it flips. |
 
 The 10-bit `elapsed_packed` ceiling was investigated and found **not observable**:
