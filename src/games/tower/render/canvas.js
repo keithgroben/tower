@@ -38,6 +38,7 @@
  */
 import { clockTime } from '../sim/clock.js';
 import { CARRIER_MODE } from '../sim/elevators.js';
+import { COMMERCIAL_FAMILIES } from '../sim/commercial.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, TILES_PER_FLOOR,
   floorExists, floorLabel, isBasement, isInTransit, isRented, isSkyLobbyFloor,
@@ -227,13 +228,42 @@ export function officeIsLet(object) {
 /** The tag written over a leasable unit. Empty string when it carries none. */
 export function objectStatusTag(object) {
   if (!object) return '';
-  if (!LEASABLE.has(object.family)) return '';
-  return officeIsLet(object) ? '' : 'FOR RENT';
+  if (officeIsLet(object)) return '';
+  if (LEASABLE.has(object.family)) return 'FOR RENT';
+  if (OWNED.has(object.family)) return 'FOR SALE';
+  return '';                                   // a venue is open or closed
 }
 
 /** Families that can be let, and therefore carry a status tag and a stress
  *  strip. The lobby is infrastructure: it is never "For Rent". */
-const LEASABLE = new Set([FAMILY.office, FAMILY.condo]);
+/** Units a tenant *rents*. An empty one is looking for one. */
+const LEASABLE = new Set([FAMILY.office]);
+
+/**
+ * Units somebody *buys*. An empty one is FOR SALE, not FOR RENT.
+ *
+ * ⚠️ Live today, not a future problem: a condo is placeable now — the sprite
+ * fixture places three — and it was drawing **FOR RENT**. It is only missing
+ * from `BUILDABLE`, which is what kept it out of sight.
+ *
+ * Same failure as the venue's tag one commit ago, and the same reason it
+ * matters: a unit whose sign says the wrong thing teaches a player that the
+ * signs mean nothing, and the one sign that has to be believed is FOR RENT on
+ * the office bank above the lift.
+ */
+const OWNED = new Set([FAMILY.condo]);
+
+/**
+ * Units with tenants of their own — rented or owned.
+ *
+ * The distinction between the two is only ever *what the sign says*. Everything
+ * else about them is identical: they hold people, those people commute, their
+ * stress is drawn under the room, and gaining or losing them is a moment worth
+ * announcing. Gating any of that on LEASABLE alone would have left a condo with
+ * no stress dots and no move-in flash — silently, because a condo cannot be
+ * built yet and nobody would have looked.
+ */
+const TENANTED = new Set([...LEASABLE, ...OWNED]);
 
 /**
  * Families that own people but are never *let*.
@@ -246,8 +276,14 @@ const LEASABLE = new Set([FAMILY.office, FAMILY.condo]);
  * A tag that can never come off is worse than no tag: it teaches a player that
  * FOR RENT means nothing, and the one place that phrase has to be believed is
  * the office bank above the lift.
+ *
+ * Taken from `sim/commercial.js` rather than listed here. A hand-written copy
+ * was already one family behind — `restaurant` had been added to the sim and
+ * not to this set, so a restaurant would have drawn no art and no sign at all.
+ * The module that decides what a commercial venue *is* should be the one that
+ * says so.
  */
-const VENUE = new Set([FAMILY.fastFood, FAMILY.retail]);
+const VENUE = COMMERCIAL_FAMILIES;
 
 /**
  * The manual's three stress colours, `specs/PEOPLE.md` § Stress Color Bands,
@@ -336,7 +372,7 @@ export function queuePressure(count) {
 export function objectSprite(object, { night = false, stressed = false } = {}) {
   const family = object?.family;
   if (family === FAMILY.lobby) return { name: 'lobby', animation: night ? 'night' : 'day' };
-  if (!LEASABLE.has(family) && !VENUE.has(family)) return null;
+  if (!LEASABLE.has(family) && !OWNED.has(family) && !VENUE.has(family)) return null;
   // A venue is open or closed, never vacant — there is no lease for it to be
   // without, so it never draws the empty shell.
   if (!VENUE.has(family) && !officeIsLet(object)) {
@@ -466,7 +502,7 @@ export const LET_MOMENT_STYLE = {
 export function diffLetStatus(seen, tower) {
   const changes = [];
   for (const object of tower.objects.values()) {
-    if (!LEASABLE.has(object.family) || object.occupants.length === 0) continue;
+    if (!TENANTED.has(object.family) || object.occupants.length === 0) continue;
     const now = officeIsLet(object);
     const before = seen.get(object.id);
     seen.set(object.id, now);
@@ -1118,7 +1154,7 @@ export function makeRenderer(canvas, options = {}) {
    * worth showing go in the world, not in a sidebar.
    */
   function drawUnitSignals(L, o, tower) {
-    if (!LEASABLE.has(o.family)) return;
+    if (!TENANTED.has(o.family)) return;
     const x = L.tileX(o.left);
     const y = L.floorY(o.floor);
     const w = (o.right - o.left + 1) * L.tw;
