@@ -312,7 +312,12 @@ export const occupantsOf = (tower, object) =>
 export function population(tower) {
   let total = 0;
   for (const o of tower.objects.values()) {
-    if (o.occupiedFlag) total += OCCUPANTS[o.family] ?? 0;
+    // The LEASE, not the measured flag. Since the bootstrap in `sim/office.js`,
+    // `occupiedFlag` means "this facility's tenants are being measured" and is
+    // set on a VACANT office before anyone has reached it — so counting on it
+    // returned 252 people in a tower where 216 had a lease, six offices' worth
+    // of staff for offices nobody could get to.
+    if (isRented(o.unitStatus)) total += OCCUPANTS[o.family] ?? 0;
   }
   return total;
 }

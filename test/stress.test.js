@@ -77,10 +77,35 @@ export const tests = {
   'the divisor is the trip count and nothing else'() {
     // specs/PEOPLE.md § Scoring. Bounded and negated: three records that share
     // an accumulated total but differ in trips must produce three scores.
+    // Totals kept inside the clamp, because the real pipeline cannot produce a
+    // 600-tick single leg — every leg is clamped to 300 on the way in.
     const scores = [1, 2, 5].map((tripCount) =>
-      computeRuntimeTileStressAverage(sim({ tripCount, accumulatedElapsed: 600 })));
-    assert(JSON.stringify(scores) === JSON.stringify([600, 300, 120]),
-      '600 ticks over 1, 2 and 5 trips scored ' + scores.join(', ') + ', expected 600, 300, 120');
+      computeRuntimeTileStressAverage(sim({ tripCount, accumulatedElapsed: 300 })));
+    assert(JSON.stringify(scores) === JSON.stringify([300, 150, 60]),
+      '300 ticks over 1, 2 and 5 trips scored ' + scores.join(', ') + ', expected 300, 150, 60');
+  },
+
+  /**
+   * The average may not exceed the per-leg clamp, and it used to.
+   *
+   * A worker whose office never rents fails a route on every service tick it
+   * is allowed — measured at 487 attempts in three days, against a `trip_count`
+   * that is a byte. The count laps while `accumulated_elapsed` keeps climbing,
+   * and the average leaves the range this module promises: a bank of
+   * unreachable offices medianed **2,177** where 300 is the ceiling.
+   *
+   * The storage still wraps, because a byte wraps. The derived number is
+   * clamped, because an average of samples each clamped to 300 cannot
+   * legitimately exceed 300.
+   */
+  'a lapped trip count cannot inflate the average past the clamp'() {
+    // What the lap actually looks like: ~487 failures at 300 each, with the
+    // count wrapped into a byte.
+    const lapped = sim({ tripCount: 487 % 256, accumulatedElapsed: 487 * 300 % 65536 });
+    const score = computeRuntimeTileStressAverage(lapped);
+    assert(score <= 300,
+      'a lapped counter scored ' + score + ' — the average must never exceed the 300 clamp');
+    assert(score > 0, 'a lapped counter should still read as stressed, not as zero');
   },
 
   'the colour bands are the manual’s three, at their exact edges'() {

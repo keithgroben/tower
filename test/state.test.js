@@ -95,10 +95,17 @@ export const tests = {
     const { tower, object } = towerWithOffice();
     assert(population(tower) === 0, 'vacant office should count zero');
 
-    object.occupiedFlag = true;             // what a successful route will do
+    // `occupiedFlag` alone is NOT a lease. Since the bootstrap it means "these
+    // tenants are being measured", and it is set on a vacant office before
+    // anyone has reached it — counting on it reported 252 people in a tower
+    // where 216 had a lease.
+    object.occupiedFlag = true;
+    assert(population(tower) === 0, 'a measured but unreached office must count nobody');
+
+    object.unitStatus = 0;                  // what a successful route will do
     assert(population(tower) === 6, 'a rented office should count six');
 
-    object.occupiedFlag = false;            // and what an eviction undoes
+    object.unitStatus = 0x10;               // and what an eviction undoes
     assert(population(tower) === 0, 'population did not fall when the tenant left');
     assert(occupantsOf(tower, object).length === 6, 'the workers should still exist after eviction');
   },

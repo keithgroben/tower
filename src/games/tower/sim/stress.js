@@ -84,10 +84,23 @@ export const ELAPSED_CLAMP = 300;
  * `trip_count` is a byte (`PEOPLE.md` § Sim Entity Record Layout, `+0x09`), so
  * it wraps at 256; `accumulated_elapsed` is a word, so it wraps at 65536.
  *
- * Neither is reachable in play: the counters reset every third day at the
- * cashflow pass (see {@link resetSimTripCounters}), and even a person taking
- * twenty maximum-stress legs a day accumulates 18,000 over three days against
- * a 65,535 ceiling. The wrap is reproduced because it is what a byte and a
+ * ⚠️ **The trip-count wrap IS reachable, and this comment used to say it was
+ * not.** The reasoning was that counters reset every third day — true for a
+ * unit that gets swept, and false for a worker whose office never rents. That
+ * worker fails a route on *every* service tick it is allowed, which measured
+ * **487 attempts in three days** against a byte. `trip_count` laps while
+ * `accumulated_elapsed` keeps climbing, and the average comes out in the
+ * thousands: a bank of unreachable offices medianed **2,177**.
+ *
+ * The wrap itself stays — a byte is a byte, and the storage is faithful. What
+ * was wrong was the derived number: see {@link computeRuntimeTileStressAverage},
+ * which now clamps its result, because an average of samples that are each
+ * clamped to 300 cannot legitimately exceed 300. Behaviour is unchanged either
+ * way (2,177 and 300 both grade 0), so this was a reporting bug — which is
+ * exactly the kind that ends up on a HUD.
+ *
+ * The accumulator's own wrap remains unreachable: twenty maximum-stress legs a
+ * day accumulates 18,000 over three days against a 65,535 ceiling. The wrap is reproduced because it is what a byte and a
  * word do, and because a counter that silently grows past its field is exactly
  * the kind of accounting hole that reads as good news.
  */
@@ -507,7 +520,11 @@ export function recordNoRouteFailure(sim) {
  */
 export function computeRuntimeTileStressAverage(sim) {
   if (sim.tripCount === 0) return 0;
-  return Math.floor(sim.accumulatedElapsed / sim.tripCount);
+  // Clamped, because the module's own invariant says an average of samples
+  // each clamped to 300 cannot exceed 300 — and a lapped `trip_count` breaks
+  // that arithmetic without breaking the storage. See the note on
+  // TRIP_COUNT_WRAP.
+  return Math.min(ELAPSED_CLAMP, Math.floor(sim.accumulatedElapsed / sim.tripCount));
 }
 
 /**
