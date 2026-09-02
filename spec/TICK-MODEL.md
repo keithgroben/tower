@@ -27,28 +27,63 @@ A facility's evaluation is that number averaged across its own occupants (an
 office has 6), then adjusted for rent tier and a noise penalty from neighbours
 within 10 tiles.
 
-Visible bands, from the original manual:
+Any single leg is clamped to **300 ticks**, so one catastrophe cannot dominate
+a person's history.
 
-| Stress | Colour | Meaning |
+### Two different scales, and they are easy to confuse
+
+The manual's stress **colours** are per-sim, and are *not* the thresholds that
+decide anything:
+
+| Per-sim stress | Colour | Meaning |
 |---|---|---|
 | `< 80` | black | low |
 | `80–119` | pink | moderate |
 | `120–300` | red | high |
 
-Any single leg is clamped to **300 ticks**, so one catastrophe cannot dominate
-a person's history.
+The thresholds that actually set `eval_level` — and therefore whether a tenant
+leaves — are different, and come from `FACILITIES.md` § Thresholds By Star
+Rating:
+
+| Star rating | grade 2 (strong) | grade 1 (passing) | grade 0 (**evicts**) |
+|---|---|---|---|
+| 1–3 stars | `< 80` | `80–149` | `≥ 150` |
+| 4+ stars | `< 80` | `80–199` | `≥ 200` |
+
+**The lower bound of 80 is the same number in both systems, which makes the
+coincidence actively misleading.** A worker showing red at 120 is *not*
+failing; the failing boundary is 150.
+
+And note the direction: tenants get **more tolerant** as the tower rates
+higher. The upper threshold widens at 4 stars, it does not tighten. That is the
+opposite of the "expectations rise with the tower" mechanic the old prototype
+invented.
 
 ### What adds stress
 
-| Cause | Cost |
-|---|---|
-| **No route found** | **300 ticks** — the clamp, i.e. maximally bad |
-| Distance penalty | 30 or 60 ticks (gated per state; see `ROUTING.md`) |
-| Queue full, waiting | 5 ticks |
-| **Stairs** | **35 × floors traversed** |
-| **Escalator** | **16 × floors traversed** |
-| Lobby boarding, lobby height 2 | **−25 ticks** |
-| Lobby boarding, lobby height 3 | **−50 ticks** |
+| Cause | Cost | Kind |
+|---|---|---|
+| **No route found** | **300 ticks** — the clamp, i.e. maximally bad | fixed |
+| Distance penalty | 30 or 60 ticks (gated per state; see `ROUTING.md`) | fixed |
+| Queue full, waiting | 5 ticks | fixed |
+| Requeue failure | 0 | fixed |
+| Invalid venue | 0 | fixed |
+| **Stairs** | **35 × floors traversed** | fixed |
+| **Escalator** | **16 × floors traversed** | fixed |
+| Lobby boarding, lobby height 2 | **−25 ticks** | rebate |
+| Lobby boarding, lobby height 3 | **−50 ticks** | rebate |
+
+⚠️ **A fixed delay REPLACES the pending wall clock, it does not add to it.**
+`add_delay_to_current_sim` adds its constant and clears `last_trip_tick`
+*without* folding in `day_tick − last_trip_tick`. Someone who has queued 200
+ticks and then hits a full queue is charged **5**, and the 200 are gone. Read
+the table as additive on top of measured transit time and you will price
+queue-full far higher than the game does.
+
+⚠️ **The two zero-cost delays are not inert.** Requeue-failure and
+invalid-venue add nothing, but they still go through
+`add_delay_to_current_sim`, so they still clear the route-start stamp. A
+"free" delay that silently resets the clock belongs in the table.
 
 Two things fall out of that table and both are worth pausing on.
 
@@ -65,14 +100,37 @@ lobbies are *for* — not decoration, not capacity, a −25 or −50 tick rebate
 every morning commute.
 
 Counters reset on the 3-day cashflow pass and on first reopen after a vacancy,
-so evaluation is a rolling judgement, not a lifetime record.
+so evaluation is a rolling judgement, not a lifetime record. `reset_sim_trip_counters`
+clears `trip_count` and `accumulated_elapsed` **only** — someone mid-ride keeps
+their in-flight timing across the pass.
+
+The noise penalty radius is **per family**: office 10 tiles, hotel 20, condo 30.
+The "within 10 tiles" quoted above is the office case this build starts from,
+not a universal.
 
 ### Why this closes the loop
 
 A trip that cannot be routed costs 300 — the maximum. Bad transport therefore
-drives stress straight to the top of the red band, which fails the evaluation,
-which evicts the tenant. **Transport failure is not one input into occupancy.
-It is the dominant one, by construction.**
+drives stress past 150, which fails the evaluation, which evicts the tenant.
+**Transport failure is not one input into occupancy. It is the dominant one, by
+construction.**
+
+### …with one hole in it, and it is a design question
+
+Rent tier does not merely nudge the score. `FACILITIES.md` step 3 applies
+`+30 / +0 / −30 / **force 0**` for tiers 0–3. The cheapest tier is not a −60 —
+it is an **unconditional pass**.
+
+**A tier-3 office cannot fail evaluation however bad its transport is.** It
+still earns $2,000, still holds six workers, still generates traffic. So the
+sentence above is true at tiers 0–2 and false at tier 3, where the escape hatch
+is "charge almost nothing and never be evicted".
+
+That is faithful, so it stays. But it is worth knowing before balance work,
+because it means the reference already contains a dominant-strategy risk: a
+tower of tier-3 offices is unfailable by design. Whether that is a flaw or a
+deliberate mercy for a struggling player is exactly the kind of question the
+first real playthrough answers.
 
 ---
 
