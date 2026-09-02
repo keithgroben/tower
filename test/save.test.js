@@ -15,72 +15,28 @@
 import { SAVE_SCHEMA, SAVE_VERSION, restore, snapshot, summarise } from '../src/games/tower/sim/save.js';
 import { applyAction } from '../src/games/tower/sim/actions.js';
 import { FAMILY, isRented, population } from '../src/games/tower/sim/state.js';
-import {
-  deactivateIfFailing, officeArrival, officeFamilyHandler, offices,
-  recomputeOfficeOperationalStatus,
-} from '../src/games/tower/sim/office.js';
-import { resolveRouteBetweenFloors } from '../src/games/tower/sim/routing.js';
 import { starGatesOf, towerActivity } from '../src/games/tower/sim/progression.js';
-import {
-  CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
-  applyLocalSegmentDelay, applyQueueFullDelay, computeRuntimeTileStressAverage,
-  recordNoRouteFailure, stampRouteStart,
-} from '../src/games/tower/sim/stress.js';
+import { computeRuntimeTileStressAverage } from '../src/games/tower/sim/stress.js';
 import { seedDemoWorld } from '../src/games/tower/ui/seed.js';
-import { makeTowerScheduler } from '../src/games/tower/ui/tick.js';
+import { makeDriver } from '../src/games/tower/ui/driver.js';
 
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
-/** The composition `ui/main.js` runs, so a saved tower is exercised the way a
- *  played one is rather than through a quieter path. */
-function driver(world) {
-  const { tower } = world;
-  const price = (delay, actor) => {
-    if (!actor) return;
-    switch (delay.kind) {
-      case 'no-route': return void recordNoRouteFailure(actor);
-      case 'local-transit': return void applyLocalSegmentDelay(actor, delay.modeAndSpan);
-      case 'queue-full': return void applyQueueFullDelay(actor);
-      case 'distance': return void applyDistancePenalty(actor, {
-        heightMetricDelta: delay.heightMetricDelta, emitDistanceFeedback: true, carrierMode: delay.carrierMode });
-      case 'boarding': {
-        accumulateElapsedDelayIntoCurrentSim(actor, tower.clock.dayTick, {
-          sourceFloor: delay.sourceFloor, lobbyHeight: tower.lobbyHeight, carrierMode: delay.carrierMode });
-        if (delay.carrierMode !== CARRIER_SERVICE) stampRouteStart(actor, tower.clock.dayTick);
-        return;
-      }
-      default: return;
-    }
-  };
-  return makeTowerScheduler(tower, {
-    [FAMILY.office]: officeFamilyHandler({
-      resolveRoute: (t, a, f, to, c, o) => resolveRouteBetweenFloors(t, a, f, to, c, o),
-      onDelay: price,
-      onRent: () => {},
-    }),
-  }, { [FAMILY.office]: officeArrival }, price);
-}
-
 /**
- * Ticks, WITH the daily sweep `ui/main.js` runs on `dayAdvanced`.
+ * Ticks, through the SHIPPED composition.
  *
- * Without it `occupied_flag` is never set, so family 7's gate never opens and
- * not one die is ever rolled — a tower that looks like it is running and never
- * touches the generator. The rng test caught that before it could make every
- * other test here quietly meaningless.
+ * ⚠️ This used to hand-build its own scheduler, and it had already drifted: it
+ * listed family 7 only, so every save in this file was round-tripping a tower
+ * where nobody goes to lunch. `makeDriver` is the one definition — a test that
+ * restates the wiring is testing a copy, and the copy is always the one that
+ * forgets to grow.
+ *
+ * The daily sweep rides along inside checkpoint 2533 now, so there is nothing
+ * to call on `dayAdvanced` either.
  */
 function run(world, ticks) {
-  const { tower } = world;
-  const scheduler = driver(world);
-  const sweep = () => {
-    for (const { object, occupants } of offices(tower)) {
-      recomputeOfficeOperationalStatus(tower, object, occupants);
-      deactivateIfFailing(tower, object, occupants);
-    }
-  };
-  for (let i = 0; i < ticks; i++) {
-    if (scheduler.tick(tower).dayAdvanced) sweep();
-  }
+  const { scheduler } = makeDriver(world);
+  scheduler.advance(world.tower, ticks);
 }
 
 /** Everything about a tower that a divergence would show up in. */
