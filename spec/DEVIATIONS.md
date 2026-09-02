@@ -13,6 +13,31 @@ A row here is not a defeat. It is the difference between a decision and a drift.
 |---|---|---|---|---|---|
 | — | *(none yet)* | | | | |
 
+---
+
+# Ambiguities resolved
+
+Not deviations — places the reference is **silent or self-contradictory**, where
+we had to choose. Recorded so the choice is a decision with a reason rather
+than a thing someone finds later and assumes was arbitrary.
+
+| # | Question | Reference | Chosen | Why |
+|---|---|---|---|---|
+| A1 | Elapsed time across the `day_tick` wrap | silent | **floor at 0** | A leg stamped at 2590 and rebased at tick 10 computes `10 − 2590`. A negative sample subtracted from the running total makes stress read **better** the worse the tower gets — the exact failure class `CLAUDE.md` warns about. |
+| A2 | Is the 300-tick no-route penalty charged before or after the trip counters drain? | `ROUTING.md:64` and `PEOPLE.md:128` each describe one half, neither states the order | **charge, then drain** | Draining first discards the 300, so a failed trip costs nothing and a tower with no elevator posts the *best* stress in the game. The old repo shipped exactly this bug once: stranded riders logged as zero wait. |
+| A3 | Does the stress average truncate? | `PEOPLE.md:182` writes the division without saying | **integer division** | The original divides 16-bit words. And the colour bands are integer ranges (`< 80`, `80–119`, `120–300`) that only tile the number line if the score is an integer — 119.5 belongs to no band as written. |
+| A4 | Family-5 (suite) score divisor: 2 or 3? | `FACILITIES.md:39` and `PEOPLE.md:190` say 2; `PEOPLE.md:280` says a suite holds 3 entities | **2** | Two sources against one, and the two agree on the question actually being asked. Not on the current build path — offices first — so cheap to revisit. |
+| A5 | Sky-lobby floors | `ELEVATORS.md` + `DATA-MODEL.md`'s worked example give logical 14/29/44; `DATA-MODEL.md` prose says 15/30/45 | **14/29/44** | The EXE-derived value comes with its own arithmetic (`(exe − 10) % 15 == 14`) and an explicit translation example (EXE 24 ⇒ logical 14). The prose reads like a human-facing round number — logical 14 is the fifteenth storey if you count the ground floor as one. One constant if it flips. |
+
+The 10-bit `elapsed_packed` ceiling was investigated and found **not observable**:
+every writer clamps to 300 first, and 300 < 1024. The packing is preserved
+anyway because the high 6 bits carry flags the reference never names and a save
+has to round-trip them. A test pins the case that proves it — a 128-floor stair
+climb is 4,480 ticks, and `4480 & 0x3ff` is 384, a plausible-looking number that
+is not what the reference stores.
+
+---
+
 ## What does not belong here
 
 - **Presentation.** Art, camera, sound, UI layout and the clock's typography are
