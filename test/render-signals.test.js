@@ -18,7 +18,8 @@ import {
 } from '../src/games/tower/sim/stress.js';
 import { DEACTIVATED_EARLY } from '../src/games/tower/sim/economy.js';
 import {
-  STRESS_COLORS, actorStress, actorStressColor, carrierQueueDepth, objectSprite,
+  LET_MOMENT, LET_MOMENT_STYLE, STRESS_COLORS, actorStress, actorStressColor,
+  carrierQueueDepth, diffLetStatus, easeOutCubic, letMomentPhase, objectSprite,
   objectStatusTag, officeIsLet, queueDepthAt, queuePressure, timeOfDay,
   waitingActorsByFloor,
 } from '../src/games/tower/render/canvas.js';
@@ -258,6 +259,134 @@ export const tests = {
     const tower = createTower({ seed: 1 });
     const { object } = placeObject(tower, { family: 0x99, floor: 4, left: 10, right: 15 });
     assert(objectSprite(object, {}) === null, 'an unknown family draws no sprite');
+  },
+
+  // ------------------------------------------------------ the rent moment
+
+  '⚠️ the moment fires on the transition, and NOT on a unit seen for the first time'() {
+    // Opening the page on a tower that already has tenants must not celebrate
+    // every one of them. A celebration of nothing is worse than no celebration:
+    // it teaches a player to ignore the one that matters.
+    const { tower, office } = towerWithOffice();
+    const seen = new Map();
+
+    letUnit(office);
+    assert(diffLetStatus(seen, tower).length === 0, 'the first sighting is recorded silently');
+    assert(diffLetStatus(seen, tower).length === 0, 'and a steady state stays quiet');
+
+    // Now the thing this whole build exists to show. The closure is written as
+    // the vacant band rather than by clearing the flag, because that is what
+    // deactivation actually does — `occupiedFlag` stays set on a unit whose
+    // tenants are still being measured.
+    office.unitStatus = DEACTIVATED_EARLY;
+    const closed = diffLetStatus(seen, tower);
+    assert(closed.length === 1 && closed[0].direction === 'vacated', 'a closure is seen');
+    letUnit(office);
+    const let_ = diffLetStatus(seen, tower);
+    assert(let_.length === 1 && let_[0].direction === 'let', 'and so is a move-in');
+    assert(let_[0].object === office, 'and it names the unit that changed');
+  },
+
+  'the moment follows officeIsLet, so EITHER half can trigger it'() {
+    // The detector must not hold a second opinion about what "let" means — it
+    // asks `officeIsLet()` and nothing else. So a unit that loses its lease
+    // band and a unit that stops being measured both show, and the renderer
+    // cannot drift from the one definition.
+    for (const close of [
+      { what: 'the lease band goes vacant', apply: (o) => { o.unitStatus = DEACTIVATED_EARLY; } },
+      { what: 'the unit stops being measured', apply: (o) => { o.occupiedFlag = false; } },
+    ]) {
+      const { tower, office } = towerWithOffice();
+      const seen = new Map();
+      letUnit(office);
+      diffLetStatus(seen, tower);
+      close.apply(office);
+      const changes = diffLetStatus(seen, tower);
+      assert(changes.length === 1 && changes[0].direction === 'vacated',
+        'no closure seen when ' + close.what);
+    }
+  },
+
+  'a demolished unit does not leave a stale answer behind'() {
+    const { tower, office } = towerWithOffice();
+    const seen = new Map();
+    letUnit(office);
+    diffLetStatus(seen, tower);
+    assert(seen.has(office.id), 'precondition: it was recorded');
+    tower.objects.delete(office.id);
+    diffLetStatus(seen, tower);
+    assert(!seen.has(office.id), 'and forgotten when it stops existing');
+  },
+
+  'the lobby never fires a moment, because it is never let'() {
+    const tower = createTower({ seed: 1 });
+    placeObject(tower, { family: FAMILY.lobby, floor: GROUND_FLOOR, left: 48, right: 101 });
+    const seen = new Map();
+    diffLetStatus(seen, tower);
+    assert(seen.size === 0, 'infrastructure is not tracked at all');
+  },
+
+  'the moment is long enough to notice and short enough not to be wallpaper'() {
+    // Under about a second and a half a player looking elsewhere misses it;
+    // much over three and forty of them turn the tower into a light show.
+    assert(LET_MOMENT.totalMs >= 1500 && LET_MOMENT.totalMs <= 3200,
+      'the moment lasts ' + LET_MOMENT.totalMs + 'ms');
+    // Derived, never declared: a hand-written total that disagreed with its own
+    // parts would cut the word off mid-fade, and it would read as a glitch.
+    assert(LET_MOMENT.totalMs === LET_MOMENT.stampInMs + LET_MOMENT.stampHoldMs + LET_MOMENT.stampOutMs,
+      'the total has to be the sum of its parts');
+  },
+
+  'the timeline runs through and then stops'() {
+    assert(letMomentPhase(0).flash === 1, 'it opens on a full flash');
+    assert(letMomentPhase(0).stamp.scale > 1.5, 'and the word lands oversized');
+    assert(letMomentPhase(LET_MOMENT.flashMs).flash === 0, 'the flash is over quickly');
+
+    const settled = letMomentPhase(LET_MOMENT.stampInMs + 10);
+    assert(settled.stamp.scale === 1 && settled.stamp.alpha === 1, 'then the word settles and holds');
+    assert(settled.ring !== null, 'while the ring is still expanding');
+
+    const late = letMomentPhase(LET_MOMENT.totalMs - 1);
+    assert(late.stamp.alpha > 0 && late.stamp.alpha < 0.1, 'and fades out at the very end');
+    assert(late.ring === null && late.shaft === null, 'the motion finished long before');
+
+    assert(letMomentPhase(LET_MOMENT.totalMs) === null, 'past the end there is no moment');
+    assert(letMomentPhase(-1) === null, 'nor before the start');
+    assert(letMomentPhase(NaN) === null, 'nor for a broken clock');
+  },
+
+  'the ring and the shaft light both run forwards, monotonically'() {
+    // A progress value that went backwards would draw the arrival light sliding
+    // back DOWN the shaft — the exact opposite of the story being told.
+    let previousRing = -1, previousShaft = -1;
+    for (let age = 0; age < LET_MOMENT.ringMs; age += 25) {
+      const p = letMomentPhase(age);
+      assert(p.ring > previousRing, 'the ring went backwards at ' + age);
+      previousRing = p.ring;
+      if (p.shaft !== null) {
+        assert(p.shaft > previousShaft, 'the shaft light went backwards at ' + age);
+        previousShaft = p.shaft;
+      }
+    }
+    assert(previousShaft > 0.9, 'the shaft light gets most of the way there: ' + previousShaft);
+  },
+
+  '⚠️ a let and a closure do not look alike'() {
+    // They are opposites, and giving them the same fanfare would say they are
+    // the same kind of event. The arrival gets outward motion because a journey
+    // caused it; a closure gets none, because no single trip did.
+    const won = LET_MOMENT_STYLE.let;
+    const lost = LET_MOMENT_STYLE.vacated;
+    assert(won.word !== lost.word, 'different words');
+    assert(won.ink !== lost.ink, 'different colours');
+    assert(won.ring && won.shaft, 'an arrival gets the ring and the shaft light');
+    assert(!lost.ring && !lost.shaft, 'a closure gets neither — nothing arrived');
+  },
+
+  'the easing is an easing'() {
+    assert(easeOutCubic(0) === 0 && easeOutCubic(1) === 1, 'it spans 0 to 1');
+    assert(easeOutCubic(0.5) > 0.5, 'and front-loads, which is what "ease out" means');
+    assert(easeOutCubic(-5) === 0 && easeOutCubic(5) === 1, 'out-of-range input is clamped');
   },
 
   // ----------------------------------------------------------- the clock

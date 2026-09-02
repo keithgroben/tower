@@ -22,7 +22,7 @@ import { population } from '../sim/state.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { STRESS_COLORS, makeRenderer, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
-import { seedTower } from './seed.js';
+import { seedDemoTower } from './seed.js';
 import { makeTowerScheduler } from './tick.js';
 
 const $ = (id) => document.getElementById(id);
@@ -63,7 +63,7 @@ import {
 } from '../sim/stress.js';
 
 const canvas = $('view');
-const tower = seedTower({ seed: 1 });
+const tower = seedDemoTower({ seed: 1 });
 
 /**
  * **The loop, wired.**
@@ -84,7 +84,7 @@ const scheduler = makeTowerScheduler(tower, {
   }),
 }, {
   [FAMILY.office]: officeArrival,
-});
+}, applyRoutingDelay);
 
 let rentedThisFrame = 0;
 
@@ -148,6 +148,9 @@ const pump = makeTickPump();
 let speed = 1;
 let lastFrameMs = 0;
 let hudDueMs = 0;
+/** Previous frame's let count, so the HUD can react to a change rather than
+ *  merely display one. `-1` so the first read is never mistaken for a move. */
+let lastLetCount = -1;
 
 // ------------------------------------------------------------------- speed
 
@@ -248,6 +251,23 @@ function updateHover(px, py) {
 // --------------------------------------------------------------------- HUD
 
 /**
+ * Jump the lease counter and colour it by direction, then put it back.
+ *
+ * The reset is a timer rather than an `animationend` listener because a
+ * viewer with `prefers-reduced-motion` gets `animation: none`, and then
+ * `animationend` never fires and the colour sticks for the rest of the session
+ * — the accessible path would be the one that breaks.
+ */
+let bumpTimer = null;
+function bumpLeases(el, up) {
+  clearTimeout(bumpTimer);
+  el.classList.remove('bump', 'up', 'down');
+  void el.offsetWidth;                // restart the animation rather than queue it
+  el.classList.add('bump', up ? 'up' : 'down');
+  bumpTimer = setTimeout(() => el.classList.remove('bump', 'up', 'down'), 640);
+}
+
+/**
  * Nine numbers, refreshed ten times a second rather than every frame. The DOM
  * is the slowest thing on this page and none of these changes faster than the
  * eye can read.
@@ -268,7 +288,13 @@ function drawHud() {
     leasable++;
     if (officeIsLet(object)) let_++;
   }
-  $('leases').textContent = `${let_}/${leasable} let`;
+  // The HUD's half of the rent moment. The world says WHICH office rented; the
+  // counter says how the tower is doing overall, and a number that changes
+  // without moving is a number nobody notices changing.
+  const leasesEl = $('leases');
+  if (lastLetCount >= 0 && let_ !== lastLetCount) bumpLeases(leasesEl, let_ > lastLetCount);
+  lastLetCount = let_;
+  leasesEl.textContent = `${let_}/${leasable} let`;
   $('people').textContent = `${population(tower)} living here · ${tower.actors.length} people`;
   $('cash').textContent = '$' + tower.cash.toLocaleString('en-US');
 

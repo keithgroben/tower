@@ -36,8 +36,15 @@ import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
  * @param families `{ [familyCode]: (tower, actor) => void }` — the gate and
  *                 dispatch handlers. Passed in rather than imported so this
  *                 file keeps knowing nothing about any specific family.
+ * @param arrivals `{ [familyCode]: (actor, floor) => void }` — what arriving
+ *                 somewhere means to that family.
+ * @param onDelay  `(delay, actor) => void` — prices one stress event. The SAME
+ *                 signature the family handler's `onDelay` takes, deliberately:
+ *                 the router and the carriers emit the same event shapes, and
+ *                 one consumer must handle both or the two halves of a journey
+ *                 get priced by different rules.
  */
-export function makeTowerScheduler(tower, families = {}, arrivals = {}) {
+export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay = null) {
   /** An actor by id. The carrier queues hold ids, not references. */
   const actorById = (ref) => tower.actors.find((a) => a && a.id === ref) ?? null;
 
@@ -73,6 +80,28 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}) {
       const actor = actorById(ref);
       if (actor) actor.route = null;
     },
+    /**
+     * ⚠️ **Every carrier stress event came through here and was thrown away.**
+     *
+     * `makeCarrierContext` only builds `ctx.emitDelay` when an `onDelay` is
+     * supplied, and `drainFloorQueue` emits through `ctx.emitDelay?.(…)`. With
+     * nothing passed, the optional call was a no-op and the **boarding** event
+     * — the one that measures the wait on the floor and re-arms the route-start
+     * stamp — never reached anybody.
+     *
+     * So `last_trip_tick` stayed `0`, and `rebase_sim_elapsed_from_clock` at
+     * arrival read `elapsed + day_tick - 0`: it charged every rider the whole
+     * day tick, which clamps to 300. Measured on a six-floor tower with three
+     * working cars, the MEDIAN worker stress was 300 — the maximum a trip can
+     * cost — so every office failed evaluation on day two and the tower never
+     * recovered.
+     *
+     * Nothing errored. `?.` on an absent callback is silence by design, and the
+     * result reads as "the clamp is working" rather than as a dropped event.
+     * `CLAUDE.md`'s own warning, in a new place: a 4x error that presents as a
+     * feel problem is worse than a crash.
+     */
+    onDelay: onDelay ? (ref, event) => onDelay(event, actorById(ref)) : undefined,
   });
 
   return createScheduler({

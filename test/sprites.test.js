@@ -37,7 +37,7 @@ import {
   PRELOAD_SHEETS, SPRITE_NOT_YET_DRAWN, SPRITE_UNUSED_ANIMATIONS, SPRITE_USES,
   makeRenderer,
 } from '../src/games/tower/render/canvas.js';
-import { seedTower } from '../src/games/tower/ui/seed.js';
+import { seedDemoTower } from '../src/games/tower/ui/seed.js';
 import {
   SPRITE_DIR, deliveredSheets, diskSpriteLoaders, pngSize, sheetAnimations, stubCanvas,
 } from './_headless.js';
@@ -49,7 +49,7 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
 
 /** A tower holding one of everything the renderer knows how to draw. */
 function towerWithEverything() {
-  const tower = seedTower({ seed: 1 });
+  const tower = seedDemoTower({ seed: 1 });
   const trips = () => createSimTripRecord();
   const objects = [...tower.objects.values()];
 
@@ -305,7 +305,7 @@ export const tests = {
   },
 
   'a basement draws as an excavation, not as more tower'() {
-    // The sentinel bug's visual half. `seedTower` puts retail on B1 and B2 for
+    // The sentinel bug's visual half. `seedDemoTower` puts retail on B1 and B2 for
     // exactly this reason: a renderer that skipped floors below zero would draw
     // soil where the shops are, and nothing would error.
     for (const key of ['basement-empty/tile', 'earth-edge/tile', 'foundation-slab/tile']) {

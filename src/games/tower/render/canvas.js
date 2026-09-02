@@ -337,6 +337,133 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
   return { name, animation: night ? 'occupied-night' : 'occupied-day' };
 }
 
+// ------------------------------------------------------- the rent moment
+//
+// **The one thing on this screen that has to be unmissable.**
+//
+// `spec/simtower-loop.md` §4: an office rents when a worker's lobby-to-office
+// route actually resolves. Not when a score clears a bar — because somebody got
+// there. That sentence is the reason this repository exists, and Keith has
+// never watched it happen. Drawn as a colour change on a room, in a tower of
+// forty rooms, it would be invisible: the thing we rebuilt everything to see
+// would go past unseen.
+//
+// So it gets motion, contrast, a word, and a mark on the minimap for when the
+// room is off-screen. Render-local and render-timed throughout: pause the game
+// and a moment in flight freezes with it, and a tower plays identically with
+// the whole thing switched off.
+
+/** Easing for everything below. Fast out of the gate, settles at the end. */
+export const easeOutCubic = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+
+/**
+ * The timeline, in milliseconds of render time.
+ *
+ * `totalMs` is derived rather than declared: a hand-written total that
+ * disagreed with its own parts would cut the stamp off mid-fade, and the bug
+ * would look like a rendering glitch rather than a wrong number.
+ */
+export const LET_MOMENT = {
+  /** A hard flash over the room. Short — this is the punctuation, not the sentence. */
+  flashMs: 200,
+  /** A ring expanding out of the room, so the eye is pulled from anywhere on screen. */
+  ringMs: 900,
+  /** A light running up the shaft the tenant actually rode in. */
+  shaftMs: 700,
+  /** The word punching down to size, holding, then fading. */
+  stampInMs: 240,
+  stampHoldMs: 1500,
+  stampOutMs: 600,
+  /**
+   * How many moments may run at once. A tower's first morning can rent a dozen
+   * offices inside a few seconds, and forty simultaneous flashes is a strobe
+   * that reads as a fault rather than as good news. The oldest is dropped.
+   */
+  maxConcurrent: 14,
+};
+LET_MOMENT.totalMs = LET_MOMENT.stampInMs + LET_MOMENT.stampHoldMs + LET_MOMENT.stampOutMs;
+
+/**
+ * A moment's state at `ageMs`, or `null` once it is over.
+ *
+ * Pure, and separate from every drawing call, so the timing can be tested
+ * without a canvas — the shape of this animation is the whole deliverable, and
+ * "it looked right when I ran it" is not a check anybody can repeat.
+ *
+ * @returns `{ flash, ring, shaft, stamp: {scale, alpha} }` — `flash` is an
+ *   alpha, `ring` and `shaft` are 0..1 progress or `null` when finished.
+ */
+export function letMomentPhase(ageMs) {
+  const age = Number(ageMs);
+  if (!Number.isFinite(age) || age < 0 || age >= LET_MOMENT.totalMs) return null;
+
+  const flash = age < LET_MOMENT.flashMs ? 1 - easeOutCubic(age / LET_MOMENT.flashMs) : 0;
+  const ring = age < LET_MOMENT.ringMs ? age / LET_MOMENT.ringMs : null;
+  const shaft = age < LET_MOMENT.shaftMs ? easeOutCubic(age / LET_MOMENT.shaftMs) : null;
+
+  // The stamp lands big and settles, which is what makes it read as an event
+  // rather than as a label that was always there.
+  let stamp;
+  if (age < LET_MOMENT.stampInMs) {
+    stamp = { scale: 1 + 0.8 * (1 - easeOutCubic(age / LET_MOMENT.stampInMs)), alpha: 1 };
+  } else if (age < LET_MOMENT.stampInMs + LET_MOMENT.stampHoldMs) {
+    stamp = { scale: 1, alpha: 1 };
+  } else {
+    const out = (age - LET_MOMENT.stampInMs - LET_MOMENT.stampHoldMs) / LET_MOMENT.stampOutMs;
+    stamp = { scale: 1, alpha: 1 - out };
+  }
+  return { flash, ring, shaft, stamp };
+}
+
+/**
+ * The two directions, and why they do not look alike.
+ *
+ * A let is an arrival: it gets outward motion, a ring, a light in the shaft.
+ * A closure is not caused by one journey, it is caused by every journey having
+ * been bad — so it gets no ring and no shaft light, because there is no single
+ * trip to point at. Giving them the same fanfare would say the two events are
+ * the same kind of thing, and they are opposites.
+ */
+export const LET_MOMENT_STYLE = {
+  let: { word: 'LET', ink: '#06d6a0', flash: '255,255,255', ring: true, shaft: true },
+  vacated: { word: 'VACATED', ink: '#ef476f', flash: '239,71,111', ring: false, shaft: false },
+};
+
+/**
+ * Which leasable units changed hands since the last frame.
+ *
+ * The sim emits no events, so the transition is *observed* by diffing what was
+ * on screen last frame against what is on screen now. That keeps the rule in
+ * one place — `officeIsLet()` — instead of the renderer holding a second
+ * opinion about what "let" means, and it means the moment fires for any cause:
+ * a route resolving, an evaluation closing a unit, a save being loaded.
+ *
+ * A unit seen for the FIRST time is recorded silently. Without that, opening
+ * the page on an existing tower would fire a moment for every occupied room in
+ * it — a celebration of nothing, which teaches a player to ignore the one that
+ * matters.
+ *
+ * `seen` is mutated: it is the caller's frame-to-frame memory.
+ *
+ * @returns `[{ object, direction }]` where direction is `'let'` or `'vacated'`
+ */
+export function diffLetStatus(seen, tower) {
+  const changes = [];
+  for (const object of tower.objects.values()) {
+    if (!LEASABLE.has(object.family) || object.occupants.length === 0) continue;
+    const now = officeIsLet(object);
+    const before = seen.get(object.id);
+    seen.set(object.id, now);
+    if (before === undefined || before === now) continue;
+    changes.push({ object, direction: now ? 'let' : 'vacated' });
+  }
+  // A demolished unit must not sit in the map forever pinning a stale answer.
+  if (seen.size > tower.objects.size) {
+    for (const id of seen.keys()) if (!tower.objects.has(id)) seen.delete(id);
+  }
+  return changes;
+}
+
 /**
  * The sheets and animations this renderer is capable of asking for.
  *
@@ -483,6 +610,22 @@ export function makeRenderer(canvas, options = {}) {
   const landing = new Map();
   let knownObjects = null;
   let framedTower = null;
+
+  /** Last frame's answer to "is this let", per object. See `diffLetStatus`. */
+  const letSeen = new Map();
+  /** Rent and closure moments in flight: object id -> `{ object, direction, at, carrierId }`. */
+  const letMoments = new Map();
+  /**
+   * The last carrier each actor was actually SEEN queued on.
+   *
+   * Observed, never inferred. When an office rents, the shaft light runs up the
+   * lift its new tenants were watched riding — not up whichever lift the
+   * renderer guesses the router would have picked. Guessing would put a
+   * confident bright line on the wrong shaft, and a picture that lies about
+   * cause is worse than no picture, in a build whose entire claim is that
+   * transport is the cause.
+   */
+  const lastCarrierOf = new Map();
 
   let W = 0, H = 0, dpr = 1;
   /** Seconds of render time, for cloud drift and smoke trails. */
@@ -645,6 +788,10 @@ export function makeRenderer(canvas, options = {}) {
     for (const carrier of tower.carriers) drawCars(L, carrier, dtMs);
     drawWaiting(L, tower, visible, byFloor);
     for (const o of tower.objects.values()) drawUnitSignals(L, o, tower);
+    // Last of the world passes, and it has to stay last: the whole point is
+    // that nothing draws over it.
+    noteLetChanges(tower);
+    drawLetMoments(L, tower);
 
     drawMinimap(L, tower);
   }
@@ -989,6 +1136,124 @@ export function makeRenderer(canvas, options = {}) {
     }
   }
 
+  // --------------------------------------------------- the rent moment
+
+  /** Open a moment for every unit that changed hands this frame. */
+  function noteLetChanges(tower) {
+    for (const { object, direction } of diffLetStatus(letSeen, tower)) {
+      // The shaft light runs up whichever lift this unit's own people were last
+      // watched riding. No sighting, no light — see `lastCarrierOf`.
+      let carrierId = null;
+      for (const id of object.occupants) {
+        const seen = lastCarrierOf.get(id);
+        if (seen != null) { carrierId = seen; break; }
+      }
+      if (letMoments.size >= LET_MOMENT.maxConcurrent) {
+        // Drop the oldest rather than refusing the newest: the moment a player
+        // is most likely to be looking for is the one that just happened.
+        let oldest = null;
+        for (const [id, m] of letMoments) if (!oldest || m.at < oldest[1].at) oldest = [id, m];
+        if (oldest) letMoments.delete(oldest[0]);
+      }
+      letMoments.set(object.id, { object, direction, at: sprites.elapsedMs, carrierId });
+    }
+  }
+
+  /**
+   * Draw every moment in flight: a flash, a ring, a light up the shaft, and the
+   * word. Anything whose unit has been demolished, or whose timeline has run
+   * out, is dropped here rather than accumulating.
+   */
+  function drawLetMoments(L, tower) {
+    if (!letMoments.size) return;
+    for (const [id, moment] of letMoments) {
+      const phase = letMomentPhase(sprites.elapsedMs - moment.at);
+      if (!phase || !tower.objects.has(id)) { letMoments.delete(id); continue; }
+      const style = LET_MOMENT_STYLE[moment.direction];
+      const o = moment.object;
+      const x = L.tileX(o.left);
+      const y = L.floorY(o.floor);
+      const w = (o.right - o.left + 1) * L.tw;
+      const cx = x + w / 2;
+      const cy = y + L.fh / 2;
+
+      // The shaft light first, so it runs UNDER the room it is arriving at.
+      if (style.shaft && phase.shaft !== null && moment.carrierId != null) {
+        drawArrivalLight(L, tower, moment.carrierId, o.floor, phase.shaft);
+      }
+
+      const onScreen = x + w > 0 && x < W && y + L.fh > 0 && y < H;
+      if (!onScreen) continue;   // the minimap pip is this moment's whole story
+
+      if (phase.flash > 0) {
+        ctx.fillStyle = `rgba(${style.flash},${(phase.flash * 0.85).toFixed(3)})`;
+        ctx.fillRect(x, y, w, L.fh - 2);
+      }
+
+      if (style.ring && phase.ring !== null) {
+        const t = easeOutCubic(phase.ring);
+        ctx.globalAlpha = (1 - phase.ring) * 0.9;
+        ctx.strokeStyle = style.ink;
+        ctx.lineWidth = Math.max(1.5, 2 * L.zoom);
+        ctx.beginPath();
+        ctx.arc(cx, cy, (w * 0.35) + t * w * 1.1, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      if (phase.stamp) {
+        const size = Math.max(9, Math.round(9 * L.zoom));
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.scale(phase.stamp.scale, phase.stamp.scale);
+        ctx.globalAlpha = phase.stamp.alpha;
+        ctx.font = '700 ' + size + 'px ui-monospace, monospace';
+        ctx.textAlign = 'center';
+        const half = ctx.measureText(style.word).width / 2 + size * 0.5;
+        // A plate under the word, because the word sits on top of furnished
+        // art and unreadable good news is not good news.
+        ctx.fillStyle = 'rgba(11,15,20,0.82)';
+        roundRect(ctx, -half, -size * 0.85, half * 2, size * 1.7, size * 0.3);
+        ctx.fill();
+        ctx.strokeStyle = style.ink;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = style.ink;
+        ctx.fillText(style.word, 0, size * 0.36);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  /**
+   * A light travelling up (or down) a shaft, from the ground lobby to the floor
+   * that just rented — the journey that caused it, redrawn.
+   *
+   * This is the causal half of the moment. Without it the room simply lights
+   * up, which says "an office rented" and not "an office rented *because
+   * somebody could get there*", and the second sentence is the entire thesis.
+   */
+  function drawArrivalLight(L, tower, carrierId, toFloor, progress) {
+    const carrier = tower.carriers.find((c) => c.id === carrierId);
+    if (!carrier) return;
+    const x = L.tileX(carrier.column);
+    const width = carrier.shaftWidth * L.tw;
+    if (x + width < 0 || x > W) return;
+    const from = Math.max(carrier.bottomFloor, Math.min(carrier.topFloor, GROUND_FLOOR));
+    const startY = L.floorY(from) + L.fh / 2;
+    const endY = L.floorY(toFloor) + L.fh / 2;
+    const headY = startY + (endY - startY) * progress;
+    const tail = Math.max(L.fh, Math.abs(endY - startY) * 0.35);
+    const towards = endY < startY ? -1 : 1;
+
+    const gradient = ctx.createLinearGradient(0, headY - towards * tail, 0, headY);
+    gradient.addColorStop(0, 'rgba(6,214,160,0)');
+    gradient.addColorStop(1, 'rgba(6,214,160,0.75)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(x, Math.min(headY, headY - towards * tail), width, tail);
+  }
+
   /** Scaffold and dust over anything placed in the last half second. */
   function drawConstruction(L) {
     if (!landing.size) return;
@@ -1119,6 +1384,10 @@ export function makeRenderer(canvas, options = {}) {
       const groups = new Map();
       for (const actor of actors) {
         const carrierId = actor.route?.carrierId ?? null;
+        // Remember who rode what. This is the only place a rider and a carrier
+        // are seen together, and the rent moment's shaft light depends on it
+        // having been an observation rather than a guess.
+        if (carrierId != null) lastCarrierOf.set(actor.id, carrierId);
         const list = groups.get(carrierId);
         if (list) list.push(actor); else groups.set(carrierId, [actor]);
       }
@@ -1310,6 +1579,23 @@ export function makeRenderer(canvas, options = {}) {
       ctx.globalAlpha = 0.35 + p.ratio * 0.65;
       ctx.fillStyle = indicatorColor(p.colorKey);
       ctx.fillRect(m.x, minimapRowY(m, f), m.gutter - 1, m.rowH);
+      ctx.globalAlpha = 1;
+    }
+
+    // A unit that just changed hands, marked on the strip.
+    //
+    // This is the half of the moment that matters most: a tower is a hundred
+    // floors and a window shows twenty, so the office that rents while you are
+    // looking somewhere else would otherwise announce itself to nobody. The
+    // whole row lights, because a two-pixel pip on a six-pixel row is not an
+    // announcement.
+    for (const moment of letMoments.values()) {
+      const phase = letMomentPhase(sprites.elapsedMs - moment.at);
+      if (!phase) continue;
+      const style = LET_MOMENT_STYLE[moment.direction];
+      ctx.globalAlpha = 0.35 + (phase.stamp?.alpha ?? 0) * 0.65;
+      ctx.fillStyle = style.ink;
+      ctx.fillRect(m.x, minimapRowY(m, moment.object.floor), m.w, Math.max(2, m.rowH));
       ctx.globalAlpha = 1;
     }
 
