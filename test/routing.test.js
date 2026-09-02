@@ -23,6 +23,7 @@ import {
   resolveRouteBetweenFloors, scoreCarrier, scoreLocalSegment, selectBestRouteCandidate,
   walkabilityAt,
 } from '../src/games/tower/sim/routing.js';
+import * as routing from '../src/games/tower/sim/routing.js';
 
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
@@ -796,6 +797,60 @@ export const tests = {
     const serviceBoarding = service.events.find((e) => e.kind === DELAY.BOARDING);
     assert(serviceBoarding.carrierMode === CARRIER_MODE.SERVICE,
       'a service carrier reports mode 2 rather than being filtered out here');
+  },
+
+  /**
+   * The guard against a re-add. `sim/stress.js` owns the tall-lobby rebate —
+   * `PEOPLE.md` § Trip-Counter Functions item 3 applies it *inside*
+   * `accumulate_elapsed_delay_into_current_sim`, which is that module's
+   * function. Held in two places it either pays twice or depends on which half
+   * got wired, which is the stairs-column bug from the old repo: a rule in four
+   * places, three of them only predicting what the fourth would do.
+   *
+   * Bounded as well as negated, so it cannot pass by everything being absent:
+   * the event that replaces the value has to exist and has to carry what
+   * pricing needs.
+   */
+  'the tall-lobby rebate is priced in sim/stress.js and nowhere here'() {
+    // Bound: routing still reports the moment the rebate applies to, with the
+    // three facts accumulateElapsedDelayIntoCurrentSim asks for.
+    assert(DELAY.BOARDING === 'boarding', 'the boarding event is what routing reports in its place');
+    const carrier = shaft({ bottomFloor: 0, topFloor: 20, column: 0 });
+    const tower = makeTower({ carriers: [carrier], lobbyHeight: 3 });
+    const seen = [];
+    const ctx = makeCarrierContext(tower, {
+      targetFloorOf: () => 15,
+      onArrive: () => {},
+      onDelay: (ref, event) => seen.push(event),
+    });
+    const result = resolveRouteBetweenFloors(tower, worker(0), 0, 15, clock);
+    let tick = clock.dayTick;
+    for (let i = 0; i < 60 && !seen.some((e) => e.kind === DELAY.BOARDING); i++) {
+      tick += 1;
+      tickCarriers(tower.carriers, { dayTick: tick, daypart: 0, calendarPhase: false }, ctx);
+    }
+    const boarding = seen.find((e) => e.kind === DELAY.BOARDING);
+    assert(boarding !== undefined, 'the boarding event must still be reported');
+    for (const field of ['sourceFloor', 'carrierMode', 'lobbyHeight']) {
+      assert(boarding[field] !== undefined,
+        'the boarding event must carry ' + field + ' for sim/stress.js to price the rebate');
+    }
+
+    // Negate: no kind, no export and no payload here holds the value.
+    assert(!Object.values(DELAY).includes('lobby-boarding'),
+      'a lobby-boarding delay kind is back; the rebate belongs to sim/stress.js');
+    for (const name of Object.keys(routing)) {
+      assert(!/rebate|reduction/i.test(name),
+        'routing exports ' + name + ' — the rebate value belongs to sim/stress.js');
+    }
+    // -25 and -50 are the rebate. No event this module produces may carry a
+    // tick value at all, let alone a negative one.
+    for (const event of [...result.delays, ...seen]) {
+      assert(event.ticks === undefined,
+        'event ' + event.kind + ' carries a tick value; pricing belongs to sim/stress.js');
+    }
+    assert(result.delays.every((e) => e.kind !== DELAY.BOARDING),
+      'joining a queue is not boarding: no car has loaded anybody yet, so no rebate is due');
   },
 
   /**
