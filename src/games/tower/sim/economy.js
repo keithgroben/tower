@@ -314,11 +314,28 @@ export const RENT_READINESS_MODIFIER = [30, 0, -30, null];
  * taken here. It only matters if a priced family is ever set to 4, which the
  * spec says never happens.
  */
-export function payout(family, rentTier = DEFAULT_RENT_TIER) {
-  const row = RENT_TIERS[family];
+export function payout(rentKind, rentTier = DEFAULT_RENT_TIER) {
+  // ⚠️ **Two vocabularies use the word "family".** This module's is a NAME
+  // (`'office'`); `sim/state.js`'s `FAMILY.office` is a numeric CODE (`7`).
+  // The parameter used to be called `family`, which invited `payout(7, 1)` —
+  // and `RENT_TIERS[7]` is undefined, so it silently answered `0`: *every
+  // office reads as a room that does not pay rent*. The UI agent hit exactly
+  // that and had to invert `TYPE_CODES` to work around it.
+  //
+  // Renaming the parameter would only document the trap. Accepting both
+  // removes it, which is the same lesson as `routeStartTick` / `lastTripTick`:
+  // when two modules name one concept twice, translate at the seam rather than
+  // asking every caller to remember which side they are on.
+  const key = typeof rentKind === 'number' ? NAME_BY_TYPE_CODE[rentKind] : rentKind;
+  const row = RENT_TIERS[key];
   if (!row || rentTier >= UNPRICED_RENT_TIER || rentTier < 0) return 0;
   return row[rentTier];
 }
+
+/** `7` -> `'office'`. Built from `TYPE_CODES` so it cannot drift from it. */
+export const NAME_BY_TYPE_CODE = Object.fromEntries(
+  Object.entries(TYPE_CODES).map(([name, code]) => [code, name]),
+);
 
 /**
  * Live population contributed by one active unit, for the population ledger.

@@ -190,6 +190,28 @@ skimming it.
   however bad its lifts are. Most of this list fails loudly; this one hands you
   a compliment. When a change makes the numbers *better*, check what stopped
   being counted.
+- ⚠️ **A test that pins one side of an agreement is not a test of the
+  agreement.** The build ghost and `applyAction` must always agree on whether a
+  click will land. The test written to hold that asserted `preview().ok` — *its
+  own output* — so when the seam started refusing shafts through occupied
+  rooms, the test went on passing while the ghost said "passes through 12
+  rooms" about a build the sim now refused.
+
+  The fix is a matrix that runs **both** paths and compares them, on the
+  verdict *and* the wording. Write the row first and watch it fail with
+  something like *"ghost said yes and the seam said no"*; a row that has never
+  failed is a row that is pinning one side.
+- ⚠️ **When two modules name one concept twice, translate at the seam.** It has
+  happened three times: `routeStartTick` vs `lastTripTick` for the reference's
+  one `last_trip_tick`; `occupiedFlag` meaning "measured" in one place and
+  "has tenants" in another; and `payout(family, …)`, whose `family` is a
+  *name* (`'office'`) while `sim/state.js`'s `FAMILY.office` is a *code* (`7`)
+  — so `payout(7, 1)` silently answered `0` and every office read as a room
+  that does not pay rent.
+
+  Renaming a parameter only documents the trap. **Accept both and translate**,
+  or make the two one name. Asking every caller to remember which side of a
+  seam they are on is how you get a bug that reads as a working feature.
 - **A rule written in four places drifts.** The stairs column rule lived in the
   sim twice, the advisor once and the renderer once; three of them only
   predicted what the fourth would do. Write it once.
