@@ -33,7 +33,9 @@
  * tower.transferFloors  Array of logical floors carrying a sky lobby /
  *                     transit concourse (the reference's placed object type
  *                     0x18). Discovery order; the first 16 are used.
- * tower.lobbyHeight   1, 2 or 3. Only used for the lobby-boarding rebate.
+ * tower.lobbyHeight   1, 2 or 3. Read only by `makeCarrierContext`, which puts
+ *                     it on the boarding event so the tall-lobby rebate can be
+ *                     priced without reaching back into the tower.
  * tower.routeTables   Written by `rebuildRouteTables(tower)` — walkability,
  *                     the lobby local-access records, the transfer-group
  *                     cache, and the route-failure notice bytes. Call it at
@@ -56,11 +58,57 @@
  * Everything it wrote is also on the returned result, so a caller that would
  * rather own its own record can ignore the mutation entirely.
  *
- * ## Delays: reported, never applied
+ * `actor.routeStartTick` is the reference's `last_trip_tick`, and it is written
+ * **last, from inside `finish()`**, after every delay has been reported. See
+ * the ordering note on `DELAY`: charging a delay clears that stamp, so writing
+ * it first destroys it.
  *
- * `sim/stress.js` owns stress. This module returns the delays it incurs on
- * `result.delays` and, when given `onDelay`, calls it once per delay. It never
- * touches an elapsed counter. See `DELAY` below for the five kinds.
+ * The two `onDelay` seams take different arguments on purpose. The resolver's
+ * is `onDelay(event)` — it was handed the actor, so the event needs no subject.
+ * The queue drain's, via `makeCarrierContext`, is `onDelay(ref, event)`: it
+ * holds only request references and never sees an actor record.
+ *
+ * ## Delays: reported, never applied — and never priced
+ *
+ * `sim/stress.js` owns stress. This module returns the events it incurs on
+ * `result.delays` and, when given `onDelay`, calls it once per event. It never
+ * touches an elapsed counter, and it carries **no tick costs**: an event names
+ * what happened and the facts needed to price it, and `sim/stress.js` supplies
+ * the number. See `DELAY` below for the six kinds and the function each maps
+ * to.
+ *
+ * ## The route-start stamp, and the gap this module had to close
+ *
+ * `TODO(parity):` `last_trip_tick` is stamped when a rider joins a carrier
+ * queue (`ROUTING.md` lines 57 and 352). Two functions then consume it:
+ * `accumulate_elapsed_delay_into_current_sim` at **assignment** (boarding) and
+ * `rebase_sim_elapsed_from_clock` at **arrival**. Both clear it. Nothing in
+ * `ROUTING.md`, `PEOPLE.md` or `ELEVATORS.md` re-stamps it in between, so on
+ * the face of it the arrival rebase reads a cleared stamp, computes
+ * `elapsed + day_tick - 0`, and charges the whole day — every elevator ride
+ * scoring maximum stress, identically, no matter how good the elevator is.
+ *
+ * Three readings are possible; this module takes the third:
+ *
+ * 1. *The arrival rebase is not reached on this path.* Rejected: `PEOPLE.md`
+ *    § When Counters Advance names the queued-car arrival callback explicitly.
+ * 2. *The assignment-time accumulate is not reached.* Rejected: the tall-lobby
+ *    rebate is applied only there, and deleting it deletes the entire point of
+ *    a multi-storey lobby.
+ * 3. **Boarding re-stamps.** The resolver ends by stamping (`PEOPLE.md`
+ *    § Trip-Counter Functions, item 5); the boarding step, which consumes the
+ *    stamp the same way, ends by re-arming it for the ride. Every event that
+ *    consumes the stamp re-arms it for the next segment of the trip.
+ *
+ * Reading 3 is the only one that leaves both documented call sites reachable
+ * and meaningful: the accumulate then measures the wait on the floor, and the
+ * rebase measures the ride. It also falls out correctly for service carriers —
+ * `accumulate_elapsed_delay_into_current_sim` returns early for those and
+ * leaves the stamp live, so the re-stamp is skipped with it and the single
+ * sample covers wait-plus-ride.
+ *
+ * That is why `DELAY.BOARDING` exists and why it is emitted from the queue
+ * drain rather than from route resolution.
  *
  * Floors are **logical**: 0 is the ground lobby, -1 is B1. The reference
  * quotes EXE indices where `logical = exe - 10`; every translation is
@@ -95,35 +143,22 @@ export const DIRECT_ROUTE_FULL_QUEUE_COST = 1000;
 export const TRANSFER_ROUTE_COST = 3000;
 export const TRANSFER_ROUTE_FULL_QUEUE_COST = 6000;
 
-/** § Delays. Loaded from resource table `0xff05` id `1000` in the original. */
-export const NO_ROUTE_DELAY = 300;
-export const QUEUE_FULL_DELAY = 5;
-export const REQUEUE_FAILURE_DELAY = 0;
+/**
+ * § Delays, "queued-leg timeout threshold". How long a rider parked by a full
+ * queue waits before its family re-dispatches and re-runs the whole selector.
+ *
+ * **This 300 is not the other two 300s.** The elapsed clamp in `sim/stress.js`
+ * and the no-route delay are also 300 and are three different rules that
+ * happen to share a value. Merging them means a future retune of this timeout
+ * silently moves the clamp, so they stay apart on purpose.
+ */
 export const QUEUED_LEG_TIMEOUT = 300;
-
-/**
- * § Delays. Per floor traversed, and the entire mechanical difference between
- * stairs and an escalator: both cross in one 16-tick refresh stride, but
- * stairs charge 35 stress a floor and an escalator 16. Indexed by the
- * segment's stairs bit, so `[escalator, stairs]`.
- */
-export const PER_STOP_DELAY = [16, 35];
-
-/**
- * § Delays, "Long-distance penalty". Measured across the tower's **width** —
- * `abs(column_of_the_thing - column_of_the_actor)` — not up it.
- * `<= 79` free, `80..124` costs 30, `>= 125` costs 60.
- */
-export const DISTANCE_FREE_LIMIT = 79;
-export const DISTANCE_FAR_LIMIT = 125;
-export const DISTANCE_PENALTY_MID = 30;
-export const DISTANCE_PENALTY_FAR = 60;
-
-/** `spec/TICK-MODEL.md` § 1: a tall lobby is a rebate, not decoration. */
-export const LOBBY_BOARDING_REBATE = { 2: -25, 3: -50 };
 
 /** The ground lobby. EXE floor 10; logical 0. */
 export const LOBBY_FLOOR = 0;
+
+/** § Route Resolution Results: `state & 0x3f` is the base state. */
+export const STATE_BASE_MASK = 0x3f;
 
 /**
  * Lobby local-access record centres, in logical floors. The reference lists
@@ -133,18 +168,73 @@ export const LOBBY_FLOOR = 0;
  */
 export const LOCAL_ACCESS_CENTRES = [0, 14, 29, 44, 59, 74, 89];
 
-/** The kinds of delay this module reports. `sim/stress.js` decides what they cost. */
+/**
+ * The stress events this module reports. **None of them carries a tick cost.**
+ *
+ * `sim/stress.js` owns every price and every exemption — the 300, the 5, the
+ * 35-against-16, the 30/60 bands, the tall-lobby rebate. This module reports
+ * what happened and the facts needed to price it, and nothing else. Recomputing
+ * `35 x floors` here would be the stairs-column mistake from the old repo:
+ * four copies of one rule, three of them only predicting what the fourth does.
+ *
+ * Each entry below names the `sim/stress.js` function that consumes it and the
+ * payload that function needs.
+ *
+ * ## Two ordering rules the consumer must keep
+ *
+ * 1. **Apply every delay, THEN stamp the route start.** Every one of these
+ *    events runs through `add_delay_to_current_sim`, which clears
+ *    `last_trip_tick` on its way out (`ROUTING.md` § Stair / Escalator Transit
+ *    Timing puts the charge at step 3 and the stamp at step 4). Stamping first
+ *    destroys the stamp you just wrote and the leg's timing vanishes silently.
+ *    `resolveRouteBetweenFloors` writes its own actor stamp inside `finish()`,
+ *    after every emit, so the order cannot be got wrong here; a consumer
+ *    applying the events to its own record has to keep it by hand.
+ *
+ * 2. **A fixed delay REPLACES pending transit time — it does not add to it.**
+ *    `add_delay_to_current_sim` never folds in `day_tick - last_trip_tick`.
+ *    Somebody who has queued 200 ticks and then meets a full queue is charged
+ *    5, not 205; the 200 are discarded. Do not wire these as increments on top
+ *    of a measured wait.
+ */
 export const DELAY = {
-  /** 300 ticks — the clamp. No route existed at all. */
+  /** No payload. -> `recordNoRouteFailure(sim)`: charges 300 and counts the trip. */
   NO_ROUTE: 'no-route',
-  /** 5 ticks. The source floor's queue was at its 40-entry limit. */
+  /** No payload. -> `applyQueueFullDelay(sim)`. */
   QUEUE_FULL: 'queue-full',
-  /** 16 or 35 per floor walked. Carries `floors`. */
+  /**
+   * `{ modeAndSpan }` -> `applyLocalSegmentDelay(sim, modeAndSpan)`. Both the
+   * branch (bit 0) and the floor count (`(byte >> 1) + 1`) come out of that one
+   * byte, so the byte travels and the arithmetic stays in one place.
+   */
   LOCAL_TRANSIT: 'local-transit',
-  /** 30 or 60. Gated by `emitDistanceFeedback`; never applies to express. */
+  /**
+   * `{ heightMetricDelta, carrierMode }` ->
+   * `applyDistancePenalty(sim, { ...payload, emitDistanceFeedback: true })`.
+   *
+   * Emitted only when the caller's `emitDistanceFeedback` gate passed. The
+   * **second** gate is deliberately not applied here: `carrierMode` is reported
+   * and `sim/stress.js` exempts express. `null` marks a stairs/escalator
+   * segment, where the penalty applies to both branches.
+   */
   DISTANCE: 'distance',
-  /** -25 or -50. A rebate, not a cost. Emitted at carrier boarding only. */
-  LOBBY_BOARDING: 'lobby-boarding',
+  /**
+   * `{ sourceFloor, carrierMode }`, emitted when a car actually loads a rider.
+   * ->
+   * ```
+   * accumulateElapsedDelayIntoCurrentSim(sim, dayTick, { sourceFloor, lobbyHeight, carrierMode });
+   * if (carrierMode !== CARRIER_SERVICE) stampRouteStart(sim, dayTick);
+   * ```
+   * See the "route-start stamp" note in the header for why the re-stamp is
+   * here and why it is skipped for service carriers.
+   */
+  BOARDING: 'boarding',
+  /**
+   * No payload. -> `addDelayToCurrentSim(sim, REQUEUE_FAILURE_DELAY)`, which is
+   * zero ticks and **not inert**: it still clears the route-start stamp. A
+   * consumer that optimises the zero away loses the clearing.
+   */
+  REQUEUE_FAILURE: 'requeue-failure',
 };
 
 /** Route result codes. § Route Resolution Results. */
@@ -727,32 +817,45 @@ export function selectBestRouteCandidate(tower, fromFloor, toFloor, passengerMod
   return null;
 }
 
-// ------------------------------------------------------------------ delays
+// ------------------------------------------- emit_distance_feedback gating
 
 /**
- * § Delays, "Long-distance penalty". Measured horizontally, between the
- * chosen carrier's or segment's column and the actor's own.
- */
-export function distancePenalty(candidateColumn, heightMetric) {
-  const distance = Math.abs(candidateColumn - heightMetric);
-  if (distance <= DISTANCE_FREE_LIMIT) return 0;
-  if (distance < DISTANCE_FAR_LIMIT) return DISTANCE_PENALTY_MID;
-  return DISTANCE_PENALTY_FAR;
-}
-
-/**
- * `reduce_elapsed_for_lobby_boarding`. Not one of the four delays routing is
- * asked for, but it is emitted from here because it happens at boarding, which
- * is a routing event — and dropping it silently would cost every tall lobby
- * its entire reason to exist.
+ * § `emit_distance_feedback` Gating, the per-family table.
  *
- * A rebate, so the ticks are **negative**. Departures from the ground lobby
- * only, and never on a service carrier. `spec/TICK-MODEL.md` § 1.
+ * **Keyed on the BASE state, `state & 0x3f`** — never on the raw byte. That
+ * masking is the whole mechanism: an in-transit `0x40` inherits `0x00`'s
+ * answer, which is what makes the distance penalty fire once per route instead
+ * of once per refresh stride. Read the raw byte instead and every continuation
+ * state falls off the end of this table with no entry at all.
+ *
+ * Housekeeping (`0x0f`) is absent on purpose: it passes `0` for both
+ * `is_passenger_route` and `emit_distance_feedback` at every call site, so its
+ * routes never contribute stress.
  */
-export function lobbyBoardingRebate(lobbyHeight, sourceFloor, carrierMode) {
-  if (sourceFloor !== LOBBY_FLOOR) return 0;
-  if (carrierMode === CARRIER_MODE.SERVICE) return 0;
-  return LOBBY_BOARDING_REBATE[lobbyHeight] ?? 0;
+const DISTANCE_FEEDBACK_STATES = {
+  0x03: [0x20, 0x01, 0x05],          // hotel single
+  0x04: [0x20, 0x01, 0x05],          // hotel twin
+  0x05: [0x20, 0x01, 0x05],          // hotel suite
+  0x07: [0x00, 0x05],                // office: the two commutes, and only those
+  0x09: [0x00, 0x01, 0x20],          // condo: the outbound trips
+  0x12: [0x20],                      // entertainment: arrival only
+  0x1d: [0x20],
+};
+
+/** `state & 0x3f`. The in-transit bit is `0x40`; the base state is what gates. */
+export const baseState = (stateCode) => stateCode & STATE_BASE_MASK;
+
+/**
+ * Should this actor's route resolution charge the long-distance penalty?
+ *
+ * Written once, here, because four call sites deriving it independently is how
+ * the gate ends up right in one family and wrong in the next. Pass the raw
+ * state byte; the masking happens inside.
+ */
+export function emitsDistanceFeedback(familyCode, stateCode) {
+  const states = DISTANCE_FEEDBACK_STATES[familyCode];
+  if (!states) return false;
+  return states.includes(baseState(stateCode));
 }
 
 // ---------------------------------------------------------- route tokens
@@ -780,8 +883,19 @@ export const carrierToken = (id, directionFlag) =>
  * @param options `{ passengerRoute = true, emitDistanceFeedback = true,
  *                   heightMetric, onDelay }`
  *
- * @returns `{ code, delays, totalDelay, advanceTripCounters, legDestination,
- *             waitingFloor, token, carrierId, segmentId, emitFailureNotice }`
+ * @returns `{ code, delays, routeStartTick, advanceTripCounters,
+ *             legDestination, waitingFloor, token, carrierId, segmentId,
+ *             emitFailureNotice }`
+ *
+ * `delays` carries no tick costs — see `DELAY`. `advanceTripCounters` is true
+ * only for results `3` and `-1`: those are the two sites where the reference
+ * calls `advance_sim_trip_counters` at resolution time. An **accepted** leg
+ * (`0`, `1`, `2`) must not be counted here. Its trip is counted later, at
+ * completion or cancellation or at the queued-car arrival callback, and
+ * counting at both ends of one ride doubles `trip_count` against a single
+ * elapsed sample and halves the apparent stress — a metric improving while the
+ * thing it measures gets worse, which is the failure shape `CLAUDE.md` says to
+ * distrust.
  *
  * The five result codes, per § Route Resolution Results:
  *
@@ -802,15 +916,40 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
   } = options;
 
   const delays = [];
-  const emit = (kind, ticks, extra = {}) => {
-    if (ticks === 0) return;
-    const delay = { kind, ticks, ...extra };
+  /**
+   * No zero-suppression here. `ROUTING.md` § Delays lists two delays whose
+   * value IS zero — requeue-failure and invalid-venue — and they are not
+   * inert: they still run through `add_delay_to_current_sim`, which still
+   * clears the route-start stamp. Dropping them because they cost nothing
+   * loses the clearing. Where the reference genuinely makes no call at all
+   * (a distance under 79, a single-storey lobby) the guard is at the call
+   * site, not in here.
+   */
+  const emit = (kind, payload = {}) => {
+    const delay = { kind, ...payload };
     delays.push(delay);
     onDelay?.(delay);
   };
+
+  /**
+   * Every return path goes through here, and the route-start stamp is written
+   * here, which is what makes the ordering structural rather than a rule
+   * somebody has to remember. `ROUTING.md` § Stair / Escalator Transit Timing
+   * charges the delay at step 3 and stamps at step 4, and the order matters
+   * because `add_delay_to_current_sim` clears the stamp on its way out —
+   * stamping first destroys the stamp and the leg's timing disappears without
+   * an error. Emits happen in the branches above; the stamp cannot precede
+   * them from inside the function that builds the return value.
+   *
+   * The stamp is written on **every** result, including `-1` and `0`.
+   * `PEOPLE.md` § Trip-Counter Functions item 5 puts it at the end of
+   * `resolve_sim_route_between_floors` unconditionally, and it has to be:
+   * the delay those two paths just charged cleared the field, and a cleared
+   * field is read as tick zero by whatever measures next.
+   */
   const finish = (result) => {
-    const totalDelay = delays.reduce((sum, d) => sum + d.ticks, 0);
-    return { delays, totalDelay, ...result };
+    if (actor) actor.routeStartTick = clock?.dayTick ?? actor.routeStartTick;
+    return { delays, routeStartTick: clock?.dayTick ?? null, ...result };
   };
 
   // § Route Resolution Results: same floor is 3, not 2, precisely so the
@@ -840,7 +979,7 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
     // merely annoying them.
     let notice = false;
     if (passengerRoute) {
-      emit(DELAY.NO_ROUTE, NO_ROUTE_DELAY);
+      emit(DELAY.NO_ROUTE);
       // § Path State: one popup per source floor, until the tables rebuild.
       if (emitDistanceFeedback && inFloorTable(sourceFloor)
         && tables.failureNotices[floorIndex(sourceFloor)] === 0) {
@@ -874,20 +1013,23 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
     const legDestination = sourceFloor + direction * floors;
 
     if (emitDistanceFeedback) {
-      // § Delays: for segments the penalty applies to both branches.
-      emit(DELAY.DISTANCE, distancePenalty(segment.column, heightMetric));
+      // § Delays: for a segment the penalty applies to BOTH branches, so
+      // `carrierMode` is null — there is no exemption to report here.
+      emit(DELAY.DISTANCE, { heightMetricDelta: segment.column - heightMetric, carrierMode: null });
     }
     if (passengerRoute) {
       // The per-stop delay is a stress cost, not a wait — the leg completes in
-      // the same single refresh stride either way. Stairs simply cost more.
-      emit(DELAY.LOCAL_TRANSIT, PER_STOP_DELAY[segment.flags & 1] * floors, { floors });
+      // one refresh stride either way, and stairs simply cost more. The whole
+      // span byte travels so `sim/stress.js` can read both the branch (bit 0)
+      // and the floor count out of it; multiplying here would be a second copy
+      // of a rule that already has a home.
+      emit(DELAY.LOCAL_TRANSIT, { modeAndSpan: segment.flags });
     }
     if (actor) {
       actor.route = { mode: 'segment', segmentId: candidate.id, destination: destinationFloor };
       actor.legDestination = legDestination;
       actor.destinationFloor = destinationFloor;
       actor.waitingFloor = null;
-      actor.routeStartTick = clock?.dayTick ?? actor.routeStartTick;
     }
     return finish({
       code: ROUTE.LOCAL_LEG,
@@ -904,7 +1046,7 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
   const carrier = (tower.carriers ?? []).find((c) => c.id === candidate.id);
   if (!carrier) {
     // The selector named a carrier that is no longer there. Same as no route.
-    if (passengerRoute) emit(DELAY.NO_ROUTE, NO_ROUTE_DELAY);
+    if (passengerRoute) emit(DELAY.NO_ROUTE);
     return finish({
       code: ROUTE.FAILED,
       advanceTripCounters: passengerRoute,
@@ -925,7 +1067,7 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
     // waits on the source floor and the 300-tick queued-leg timeout is the
     // only gate; when it fires the family re-runs the whole selector, which
     // is how the +1000/+6000 full-queue surcharges steer it somewhere else.
-    if (passengerRoute) emit(DELAY.QUEUE_FULL, QUEUE_FULL_DELAY);
+    if (passengerRoute) emit(DELAY.QUEUE_FULL);
     if (actor) {
       actor.route = null;
       actor.waitingFloor = sourceFloor;
@@ -945,13 +1087,23 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
   }
 
   if (emitDistanceFeedback) {
-    // § Delays: "for carriers, this penalty applies only when
-    // carrier_mode != 0" — express is exempt. That is the point of express.
-    if (carrier.mode !== CARRIER_MODE.EXPRESS) {
-      emit(DELAY.DISTANCE, distancePenalty(carrier.column, heightMetric));
-    }
+    // The carrier's mode is REPORTED, not acted on. § Delays says the penalty
+    // applies only when `carrier_mode != 0`, so express is exempt — but the
+    // tall-lobby rebate exempts SERVICE and pays express. Two exemptions on the
+    // same two-bit field, running opposite ways, and neither is "the express
+    // one". Encoding either here would put a copy of one of them in a file that
+    // does not own it, so both live in `sim/stress.js` and this reports the
+    // mode.
+    emit(DELAY.DISTANCE, {
+      heightMetricDelta: carrier.column - heightMetric,
+      carrierMode: carrier.mode,
+    });
   }
-  emit(DELAY.LOBBY_BOARDING, lobbyBoardingRebate(tower.lobbyHeight ?? 1, sourceFloor, carrier.mode));
+  // No boarding event here. The tall-lobby rebate is applied by
+  // `accumulate_elapsed_delay_into_current_sim`, which fires at
+  // `assign_request_to_runtime_route` — the queue drain, when a car actually
+  // loads the rider — not when the rider joins the queue. See DELAY.BOARDING,
+  // emitted from `drainFloorQueue`.
 
   const token = carrierToken(carrier.id, directionFlag);
   if (actor) {
@@ -960,7 +1112,6 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
     actor.waitingFloor = sourceFloor;
     actor.legDestination = sourceFloor;
     actor.destinationFloor = destinationFloor;
-    actor.routeStartTick = clock?.dayTick ?? actor.routeStartTick;
   }
   return finish({
     code: ROUTE.QUEUED,
@@ -978,13 +1129,27 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
  * The context object `elevators.js` needs to drain a queue, wired to these
  * tables. `targetFloorOf` and `onArrive` stay the caller's — they are family
  * business, and this module deliberately knows nothing about families.
+ *
+ * `emitDelay(ref, event)` receives the `boarding` and `requeue-failure` events
+ * from the drain, in the same shape `resolveRouteBetweenFloors` reports. The
+ * boarding event is the one that carries `sourceFloor` for the tall-lobby
+ * rebate; `tower.lobbyHeight` is added here so the consumer has everything
+ * `accumulateElapsedDelayIntoCurrentSim` asks for without reaching back into
+ * the tower.
  */
-export function makeCarrierContext(tower, { targetFloorOf, onArrive, onRequeueFailure, onBoard }) {
+export function makeCarrierContext(tower, {
+  targetFloorOf, onArrive, onRequeueFailure, onBoard, onDelay,
+}) {
   return {
     targetFloorOf,
     onArrive,
     onRequeueFailure,
     onBoard,
+    emitDelay: onDelay
+      ? (ref, event) => onDelay(ref, event.kind === DELAY.BOARDING
+        ? { ...event, lobbyHeight: tower.lobbyHeight ?? 1 }
+        : event)
+      : undefined,
     chooseTransferFloor: (carrier, ref, currentFloor, targetFloor) =>
       chooseTransferFloor(tower, carrier, currentFloor, targetFloor),
   };
