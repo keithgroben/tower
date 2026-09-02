@@ -815,10 +815,24 @@ const firstFreeSlot = (carrier, car) => {
  * `ctx` is the family seam. It must supply:
  * - `targetFloorOf(ref)` -> the actor's final destination floor
  * - `chooseTransferFloor(carrier, ref, currentFloor, targetFloor)` -> the floor
- *   this leg should actually put them down on, or `-1` if none works
+ *   this leg should actually put them down on, or `NO_TRANSFER_FLOOR`
  * - `onRequeueFailure(ref)` -> transfer resolution failed; the actor goes back
- *   to its family dispatcher (with the requeue-failure delay, which is 0)
+ *   to its family dispatcher
+ * - `emitDelay(ref, event)` -> optional; the stress events below
  * - `onBoard(ref, carrier, car, boardFloor, alightFloor)` -> optional
+ *
+ * Two stress events come out of here, both carrying no tick cost — see
+ * `routing.js` `DELAY`:
+ *
+ * - **`boarding`**, when a car actually loads a rider. This is
+ *   `assign_request_to_runtime_route`, where the reference applies the
+ *   tall-lobby rebate — NOT where the rider joined the queue. It is also where
+ *   the route-start stamp is re-armed for the ride; see the route-start note in
+ *   `routing.js`.
+ * - **`requeue-failure`**, when no transfer floor works. Its delay is zero
+ *   ticks and it is **not inert**: `add_delay_to_current_sim` still clears the
+ *   route-start stamp on the way through, so the event has to be emitted even
+ *   though it costs nothing.
  *
  * Returns how many requests were loaded.
  */
@@ -852,8 +866,10 @@ export function drainFloorQueue(carrier, car, carIndex, ctx) {
       const targetFloor = ctx.targetFloorOf(ref);
       const alight = ctx.chooseTransferFloor(carrier, ref, car.currentFloor, targetFloor);
       if (alight === NO_TRANSFER_FLOOR || alight === car.currentFloor) {
-        // § Queue Drain step 7. The requeue-failure delay is 0 ticks, so there
-        // is nothing to emit — the actor simply goes back to its family.
+        // § Queue Drain step 7. The delay is zero ticks and still has to be
+        // reported: it clears the route-start stamp, and a consumer that
+        // optimises the zero away loses that.
+        ctx.emitDelay?.(ref, { kind: 'requeue-failure' });
         ctx.onRequeueFailure?.(ref);
         continue;
       }
@@ -865,6 +881,15 @@ export function drainFloorQueue(carrier, car, carIndex, ctx) {
       car.assignedCount += 1;
       remaining -= 1;
       loaded += 1;
+      // The boarding event. `carrierMode` is reported, not acted on: the
+      // tall-lobby rebate exempts SERVICE carriers while the distance penalty
+      // exempts EXPRESS ones, and putting either exemption here would be a
+      // second copy of a rule that lives in `sim/stress.js`.
+      ctx.emitDelay?.(ref, {
+        kind: 'boarding',
+        sourceFloor: car.currentFloor,
+        carrierMode: carrier.mode,
+      });
       ctx.onBoard?.(ref, carrier, car, car.currentFloor, alight);
     }
   }
@@ -876,6 +901,14 @@ export function drainFloorQueue(carrier, car, carIndex, ctx) {
  * `dispatch_carrier_car_arrivals`. § Arrival Dispatch: unload every slot bound
  * for this floor, write the actor's floor, and hand it straight back to its
  * family. The elevator layer never interprets a family state.
+ *
+ * `onArrive(ref, floor, effects)` carries the two things `PEOPLE.md` § When
+ * Counters Advance puts on the queued-car arrival callback:
+ * `rebase_sim_elapsed_from_clock` and `advance_sim_trip_counters`. **This is
+ * where an accepted carrier leg's trip is counted, and the only place** — the
+ * resolver deliberately does not count results `0`, `1` or `2`, because
+ * counting at both ends of one ride doubles `trip_count` against a single
+ * elapsed sample and halves the apparent stress.
  */
 export function dispatchCarArrivals(carrier, car, ctx) {
   let unloaded = 0;
@@ -891,7 +924,7 @@ export function dispatchCarArrivals(carrier, car, ctx) {
     slot.destination = FREE_SLOT;
     car.assignedCount = Math.max(0, car.assignedCount - 1);
     unloaded += 1;
-    ctx.onArrive?.(ref, car.currentFloor);
+    ctx.onArrive?.(ref, car.currentFloor, { rebaseElapsed: true, advanceTripCounters: true });
   }
   return unloaded;
 }

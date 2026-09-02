@@ -10,17 +10,18 @@
  * deviation for `spec/DEVIATIONS.md`.
  */
 import {
-  CARRIER_MODE, NO_TRANSFER_FLOOR, addCar, createCarrier, floorQueueCount, tickCarriers,
+  CARRIER_MODE, NO_TRANSFER_FLOOR, addCar, createCarrier, drainFloorQueue, enqueueRequest,
+  floorQueueCount, tickCarriers,
 } from '../src/games/tower/sim/elevators.js';
 import {
   COST_INFINITE, DELAY, DIRECT_ROUTE_COST, DIRECT_ROUTE_FULL_QUEUE_COST,
-  LOCAL_ACCESS_CENTRES, MAX_TRANSFER_GROUPS, NO_ROUTE_DELAY, PER_STOP_DELAY,
-  QUEUE_FULL_DELAY, REQUEUE_FAILURE_DELAY, ROUTE, STAIRS_EXTRA_COST,
-  TRANSFER_ROUTE_COST, WAITING_TOKEN,
-  buildLocalAccessRecords, buildWalkability, carrierToken, chooseTransferFloor,
-  createSegment, distancePenalty, isSpanWalkableForLocalRoute, isSpanWalkableForServiceRoute,
-  lobbyBoardingRebate, makeCarrierContext, rebuildRouteTables, resolveRouteBetweenFloors,
-  scoreCarrier, scoreLocalSegment, selectBestRouteCandidate, walkabilityAt,
+  LOCAL_ACCESS_CENTRES, MAX_TRANSFER_GROUPS, QUEUED_LEG_TIMEOUT, ROUTE,
+  STAIRS_EXTRA_COST, TRANSFER_ROUTE_COST, WAITING_TOKEN,
+  baseState, buildLocalAccessRecords, buildWalkability, carrierToken, chooseTransferFloor,
+  createSegment, emitsDistanceFeedback, isSpanWalkableForLocalRoute,
+  isSpanWalkableForServiceRoute, makeCarrierContext, rebuildRouteTables,
+  resolveRouteBetweenFloors, scoreCarrier, scoreLocalSegment, selectBestRouteCandidate,
+  walkabilityAt,
 } from '../src/games/tower/sim/routing.js';
 
 const assert = (c, m) => { if (!c) throw new Error(m); };
@@ -77,20 +78,97 @@ export const tests = {
    * to zero and evicts the tenant. If this returns anything else, transport
    * stops deciding occupancy.
    */
-  'no route costs 300 ticks, which is the clamp'() {
-    // specs/ROUTING.md § Delays: "no-route delay: 300". Mutation by result:
-    // "result -1 does not enqueue ... applies the 300-tick no-route delay".
-    assert(NO_ROUTE_DELAY === 300, 'the no-route delay is 300 ticks');
-
+  'no route reports the failure event, and counts the trip'() {
+    // specs/ROUTING.md § Delays, "Mutation by result": result -1 does not
+    // enqueue, applies the no-route delay, and PEOPLE.md § When Counters
+    // Advance lists route failure as an advance site. The 300 itself belongs to
+    // sim/stress.js — this module reports the event, not its price.
     const tower = makeTower();                       // nothing built at all
     const result = resolveRouteBetweenFloors(tower, worker(), 0, 5, clock);
     assert(result.code === ROUTE.FAILED, 'an empty tower routed somebody, code ' + result.code);
-    assert(result.delays.length === 1, 'expected exactly one delay, got ' + JSON.stringify(result.delays));
-    assert(delayOf(result, DELAY.NO_ROUTE).ticks === 300,
-      'the no-route delay is ' + delayOf(result, DELAY.NO_ROUTE).ticks + ', the spec says 300');
+    assert(result.delays.length === 1, 'expected exactly one event, got ' + JSON.stringify(result.delays));
+    assert(delayOf(result, DELAY.NO_ROUTE) !== undefined, 'the no-route event was not reported');
+    assert(delayOf(result, DELAY.NO_ROUTE).ticks === undefined,
+      'routing must not price its own events; sim/stress.js owns the 300');
     assert(result.advanceTripCounters === true, 'route failure advances the trip counters');
     assert(result.token === null && result.waitingFloor === null,
       'a failed route must not leave a route token behind');
+  },
+
+  /**
+   * The counting rule, across all five results in one place. Counting an
+   * accepted leg here as well as at its arrival doubles `trip_count` against a
+   * single elapsed sample and halves the apparent stress — a metric improving
+   * while the thing it measures gets worse.
+   */
+  'only same-floor and failure count a trip at resolution time'() {
+    // PEOPLE.md § When Counters Advance: resolve_sim_route_between_floors is an
+    // advance site for same-floor success (3) and route failure (-1). An
+    // accepted leg is counted later — at completion, cancellation, or the
+    // queued-car arrival callback.
+    const carrier = shaft({ bottomFloor: 0, topFloor: 20 });
+    const withLift = makeTower({
+      carriers: [carrier], segments: [createSegment({ kind: 'stairs', column: 0, entryFloor: 0 })],
+    });
+
+    const sameFloor = resolveRouteBetweenFloors(withLift, worker(), 7, 7, clock);
+    assert(sameFloor.code === ROUTE.SAME_FLOOR && sameFloor.advanceTripCounters === true,
+      'same-floor arrival (3) counts a trip');
+    const failed = resolveRouteBetweenFloors(makeTower(), worker(), 0, 5, clock);
+    assert(failed.code === ROUTE.FAILED && failed.advanceTripCounters === true,
+      'route failure (-1) counts a trip');
+
+    const segment = resolveRouteBetweenFloors(withLift, worker(), 0, 1, clock);
+    assert(segment.code === ROUTE.LOCAL_LEG && segment.advanceTripCounters === false,
+      'an accepted local leg (1) must NOT count a trip here');
+    const queued = resolveRouteBetweenFloors(withLift, { id: 'q', homeColumn: 0 }, 0, 10, clock);
+    assert(queued.code === ROUTE.QUEUED && queued.advanceTripCounters === false,
+      'an accepted carrier leg (2) must NOT count a trip here — its arrival does');
+    for (let i = 0; i < 40; i++) {
+      resolveRouteBetweenFloors(withLift, { id: 'f' + i, homeColumn: 0 }, 0, 10, clock);
+    }
+    const full = resolveRouteBetweenFloors(withLift, { id: 'late', homeColumn: 0 }, 0, 10, clock);
+    assert(full.code === ROUTE.QUEUE_FULL && full.advanceTripCounters === false,
+      'waiting on a full queue (0) is not a completed trip');
+  },
+
+  /**
+   * The ordering rule that fails silently. `add_delay_to_current_sim` clears
+   * the route-start stamp on its way out, so the stamp has to be written after
+   * every delay — `ROUTING.md` § Stair / Escalator Transit Timing puts the
+   * charge at step 3 and the stamp at step 4. Stamp first and you destroy the
+   * stamp you just wrote, and that leg's timing vanishes with no error.
+   */
+  'the route-start stamp is written after every delay, on every result'() {
+    const tower = makeTower({
+      carriers: [shaft({ bottomFloor: 0, topFloor: 20, column: 200 })],
+      segments: [createSegment({ kind: 'stairs', column: 200, entryFloor: 0 })],
+    });
+    const later = { dayTick: 900, daypart: 0, calendarPhase: false };
+
+    // Each case: an actor carrying an OLD stamp. At the moment any delay
+    // fires, the stamp must still be the old value — never the new tick.
+    const cases = [[0, 5, 'a local leg'], [0, 10, 'a carrier leg'], [7, 7, 'a same-floor arrival']];
+    for (const [from, to, what] of cases) {
+      const actor = { id: 'w' + from + to, homeColumn: 0, routeStartTick: 111 };
+      let stampSeenDuringDelays = null;
+      const result = resolveRouteBetweenFloors(tower, actor, from, to, later, {
+        onDelay: () => { stampSeenDuringDelays = actor.routeStartTick; },
+      });
+      if (stampSeenDuringDelays !== null) {
+        assert(stampSeenDuringDelays === 111,
+          what + ': the stamp was already ' + stampSeenDuringDelays
+          + ' while delays were still firing — it must be written last');
+      }
+      assert(actor.routeStartTick === later.dayTick,
+        what + ': the stamp should end at the current tick, it is ' + actor.routeStartTick);
+      assert(result.routeStartTick === later.dayTick, what + ': the result should report the stamp');
+    }
+
+    // ...including the two paths that only ever charge a delay. A cleared stamp
+    // reads as tick zero and charges the whole day to whatever measures next.
+    const failure = resolveRouteBetweenFloors(makeTower(), { id: 'x', homeColumn: 0 }, 0, 5, later);
+    assert(failure.routeStartTick === later.dayTick, 'result -1 still re-arms the stamp');
   },
 
   'a floor the carrier does not serve is not routable'() {
@@ -118,7 +196,8 @@ export const tests = {
     const failed = resolveRouteBetweenFloors(broken, worker(), 0, 40, clock);
     assert(failed.code === ROUTE.FAILED,
       'shafts 0..30 and 31..44 share no floor, so floor 40 is unreachable; got ' + failed.code);
-    assert(delayOf(failed, DELAY.NO_ROUTE).ticks === 300, 'the broken chain should cost 300');
+    assert(delayOf(failed, DELAY.NO_ROUTE) !== undefined,
+      'the broken chain should report a no-route failure');
 
     // Overlap them on floor 30 and put a sky lobby there, and the chain closes.
     const upperJoined = shaft({ id: 1, bottomFloor: 30, topFloor: 44 });
@@ -206,7 +285,6 @@ export const tests = {
   'a full source queue waits five ticks and does not enqueue'() {
     // § Delays: "queue-full waiting delay: 5". Mutation by result: "result 0
     // ... does not insert a queue-ring entry".
-    assert(QUEUE_FULL_DELAY === 5, 'the queue-full delay is 5 ticks');
     const carrier = shaft({ bottomFloor: 0, topFloor: 20 });
     const tower = makeTower({ carriers: [carrier] });
     for (let i = 0; i < 40; i++) {
@@ -216,8 +294,7 @@ export const tests = {
 
     const result = resolveRouteBetweenFloors(tower, worker(), 0, 10, clock);
     assert(result.code === ROUTE.QUEUE_FULL, 'the 41st rider got code ' + result.code + ', expected 0');
-    assert(delayOf(result, DELAY.QUEUE_FULL).ticks === 5,
-      'the waiting delay is ' + delayOf(result, DELAY.QUEUE_FULL).ticks + ', the spec says 5');
+    assert(delayOf(result, DELAY.QUEUE_FULL) !== undefined, 'the queue-full event was not reported');
     assert(floorQueueCount(carrier, 0, 1) === 40, 'the queue-full path must not insert an entry');
     assert(result.waitingFloor === 0, 'the rider waits on the source floor');
     assert(result.token === WAITING_TOKEN,
@@ -251,12 +328,10 @@ export const tests = {
    * identical routing, identical single-stride transit, 35 stress a floor
    * against 16.
    */
-  'stairs and escalators differ only in stress, at 35 against 16 a floor'() {
-    // § Delays: "Escalator-branch per-stop delay: 16", "Stairs-branch per-stop
-    // delay: 35"; § Stair / Escalator Transit Timing.
-    assert(JSON.stringify(PER_STOP_DELAY) === JSON.stringify([16, 35]),
-      'the per-stop delays are escalator 16, stairs 35; got ' + PER_STOP_DELAY.join(','));
-
+  'stairs and escalators route identically, and differ only in a byte'() {
+    // § Stair / Escalator Transit Timing: both cross in one refresh stride;
+    // the only difference is the per-stop stress rate, which sim/stress.js
+    // applies from the span byte. What this module owns is reporting the byte.
     const forKind = (kind) => {
       const tower = makeTower({ segments: [createSegment({ kind, column: 0, entryFloor: 0 })] });
       return resolveRouteBetweenFloors(tower, worker(0), 0, 1, clock);
@@ -268,10 +343,16 @@ export const tests = {
       'both branches are a direct local leg, result 1');
     assert(escalator.legDestination === 1 && stairs.legDestination === 1,
       'both put the walker on floor 1 in the same single stride');
-    assert(delayOf(escalator, DELAY.LOCAL_TRANSIT).ticks === 16,
-      'an escalator floor costs ' + delayOf(escalator, DELAY.LOCAL_TRANSIT).ticks + ', the spec says 16');
-    assert(delayOf(stairs, DELAY.LOCAL_TRANSIT).ticks === 35,
-      'a stairs floor costs ' + delayOf(stairs, DELAY.LOCAL_TRANSIT).ticks + ', the spec says 35');
+
+    // § Stairs / Escalator Segment Flags: bit 0 is the stairs cost bit.
+    assert((delayOf(escalator, DELAY.LOCAL_TRANSIT).modeAndSpan & 1) === 0,
+      'an escalator segment reports the Escalator branch, bit 0 clear');
+    assert((delayOf(stairs, DELAY.LOCAL_TRANSIT).modeAndSpan & 1) === 1,
+      'a stairs segment reports the Stairs branch, bit 0 set');
+    // And no price: recomputing 35 x floors here would put a second copy of
+    // that rule in a file that does not own it.
+    assert(delayOf(stairs, DELAY.LOCAL_TRANSIT).ticks === undefined,
+      'routing must report the span byte, not a tick cost');
     assert(escalator.advanceTripCounters === false && stairs.advanceTripCounters === false,
       'a local leg is not itself a completed trip; the arrival is');
   },
@@ -285,9 +366,12 @@ export const tests = {
     const result = resolveRouteBetweenFloors(tower, worker(0), 0, 3, clock);
     assert(result.code === ROUTE.LOCAL_LEG, 'a three-floor stair should be a local leg');
     const delay = delayOf(result, DELAY.LOCAL_TRANSIT);
-    assert(delay.floors === 3, 'the leg covers 3 floors, reported ' + delay.floors);
-    assert(delay.ticks === 35 * 3,
-      'three floors of stairs cost 35 * 3 = 105, got ' + delay.ticks);
+    // floors_traversed = (mode_and_span >> 1) + 1. Both the branch and the
+    // floor count come out of this one byte, which is why the byte travels
+    // whole rather than being unpacked twice in two modules.
+    assert((delay.modeAndSpan >> 1) + 1 === 3,
+      'the span byte should decode to 3 floors, it decodes to ' + ((delay.modeAndSpan >> 1) + 1));
+    assert((delay.modeAndSpan & 1) === 1, 'and to the Stairs branch');
     assert(result.legDestination === 3, 'the walker lands on the far landing, got ' + result.legDestination);
   },
 
@@ -544,16 +628,26 @@ export const tests = {
 
   // ------------------------------------------------------------- distance
 
-  'the distance penalty is 30 past 79 columns and 60 past 125'() {
-    // § Delays, "Long-distance penalty": <= 79 nothing, > 79 and < 125 is 30,
-    // >= 125 is 60. The boundaries are where an off-by-one hides.
-    const cases = [[0, 0], [79, 0], [80, 30], [124, 30], [125, 60], [200, 60]];
-    for (const [distance, expected] of cases) {
-      assert(distancePenalty(distance, 0) === expected,
-        distance + ' columns should cost ' + expected + ', got ' + distancePenalty(distance, 0));
-    }
-    // It is a distance, so it works in both directions.
-    assert(distancePenalty(0, 130) === 60, 'the penalty is symmetric about the actor');
+  /**
+   * What the distance event has to carry. `sim/stress.js` prices it from
+   * `height_metric_delta`, so the number this module reports is the whole
+   * input to that rule — and it is a **horizontal** distance, between the
+   * chosen carrier's or segment's column and the actor's own, despite the
+   * reference calling it a height metric.
+   */
+  'the distance event carries the column delta, measured horizontally'() {
+    // § Delays, "Long-distance penalty": computed from
+    // abs(height_metric_delta) between the segment/carrier and the entity.
+    const at = (column, homeColumn) => {
+      const tower = makeTower({ carriers: [shaft({ bottomFloor: 0, topFloor: 20, column })] });
+      return delayOf(resolveRouteBetweenFloors(tower, worker(homeColumn), 0, 10, clock), DELAY.DISTANCE);
+    };
+    assert(at(200, 0).heightMetricDelta === 200, 'a shaft 200 columns away reports a delta of 200');
+    assert(Math.abs(at(0, 130).heightMetricDelta) === 130,
+      'and the delta is symmetric about the actor, got ' + at(0, 130).heightMetricDelta);
+    assert(at(3, 3).heightMetricDelta === 0, 'a shaft in the actor\u2019s own column reports 0');
+    // Reported, never priced: the 79/125 bands live in sim/stress.js.
+    assert(at(200, 0).ticks === undefined, 'routing must not price the distance penalty');
   },
 
   'the distance penalty fires only when the caller asks for feedback'() {
@@ -562,29 +656,71 @@ export const tests = {
     // not on every stride.
     const tower = makeTower({ carriers: [shaft({ bottomFloor: 0, topFloor: 20, column: 200 })] });
     const on = resolveRouteBetweenFloors(tower, worker(0), 0, 10, clock, { emitDistanceFeedback: true });
-    assert(delayOf(on, DELAY.DISTANCE).ticks === 60,
-      'a 200-column trip with feedback on should cost 60');
+    assert(delayOf(on, DELAY.DISTANCE) !== undefined,
+      'with feedback on the distance event should be reported');
 
     const off = resolveRouteBetweenFloors(tower, worker(0), 0, 10, clock, { emitDistanceFeedback: false });
     assert(delayOf(off, DELAY.DISTANCE) === undefined,
-      'with feedback off the distance penalty must not fire');
+      'with feedback off the distance event must not be reported at all');
   },
 
-  'express is exempt from the distance penalty; standard is not'() {
-    // § Delays: "for carriers, this penalty applies only when carrier_mode != 0
-    // (standard/service)". Express earning its keep.
+  /**
+   * The gate table, and the masking that makes it work. Deriving the flag from
+   * the raw state byte instead of `state & 0x3f` drops every in-transit
+   * continuation off the end of the table, and the penalty then fires once per
+   * refresh stride instead of once per route.
+   */
+  'the feedback gate reads the base state, not the raw byte'() {
+    // § `emit_distance_feedback` Gating, the per-family table.
+    assert(baseState(0x40) === 0x00, '0x40 masks down to base state 0x00');
+    assert(baseState(0x65) === 0x25, '0x65 masks down to base state 0x25');
+
+    // Family 7, office: the two commutes enable it, nothing else does.
+    assert(emitsDistanceFeedback(0x07, 0x00), 'office 0x00, the commute in, enables feedback');
+    assert(emitsDistanceFeedback(0x07, 0x05), 'office 0x05, the commute home, enables feedback');
+    for (const state of [0x01, 0x02, 0x20, 0x21, 0x22, 0x23]) {
+      assert(!emitsDistanceFeedback(0x07, state),
+        'office state 0x' + state.toString(16) + ' must not enable feedback');
+    }
+    // ...and the in-transit aliases inherit their base state's answer, which is
+    // the entire reason the mask exists.
+    assert(emitsDistanceFeedback(0x07, 0x40), 'in-transit 0x40 inherits 0x00\u2019s answer');
+    assert(emitsDistanceFeedback(0x07, 0x45), 'in-transit 0x45 inherits 0x05\u2019s answer');
+    assert(!emitsDistanceFeedback(0x07, 0x60), 'in-transit 0x60 inherits 0x20\u2019s answer, which is no');
+
+    // Housekeeping never does, at any state: it passes 0 at every call site.
+    for (const state of [0x00, 0x01, 0x20, 0x40]) {
+      assert(!emitsDistanceFeedback(0x0f, state), 'housekeeping never contributes stress');
+    }
+  },
+
+  /**
+   * The trap worth naming: the two carrier exemptions run OPPOSITE ways on the
+   * same two-bit field. The distance penalty exempts **express** (mode 0); the
+   * tall-lobby rebate exempts **service** (mode 2) and pays express. Neither is
+   * "the express one", and collapsing them into a single `isExpress` check is
+   * right in one place and wrong in the other.
+   *
+   * This module resolves that by applying neither: it reports `carrierMode` on
+   * both events and `sim/stress.js` holds one copy of each exemption. So what
+   * is pinned here is that the mode is reported faithfully.
+   */
+  'the carrier mode is reported, not acted on, so neither exemption is copied here'() {
+    // § Delays: "for carriers, this penalty applies only when carrier_mode != 0";
+    // PEOPLE.md § Lobby-Boarding Stress Reduction: the rebate "applies to both
+    // express and standard carriers (the only exclusion is service)".
     const express = makeTower({
       carriers: [shaft({ mode: CARRIER_MODE.EXPRESS, bottomFloor: -9, topFloor: 44, column: 200 })],
     });
     const expressResult = resolveRouteBetweenFloors(express, worker(0), 0, 14, clock);
     assert(expressResult.code === ROUTE.QUEUED, 'the express ride should queue, got ' + expressResult.code);
-    assert(delayOf(expressResult, DELAY.DISTANCE) === undefined,
-      'an express carrier must never charge the distance penalty');
+    assert(delayOf(expressResult, DELAY.DISTANCE).carrierMode === CARRIER_MODE.EXPRESS,
+      'the express mode must reach sim/stress.js, which is what applies the exemption');
 
     const standard = makeTower({ carriers: [shaft({ bottomFloor: 0, topFloor: 14, column: 200 })] });
     const standardResult = resolveRouteBetweenFloors(standard, worker(0), 0, 14, clock);
-    assert(delayOf(standardResult, DELAY.DISTANCE).ticks === 60,
-      'a standard carrier 200 columns away should charge 60');
+    assert(delayOf(standardResult, DELAY.DISTANCE).carrierMode === CARRIER_MODE.STANDARD,
+      'a standard carrier reports mode 1');
   },
 
   'a segment charges the distance penalty on both branches'() {
@@ -593,33 +729,124 @@ export const tests = {
     for (const kind of ['stairs', 'escalator']) {
       const tower = makeTower({ segments: [createSegment({ kind, column: 200, entryFloor: 0 })] });
       const result = resolveRouteBetweenFloors(tower, worker(0), 0, 1, clock);
-      assert(delayOf(result, DELAY.DISTANCE).ticks === 60,
-        'a ' + kind + ' segment 200 columns away should charge 60');
+      const distance = delayOf(result, DELAY.DISTANCE);
+      assert(distance !== undefined, 'a ' + kind + ' segment should report the distance event');
+      assert(distance.heightMetricDelta === 200, 'with the segment\u2019s own column delta');
+      // null, not a mode: there is no carrier exemption to apply to a segment.
+      assert(distance.carrierMode === null,
+        'a segment reports carrierMode null, so no carrier exemption can be applied to it');
     }
   },
 
   // -------------------------------------------------------- lobby rebate
 
-  'a tall lobby is a rebate on every trip that departs it'() {
-    // spec/TICK-MODEL.md § 1 and PEOPLE.md § Lobby-Boarding Stress Reduction:
-    // lobby height 2 is -25, height 3 is -50, and only from the ground floor.
-    const build = (lobbyHeight) => makeTower({
-      carriers: [shaft({ bottomFloor: 0, topFloor: 20, column: 0 })], lobbyHeight,
-    });
-    assert(delayOf(resolveRouteBetweenFloors(build(1), worker(0), 0, 10, clock), DELAY.LOBBY_BOARDING) === undefined,
-      'a single-storey lobby earns nothing');
-    assert(delayOf(resolveRouteBetweenFloors(build(2), worker(0), 0, 10, clock), DELAY.LOBBY_BOARDING).ticks === -25,
-      'a two-storey lobby should rebate 25 ticks');
-    assert(delayOf(resolveRouteBetweenFloors(build(3), worker(0), 0, 10, clock), DELAY.LOBBY_BOARDING).ticks === -50,
-      'a three-storey lobby should rebate 50 ticks');
-    assert(delayOf(resolveRouteBetweenFloors(build(3), worker(0), 5, 10, clock), DELAY.LOBBY_BOARDING) === undefined,
-      'the rebate is for departures from the lobby floor, not from floor 5');
+  /**
+   * Where the tall-lobby rebate actually happens, and it is not where a rider
+   * joins the queue. `accumulate_elapsed_delay_into_current_sim` fires at
+   * `assign_request_to_runtime_route` — the moment a car loads somebody — so
+   * the boarding event comes out of the queue drain. Emitting it at resolution
+   * would pay the rebate to riders the car never reaches.
+   */
+  'the tall-lobby rebate rides on boarding, not on joining the queue'() {
+    // PEOPLE.md § Trip-Counter Functions item 3 and § Lobby-Boarding Stress
+    // Reduction; ELEVATORS.md § Queue Drain step 6.
+    const boardingRun = ({ mode = CARRIER_MODE.STANDARD, lobbyHeight = 3, from = 0 } = {}) => {
+      const carrier = shaft({ mode, bottomFloor: 0, topFloor: 20, column: 0 });
+      const tower = makeTower({ carriers: [carrier], lobbyHeight });
+      const events = [];
+      const ctx = makeCarrierContext(tower, {
+        targetFloorOf: () => 15,
+        onArrive: () => {},
+        onDelay: (ref, event) => events.push({ ref, ...event }),
+      });
+      const queued = resolveRouteBetweenFloors(tower, worker(0), from, 15, clock,
+        { passengerRoute: mode !== CARRIER_MODE.SERVICE });
+      carrier.cars[0].currentFloor = from;
+      carrier.cars[0].targetFloor = from;
+      let tick = clock.dayTick;
+      for (let i = 0; i < 60 && !events.some((e) => e.kind === DELAY.BOARDING); i++) {
+        tick += 1;
+        tickCarriers(tower.carriers, { dayTick: tick, daypart: 0, calendarPhase: false }, ctx);
+      }
+      return { queued, events };
+    };
 
-    // Service carriers skip the elapsed-accumulation step entirely.
-    assert(lobbyBoardingRebate(3, 0, CARRIER_MODE.SERVICE) === 0,
-      'a service carrier earns no lobby rebate');
-    assert(lobbyBoardingRebate(3, 0, CARRIER_MODE.EXPRESS) === -50,
-      'the rebate applies to express as well as standard');
+    const standard = boardingRun();
+    assert(standard.queued.code === ROUTE.QUEUED, 'the rider should have queued first');
+    assert(standard.queued.delays.every((d) => d.kind !== DELAY.BOARDING),
+      'joining a queue is not boarding; the resolver must not report it');
+
+    const boarding = standard.events.find((e) => e.kind === DELAY.BOARDING);
+    assert(boarding !== undefined, 'the car loading the rider should report a boarding event');
+    assert(boarding.sourceFloor === 0, 'boarding on the lobby floor, got ' + boarding.sourceFloor);
+    assert(boarding.lobbyHeight === 3, 'the event carries the tower lobby height for the rebate');
+    assert(boarding.carrierMode === CARRIER_MODE.STANDARD, 'and the carrier mode');
+    assert(boarding.ticks === undefined, 'routing must not price the rebate');
+
+    // The floor the rebate is keyed on is reported faithfully: the upper
+    // storeys of a three-floor lobby are NOT the lobby floor.
+    const upstairs = boardingRun({ from: 5 });
+    const upstairsBoarding = upstairs.events.find((e) => e.kind === DELAY.BOARDING);
+    assert(upstairsBoarding.sourceFloor === 5,
+      'a rider boarding on floor 5 reports floor 5, not the lobby');
+
+    // A service carrier still reports its mode; sim/stress.js is what skips it,
+    // and skipping it there is also what leaves the route-start stamp live.
+    const service = boardingRun({ mode: CARRIER_MODE.SERVICE });
+    const serviceBoarding = service.events.find((e) => e.kind === DELAY.BOARDING);
+    assert(serviceBoarding.carrierMode === CARRIER_MODE.SERVICE,
+      'a service carrier reports mode 2 rather than being filtered out here');
+  },
+
+  /**
+   * The zero-tick delay that is not inert. `ROUTING.md` § Delays lists the
+   * requeue-failure delay as `0`, but it still goes through
+   * `add_delay_to_current_sim`, which still clears the route-start stamp on the
+   * way out. Suppressing it because it costs nothing loses the clearing, and
+   * whatever measures next reads a stamp that should have been cleared.
+   */
+  'a requeue failure reports its zero-tick delay rather than swallowing it'() {
+    // § Queue Drain step 7 and § Delays, "requeue-failure delay: 0".
+    const carrier = shaft({ bottomFloor: 0, topFloor: 20 });
+    const car = carrier.cars[0];
+    car.currentFloor = 0;
+    const tower = makeTower({ carriers: [carrier] });
+    resolveRouteBetweenFloors(tower, worker(0), 0, 10, clock);
+
+    const events = [];
+    const returned = [];
+    drainFloorQueue(carrier, car, 0, {
+      targetFloorOf: () => 40,
+      chooseTransferFloor: () => NO_TRANSFER_FLOOR,
+      onRequeueFailure: (ref) => returned.push(ref),
+      emitDelay: (ref, event) => events.push({ ref, ...event }),
+    });
+
+    assert(returned.length === 1, 'the unroutable rider should go back to its family');
+    const failure = events.find((e) => e.kind === DELAY.REQUEUE_FAILURE);
+    assert(failure !== undefined,
+      'the zero-tick requeue-failure delay must still be reported: it clears the route stamp');
+    assert(failure.ref === 'w1', 'and it names the rider it happened to');
+
+    // ...and it survives the real seam, not just a hand-built context. A
+    // "it costs nothing, why forward it" filter in makeCarrierContext is
+    // exactly the optimisation this rule forbids.
+    const stranded = shaft({ bottomFloor: 0, topFloor: 30 });
+    const strandedTower = makeTower({ carriers: [stranded] });
+    enqueueRequest(stranded, 'lost', 0, 1);
+    const seamEvents = [];
+    const ctx = makeCarrierContext(strandedTower, {
+      targetFloorOf: () => 40,               // above the shaft, and no transfer exists
+      onArrive: () => {},
+      onDelay: (ref, event) => seamEvents.push({ ref, ...event }),
+    });
+    let tick = clock.dayTick;
+    for (let i = 0; i < 40 && seamEvents.length === 0; i++) {
+      tick += 1;
+      tickCarriers(strandedTower.carriers, { dayTick: tick, daypart: 0, calendarPhase: false }, ctx);
+    }
+    assert(seamEvents.some((e) => e.kind === DELAY.REQUEUE_FAILURE),
+      'makeCarrierContext must forward the zero-cost requeue failure, not filter it out');
   },
 
   // ------------------------------------------------------- the seam itself
@@ -660,9 +887,13 @@ export const tests = {
     const tower = makeTower({ carriers: [carrier] });
     const actor = worker(0);
     const arrivals = [];
+    const effects = [];
     const ctx = makeCarrierContext(tower, {
       targetFloorOf: (ref) => (ref === 'w1' ? 10 : null),
-      onArrive: (ref, floor) => arrivals.push([ref, floor]),
+      onArrive: (ref, floor, arrivalEffects) => {
+        arrivals.push([ref, floor]);
+        effects.push(arrivalEffects);
+      },
     });
 
     const queued = resolveRouteBetweenFloors(tower, actor, 0, 10, clock);
@@ -682,6 +913,17 @@ export const tests = {
     assert(carrier.cars[0].currentFloor === 10, 'the car should be standing on floor 10');
     assert(floorQueueCount(carrier, 0, 1) === 0, 'the lobby queue should have drained');
     assert(carrier.cars[0].assignedCount === 0, 'the car should be empty again');
+
+    // PEOPLE.md § When Counters Advance: the queued-car arrival callback is
+    // where rebase_sim_elapsed_from_clock and advance_sim_trip_counters fire.
+    // This is the ONLY place an accepted carrier leg is counted — the resolver
+    // reported advanceTripCounters false when it queued the same rider.
+    assert(effects[0]?.rebaseElapsed === true,
+      'arrival should ask for the elapsed rebase; without it the ride is never measured');
+    assert(effects[0]?.advanceTripCounters === true,
+      'arrival is where a carrier leg counts its trip');
+    assert(queued.advanceTripCounters === false,
+      'and the resolver must not have counted the same ride at the other end');
   },
 
   'delays are reported and never applied'() {
@@ -694,11 +936,21 @@ export const tests = {
 
     assert(result.code === ROUTE.FAILED, 'the fixture should fail to route');
     assert(seen.length === result.delays.length && seen[0] === result.delays[0],
-      'the callback and the returned array must report the same delays');
-    assert(result.totalDelay === NO_ROUTE_DELAY, 'totalDelay should sum the delays, got ' + result.totalDelay);
+      'the callback and the returned array must report the same events');
     assert(actor.accumulatedElapsed === 0 && actor.tripCount === 0,
       'the router wrote into the stress fields; that belongs to sim/stress.js');
-    assert(REQUEUE_FAILURE_DELAY === 0, 'the requeue-failure delay is 0, so there is nothing to emit');
+    // And no event carries a price. Every one of them is a fact plus the
+    // payload sim/stress.js needs to price it.
+    for (const event of result.delays) {
+      assert(event.ticks === undefined,
+        'event ' + event.kind + ' carries a tick cost; pricing belongs to sim/stress.js');
+      assert(Object.values(DELAY).includes(event.kind), 'unknown event kind ' + event.kind);
+    }
+
+    // The three 300s are three rules that happen to share a value. This module
+    // holds one of them; merging it with the clamp or the no-route delay means
+    // a retune of the retry gate silently moves the stress clamp.
+    assert(QUEUED_LEG_TIMEOUT === 300, 'the queued-leg timeout is 300 ticks');
   },
 
   'the router never consumes randomness, so an office’s fate is reproducible'() {
