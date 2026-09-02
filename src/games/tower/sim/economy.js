@@ -626,6 +626,32 @@ const isActive = (unit) => unit.unitStatus <= ACTIVE_BAND_MAX;
 const REQUIRES_PRIOR_RENTAL = new Set(['office']);
 
 /**
+ * The money half of deactivation: subtract the unit's recurring contribution
+ * back out of cash and take its people off the population ledger.
+ *
+ * Split out because a family that owns its own closure path — `sim/office.js`
+ * resets the six workers to `seekingWork`, writes the vacant band and marks the
+ * room dirty — must not also own a second copy of the money. That family calls
+ * this from its `onVacate` seam; {@link deactivateFamilyCashflowIfUnpaired}
+ * calls it for families that have no bespoke path. One rule, two callers.
+ *
+ * `specs/facility/OFFICE.md` § Deactivation trigger: deactivation "subtracts
+ * the office's recurring contribution from cash and removes 6 from the
+ * population ledger".
+ *
+ * @returns {number} dollars reversed
+ */
+export function reverseCashflowOnDeactivation(ledger, unit) {
+  const amount = payout(unit.family, unit.rentTier ?? DEFAULT_RENT_TIER);
+  ledger.cash -= amount;
+  if (unit.family in ledger.income) ledger.income[unit.family] -= amount;
+
+  const pop = POPULATION_BY_FAMILY[unit.family] ?? 0;
+  if (unit.family in ledger.population) ledger.population[unit.family] -= pop;
+  return amount;
+}
+
+/**
  * `deactivate_family_cashflow_if_unpaired`, `specs/TIME.md` § 2533 step 2 and
  * `specs/facility/OFFICE.md` § Deactivation trigger.
  *
@@ -644,12 +670,7 @@ export function deactivateFamilyCashflowIfUnpaired(ledger, unit, { daypart = 6 }
   if (unit.evalLevel !== 0) return false;
   if (!isActive(unit)) return false;
 
-  const amount = payout(unit.family, unit.rentTier ?? DEFAULT_RENT_TIER);
-  ledger.cash -= amount;
-  if (unit.family in ledger.income) ledger.income[unit.family] -= amount;
-
-  const pop = POPULATION_BY_FAMILY[unit.family] ?? 0;
-  if (unit.family in ledger.population) ledger.population[unit.family] -= pop;
+  reverseCashflowOnDeactivation(ledger, unit);
 
   unit.unitStatus = daypart >= 4 ? DEACTIVATED_LATE : DEACTIVATED_EARLY;
   unit.operational = false;
@@ -712,13 +733,24 @@ export function activateFamilyCashflowIfOperational(ledger, unit, dayCounter) {
  * `recompute` is the tower model's operational-status pass. It runs for every
  * unit every day, cashflow day or not; only the two cashflow calls are gated.
  *
+ * `deactivate` is the closure seam. It defaults to
+ * {@link deactivateFamilyCashflowIfUnpaired}; a family that owns its own
+ * closure path passes its own, which must still return whether it closed the
+ * unit and must reverse the money through
+ * {@link reverseCashflowOnDeactivation}. The seam exists so the *order* stays
+ * here — deactivate before activate — while the family keeps its state writes.
+ *
  * @param {Ledger} ledger
- * @param {TowerCharges & {recompute?: (unit: CashflowUnit) => void}} tower
+ * @param {TowerCharges & {recompute?: (unit: CashflowUnit) => void,
+ *   deactivate?: (ledger: Ledger, unit: CashflowUnit, opts: {daypart: number}) => boolean}} tower
  * @param {number} dayCounter
  * @returns {{cashflow: boolean, deactivated: number, activated: number, expenses: number}}
  */
 export function runLedgerCheckpoint(ledger, tower, dayCounter) {
-  const { units = [], recompute, daypart = 6 } = tower;
+  const {
+    units = [], recompute, daypart = 6,
+    deactivate = deactivateFamilyCashflowIfUnpaired,
+  } = tower;
   const cashflow = isCashflowDay(dayCounter);
 
   if (cashflow) rollLedgers(ledger);
@@ -728,7 +760,7 @@ export function runLedgerCheckpoint(ledger, tower, dayCounter) {
   for (const unit of units) {
     if (recompute) recompute(unit);
     if (!cashflow) continue;
-    if (deactivateFamilyCashflowIfUnpaired(ledger, unit, { daypart })) deactivated++;
+    if (deactivate(ledger, unit, { daypart })) deactivated++;
     if (activateFamilyCashflowIfOperational(ledger, unit, dayCounter)) activated++;
   }
 
