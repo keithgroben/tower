@@ -23,6 +23,7 @@ import { STRESS_COLORS, makeRenderer, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
 import { applyAction } from '../sim/actions.js';
 import { TOOLS, preview } from './build.js';
+import { discardSavedWorld, loadSavedWorld, makeAutosave } from './persist.js';
 import { seedDemoWorld } from './seed.js';
 import { makeTowerScheduler } from './tick.js';
 
@@ -62,7 +63,21 @@ import {
 } from '../sim/stress.js';
 
 const canvas = $('view');
-const world = seedDemoWorld({ seed: 1 });
+
+/**
+ * Open on the saved tower if there is one.
+ *
+ * Top-level `await`, before anything else is built. The alternative — boot the
+ * seed and swap the world in when the read finishes — means the scheduler, the
+ * renderer and the autosave all close over a tower that is about to be thrown
+ * away, and every one of them would have to be rebuilt. A module that waits is
+ * simpler than four things that have to be told.
+ *
+ * `resumed` is shown once the bar exists; a save that could NOT be read says
+ * why, because the player is about to see an empty tower where their tower was.
+ */
+const resumed = await loadSavedWorld();
+const world = resumed.world ?? seedDemoWorld({ seed: 1 });
 const { tower, ledger } = world;
 
 /**
@@ -153,6 +168,23 @@ function applyRoutingDelay(delay, actor) {
 
 const renderer = makeRenderer(canvas, { sprites: { onWarn: (m) => console.warn(m) } });
 const pump = makeTickPump();
+
+/**
+ * Autosave, once a game day and on the way out.
+ *
+ * `() => world` rather than `world`: a captured reference would go on saving
+ * the tower the player abandoned if the world is ever replaced.
+ */
+const autosave = makeAutosave(() => world, (text) => { $('saved').textContent = text; });
+
+// The way out matters more than the cadence. A player closes the tab; they do
+// not finish a day first. `pagehide` fires where `beforeunload` is unreliable
+// on mobile, and `visibilitychange` catches the tab being switched away from
+// and never returned to.
+window.addEventListener('pagehide', () => autosave.save('leaving'));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') autosave.save('hidden');
+});
 
 let speed = 1;
 let lastFrameMs = 0;
@@ -319,14 +351,22 @@ const built = (tool, result) => (result.cost
   ? `${tool.label} · $${result.cost.toLocaleString('en-US')}`
   : `${tool.label} done`);
 
-/** One line under the tower. Refusals linger; confirmations fade. */
+/**
+ * One line under the tower. Refusals linger; confirmations fade.
+ *
+ * `hold` keeps a line until something replaces it. The resume note needs it:
+ * "resumed day 2" appears while the first frame is still painting, and a
+ * message that expires in two seconds during page load is one a lot of players
+ * simply never see. It clears itself on the first thing they do, because every
+ * action calls through here.
+ */
 let sayTimer = null;
-function say(text, ok) {
+function say(text, ok, { hold = false } = {}) {
   const el = $('answer');
   el.textContent = text ?? '';
   el.classList.toggle('bad', !ok);
   clearTimeout(sayTimer);
-  if (text) sayTimer = setTimeout(() => { el.textContent = ''; }, ok ? 2200 : 4000);
+  if (text && !hold) sayTimer = setTimeout(() => { el.textContent = ''; }, ok ? 2200 : 4000);
 }
 
 /**
@@ -472,7 +512,7 @@ function frame(nowMs) {
   }
 
   hudDueMs -= dtMs;
-  if (hudDueMs <= 0) { hudDueMs = 100; drawHud(); }
+  if (hudDueMs <= 0) { hudDueMs = 100; drawHud(); autosave.tick(); }
 }
 
 // ------------------------------------------------------------------- boot
@@ -483,8 +523,43 @@ renderer.resize();
 renderer.frameLobby(tower);
 setSpeed(1);
 buildPalette();
+wireRestart();
 drawHud();
+if (resumed.note) say(resumed.note, Boolean(resumed.world), { hold: true });
 requestAnimationFrame(frame);
+
+/**
+ * Starting over, in two clicks.
+ *
+ * One click would let an hour go to a misclick, and a `confirm()` dialog is a
+ * modal that stops the game to ask a question the button can ask itself. The
+ * button becomes its own confirmation for four seconds and then forgets.
+ *
+ * It reloads rather than reseeding in place, deliberately: the object and actor
+ * id counters live in `sim/state.js` module scope, so only a fresh page truly
+ * starts from one. Reseeding without a reload would keep counting from wherever
+ * the abandoned tower left off.
+ */
+function wireRestart() {
+  const button = $('restart');
+  let armed = null;
+  button.addEventListener('click', async () => {
+    if (!armed) {
+      button.textContent = 'Really? Start over';
+      button.classList.add('armed');
+      armed = setTimeout(() => {
+        armed = null;
+        button.textContent = 'New tower';
+        button.classList.remove('armed');
+      }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    button.textContent = 'starting over…';
+    await discardSavedWorld();
+    location.reload();
+  });
+}
 
 /**
  * The palette, generated from `TOOLS` — which is itself generated from the

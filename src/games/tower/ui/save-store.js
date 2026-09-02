@@ -20,7 +20,11 @@
  * Otherwise opening the list would pull every save in the store into memory.
  */
 
-const DB_NAME = 'lift-saves';
+// Named for this game, not the predecessor. Nothing ever wrote to `lift-saves`
+// in this repo — the save module it belonged to could not even be imported — so
+// there is nothing to migrate, and a shared name would only invite a `lift`
+// blob into a reader that cannot use one.
+const DB_NAME = 'tower-saves';
 const DB_VERSION = 1;
 const META = 'meta';
 const BLOBS = 'blobs';
