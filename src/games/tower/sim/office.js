@@ -262,7 +262,11 @@ export function officeDispatch(tower, actor, object, clock, ctx) {
   const result = ctx.resolveRoute(tower, actor, from, to, clock, {
     passengerRoute: true,
     emitDistanceFeedback: emitsDistanceFeedback(state),
-    onDelay: ctx.onDelay,
+    // The router reports delays but does not know whose they are — it takes
+    // the actor as a parameter and does not echo it. Binding it here is the
+    // only place that knows. Reading `delay.actor` on the consuming side
+    // silently drops every delay, which is exactly what it did once.
+    onDelay: (delay) => ctx.onDelay?.(delay, actor),
   });
   const code = result.code ?? result;
 
@@ -352,6 +356,36 @@ export function officeFamilyHandler(ctx) {
     if (verdict === 'dispatch') return void officeDispatch(tower, actor, object, tower.clock, ctx);
     actor.state = verdict;          // a gate that rewrites state without dispatching
   };
+}
+
+/**
+ * A worker got off a lift.
+ *
+ * The carrier delivers; the family decides what that *means*. These are the
+ * same transitions `specs/DEMAND.md` § Route-result state writes gives for a
+ * same-floor arrival (result `3`), because arriving by car and arriving by
+ * walking are the same event to the state machine — only the journey differed.
+ *
+ * Without this a worker enters `0x60`, is dispatched unconditionally every
+ * stride, re-resolves the route it is already on, and never progresses. The
+ * tower rents its offices and then nobody ever moves again, which is exactly
+ * what it did before this existed.
+ */
+export function officeArrival(actor, floor) {
+  const state = baseState(actor.state);
+  actor.anchorFloor = floor;
+  switch (state) {
+    case OFFICE_STATE.seekingWork:            // 0x60 -> arrived at work
+    case OFFICE_STATE.commuteIn:              // 0x40 -> arrived at work
+      actor.state = OFFICE_STATE.atWork; break;
+    case OFFICE_STATE.atWork:                 // 0x61 -> heading home next
+      actor.state = OFFICE_STATE.commuteOut; break;
+    case OFFICE_STATE.commuteOut:             // 0x45 -> home, park for the night
+      actor.state = OFFICE_STATE.parked; break;
+    default:
+      actor.state = state; break;             // drop the transit bit regardless
+  }
+  actor.routeCarrier = null;
 }
 
 /** Every office in the tower, with its workers. Used by the daily sweep. */
