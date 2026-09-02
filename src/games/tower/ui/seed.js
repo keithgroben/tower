@@ -18,7 +18,8 @@
 import { addCar, CARRIER_MODE, createCarrier } from '../sim/elevators.js';
 import { FAMILY, GROUND_FLOOR, TILES_PER_FLOOR, createTower, placeObject } from '../sim/state.js';
 import { createSimTripRecord } from '../sim/stress.js';
-import { STARTING_CASH, createLedger } from '../sim/economy.js';
+import { STARTING_CASH } from '../sim/economy.js';
+import { ledgerFor } from '../sim/ledger-adapter.js';
 
 /**
  * The lift column, and the two office banks either side of it.
@@ -104,7 +105,7 @@ export const LAYOUT = {
  * @returns {{tower: object, ledger: object}}
  */
 export function seedDemoWorld({ seed = 1, cash = STARTING_CASH } = {}) {
-  const tower = createTower({ seed });
+  const tower = createTower({ seed, startingCash: cash });
   /** Stairs and escalators. Empty, but `sim/routing.js` reads it, and an
    *  undefined table there means "rebuild from nothing" every single tick. */
   tower.segments = [];
@@ -156,10 +157,19 @@ export function seedDemoWorld({ seed = 1, cash = STARTING_CASH } = {}) {
   for (let i = 0; i < LAYOUT.cars; i++) addCar(carrier, GROUND_FLOOR);
   tower.carriers.push(carrier);
 
-  // The ledger, not `tower.cash`. `applyAction` charges the ledger and nothing
-  // else does, so the tower's own `cash` field is not the money any more — a
-  // HUD reading it would show a balance that never moves while the player spends.
-  return { tower, ledger: createLedger({ cash }) };
+  // ⚠️ `ledgerFor(tower)`, NOT `createLedger()`.
+  //
+  // `applyAction` is not the only thing that moves money. Rent arrives through
+  // `sim/ledger-adapter.js` — the reopen hook and checkpoint 2533 — and that
+  // writes the tower's own `cash`. A standalone ledger here gives the game two
+  // balances: construction debits one, rent credits the other, and the HUD
+  // draws whichever it happened to be handed. Measured: the cash bar fell by
+  // $1,548,000 for 36 offices and then never moved again while the tower
+  // collected $432,000 a cycle onto a number nothing displayed.
+  //
+  // `ledgerFor` returns a VIEW over `tower.cash`, so there is one balance and
+  // nothing to keep in step.
+  return { tower, ledger: ledgerFor(tower) };
 }
 
 /** `placeObject` reports failure rather than throwing. A seed that silently
