@@ -38,10 +38,20 @@ disassembly. That log is the reason to trust the rest: they check.
 | `specs/ECONOMY.md` | costs, payouts, ledgers |
 | `specs/GAME-STATE.md` | star progression and gates |
 | `specs/facility/OFFICE.md` | the office family, end to end |
-| `specs/PARITY-NOTES.md` | their own known approximation boundaries |
-| `specs/GAPS.md` | what is still unresolved even for them |
+| `specs/FACILITIES.md` | readiness grades, the star-rating thresholds, the rent modifier |
+| `specs/COMMANDS.md` | build, demolish, pricing, elevator editing |
 
-Read `PARITY-NOTES.md` and `GAPS.md` before treating any number as settled.
+⚠️ **`specs/PARITY-NOTES.md` and `specs/GAPS.md` do not exist.** Their own
+`specs/README.md` lists both, but neither is in the pinned tree — checked
+2026-09-02. Earlier versions of this file and of `CLAUDE.md` told agents to
+cite them when the reference was ambiguous, which was an instruction pointing
+at nothing.
+
+There is therefore **no curated list of the reference's own known gaps**. Do not
+assume a number is settled because nothing flags it; assume the opposite and
+check whether two spec files agree. Three have already been caught disagreeing
+with each other or with the reference's own implementation — see
+`DEVIATIONS.md` A4, A5 and A6.
 
 ## Attribution
 

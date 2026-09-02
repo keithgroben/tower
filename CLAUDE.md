@@ -58,8 +58,15 @@ and every divergence became an argument nobody could win.
 A deviation is legal only when it is **recorded in `spec/DEVIATIONS.md` with a
 reason**. Silent deviation is the failure mode this repo was created to escape.
 
-If the reference is ambiguous, say so and cite `specs/PARITY-NOTES.md` or
-`specs/GAPS.md` rather than picking quietly.
+If the reference is ambiguous, say so, mark it `TODO(parity):` in the source
+naming the spec line, and record the choice in `spec/DEVIATIONS.md` under
+"Ambiguities resolved". Never pick quietly.
+
+⚠️ The reference has **no curated list of its own gaps**. Its `specs/README.md`
+advertises `PARITY-NOTES.md` and `GAPS.md`; neither file exists. So nothing
+will warn you that a number is uncertain — check whether two spec files agree
+before trusting one, because several already disagree with each other and one
+disagrees with the reference's own implementation.
 
 ## Where you may work, by blast radius
 

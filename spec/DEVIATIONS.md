@@ -35,6 +35,14 @@ than a thing someone finds later and assumes was arbitrary.
 | A6 | Shaft construction price | The reference's binary-derived table says `0x01` $200,000 / `0x2a` $400,000 / `0x2b` $100,000, but the reference's own *implementation* charges a flat $200,000 for all three | **the table** | The table came from the original binary; the implementation may have simplified. Where a reference contradicts itself, prefer the half that was recovered from the thing we are actually copying. |
 | A5 | Sky-lobby floors | `ELEVATORS.md` + `DATA-MODEL.md`'s worked example give logical 14/29/44; `DATA-MODEL.md` prose says 15/30/45 | **14/29/44** | The EXE-derived value comes with its own arithmetic (`(exe − 10) % 15 == 14`) and an explicit translation example (EXE 24 ⇒ logical 14). The prose reads like a human-facing round number — logical 14 is the fifteenth storey if you count the ground floor as one. One constant if it flips. |
 
+| A7 | Metro station construction cost | `ECONOMY.md`'s table says `$1,000,000`; `facility/METRO.md` derives `$45,000` (`3 × 30 × YEN[0]`, per-object cost zero) and the reference implementation ships `$45,000` | **⏳ open — Keith's call** | A 22× swing on a four-star purchase. `$1,000,000` is *exactly* the metro's `$100,000` operating expense × 10, which smells like a transcription slip in the table. Currently the table value, on the A6 principle — but this one is big enough to want a human. Not on the build path yet. |
+| A8 | Can the tower go broke? | The specs document a cash **ceiling** and mention bankruptcy nowhere. The reference implementation clamps cash at 0 — but it also clamps the income *ledger* at 0, where clamping is plainly defensive rather than meaningful | **⏳ open — Keith's call.** Cash currently allowed to go negative | This is a game question, not a parity one: whether losing is possible is a design decision. |
+
+**A7 and A8 need Keith.** Everything else on this page was decidable from the
+reference; these two are not.
+
+---
+
 The 10-bit `elapsed_packed` ceiling was investigated and found **not observable**:
 every writer clamps to 300 first, and 300 < 1024. The packing is preserved
 anyway because the high 6 bits carry flags the reference never names and a save
