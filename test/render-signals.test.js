@@ -1,0 +1,270 @@
+/**
+ * What the screen SAYS about the loop.
+ *
+ * `spec/simtower-loop.md` §3 is the whole reason this build exists: the
+ * elevator network decides whether you have tenants at all. So the four
+ * readings below — is this let, how stressed is this person, who is waiting,
+ * which sheet does this room draw — are the ones a wrong pixel actually costs
+ * something for, and every one of them is a pure function so it can be pinned
+ * here without a canvas.
+ */
+import {
+  FAMILY, GROUND_FLOOR, UNIT_STATUS, createTower, isRented, placeObject,
+} from '../src/games/tower/sim/state.js';
+import { CARRIER_MODE, addCar, createCarrier, enqueueRequest } from '../src/games/tower/sim/elevators.js';
+import {
+  ELAPSED_CLAMP, NO_ROUTE_DELAY, STRESS_PINK, STRESS_RED,
+  createSimTripRecord, recordNoRouteFailure, stressBand,
+} from '../src/games/tower/sim/stress.js';
+import { DEACTIVATED_EARLY } from '../src/games/tower/sim/economy.js';
+import {
+  STRESS_COLORS, actorStress, actorStressColor, carrierQueueDepth, objectSprite,
+  objectStatusTag, officeIsLet, queueDepthAt, queuePressure, timeOfDay,
+  waitingActorsByFloor,
+} from '../src/games/tower/render/canvas.js';
+
+const assert = (c, m) => { if (!c) throw new Error(m); };
+
+function towerWithOffice() {
+  const tower = createTower({ seed: 1 });
+  tower.segments = [];
+  const { object } = placeObject(tower,
+    { family: FAMILY.office, floor: 3, left: 60, right: 65 },
+    () => createSimTripRecord());
+  return { tower, office: object };
+}
+
+const occupantsOf = (tower, object) => tower.actors.filter((a) => a.objectId === object.id);
+
+export const tests = {
+  // ------------------------------------------------------- let vs For Rent
+
+  '⚠️ a freshly placed office is FOR RENT, even though unitStatus says rented'() {
+    // The trap, and the reason `officeIsLet` exists at all. `createObject` sets
+    // `unitStatus: 0` — inside the active band, so `isRented()` alone answers
+    // YES — while `occupiedFlag` is false, because `specs/facility/OFFICE.md`
+    // § Parity says placement does not set it.
+    //
+    // Reading `unitStatus` alone paints every office as occupied on the frame
+    // it is built, which erases the exact state this build exists to show:
+    // "For Rent, because nobody could reach it".
+    const { office } = towerWithOffice();
+    assert(isRented(office.unitStatus), 'precondition: the raw band reads as rented at placement');
+    assert(office.occupiedFlag === false, 'precondition: placement does not set occupiedFlag');
+    assert(officeIsLet(office) === false, 'a placed, unreached office must draw as vacant');
+    assert(objectStatusTag(office) === 'FOR RENT', 'and it must say so');
+  },
+
+  'the move-in flips it, and that is the whole loop'() {
+    // `spec/simtower-loop.md` §4: a worker's route resolves, the office rents,
+    // population +6. `occupiedFlag` IS that move-in — `population()` counts it.
+    const { office } = towerWithOffice();
+    office.occupiedFlag = true;
+    assert(officeIsLet(office), 'an occupied office in the active band is let');
+    assert(objectStatusTag(office) === '', 'a let office carries no tag');
+  },
+
+  'a deactivated office reads as vacant again even while it holds its flag'() {
+    // `sim/economy.js` writes `DEACTIVATED_EARLY` (0x10) into the status band on
+    // deactivation. Above 0x0f, so `isRented()` says no — and the room has to
+    // go back to For Rent whichever of the two fields moved.
+    const { office } = towerWithOffice();
+    office.occupiedFlag = true;
+    office.unitStatus = DEACTIVATED_EARLY;
+    assert(DEACTIVATED_EARLY > UNIT_STATUS.activeMax, 'precondition: 0x10 is outside the active band');
+    assert(!officeIsLet(office), 'a deactivated unit is not let');
+    assert(objectStatusTag(office) === 'FOR RENT', 'and it says so again');
+  },
+
+  'the lobby is never For Rent'() {
+    const tower = createTower({ seed: 1 });
+    const { object } = placeObject(tower, { family: FAMILY.lobby, floor: GROUND_FLOOR, left: 48, right: 101 });
+    assert(objectStatusTag(object) === '', 'infrastructure carries no lease tag');
+  },
+
+  'a missing object is not silently "let"'() {
+    // `null?.occupiedFlag` is undefined and `undefined <= 0x0f` is false, but
+    // both of those are accidents. Pinned so a refactor cannot turn a lookup
+    // miss into a rented room.
+    assert(officeIsLet(null) === false, 'null is not a let unit');
+    assert(officeIsLet(undefined) === false, 'undefined is not a let unit');
+    assert(objectStatusTag(null) === '', 'and it draws no tag');
+  },
+
+  // --------------------------------------------------------------- stress
+
+  'the colours are the manual\'s three bands and nothing else'() {
+    // `specs/PEOPLE.md` § Stress Color Bands: < 80 black, 80-119 pink,
+    // 120-300 red. The mapping goes through `stressBand()`, never through a
+    // threshold of the renderer's — the same number in two places drifts, and
+    // this one is easy to confuse with the eval thresholds (150/200), which are
+    // a completely different scale.
+    assert(Object.keys(STRESS_COLORS).length === 3, 'exactly three bands');
+    for (const score of [0, STRESS_PINK - 1, STRESS_PINK, STRESS_RED - 1, STRESS_RED, ELAPSED_CLAMP]) {
+      const band = stressBand(score);
+      assert(STRESS_COLORS[band], `no colour for band "${band}" at score ${score}`);
+    }
+    assert(STRESS_COLORS[stressBand(79)] === STRESS_COLORS.black, '79 is calm');
+    assert(STRESS_COLORS[stressBand(80)] === STRESS_COLORS.pink, '80 is the pink edge');
+    assert(STRESS_COLORS[stressBand(120)] === STRESS_COLORS.red, '120 is the red edge');
+  },
+
+  'the calm band is drawn as something you can SEE'() {
+    // The band that means "this person is fine" must not read as missing art on
+    // a dark tower, or every healthy worker looks like a rendering bug.
+    assert(STRESS_COLORS.black !== '#000' && STRESS_COLORS.black !== '#000000',
+      'literal black on a #0b0f14 tower is an absent dot');
+  },
+
+  'a worker who cannot be routed goes red, which is the point'() {
+    // `sim/stress.js`: a failed route costs 300 — the clamp, the worst a trip
+    // can be. One of them is already past the red boundary, so a tower that
+    // cannot move somebody says so on the very first attempt.
+    const { tower, office } = towerWithOffice();
+    const worker = occupantsOf(tower, office)[0];
+    assert(actorStress(worker) === 0, 'nobody has travelled yet');
+    recordNoRouteFailure(worker);
+    assert(actorStress(worker) === NO_ROUTE_DELAY, 'one failure costs the full clamp');
+    assert(actorStressColor(worker) === STRESS_COLORS.red, 'and it shows red');
+  },
+
+  '⚠️ never travelling scores ZERO, which is the BEST value'() {
+    // `computeRuntimeTileStressAverage` returns 0 for `trip_count == 0`, and 0
+    // is calm. So an idle tower reads as a perfect one. That is the reference's
+    // behaviour and it stays — but it is exactly the "metric improves while the
+    // thing it measures gets worse" shape `CLAUDE.md` says to distrust, so the
+    // HUD excludes untravelled people from its average rather than papering
+    // over it here.
+    const { tower, office } = towerWithOffice();
+    const idle = occupantsOf(tower, office)[0];
+    assert(idle.tripCount === 0 && actorStress(idle) === 0, 'no trips scores zero');
+    assert(stressBand(actorStress(idle)) === 'black', 'and zero is the calm band');
+  },
+
+  // -------------------------------------------------------------- waiting
+
+  'waiting people are grouped by the floor the SIM put them on'() {
+    // `waitingFloor` is written by `resolveRouteBetweenFloors` on results 2 and
+    // 0 and cleared on the others, so this is the sim's own answer to "who is
+    // standing here" rather than a guess from position.
+    const { tower, office } = towerWithOffice();
+    const [a, b, c] = occupantsOf(tower, office);
+    a.waitingFloor = GROUND_FLOOR;
+    b.waitingFloor = GROUND_FLOOR;
+    c.waitingFloor = -1;
+    const byFloor = waitingActorsByFloor(tower);
+    assert(byFloor.get(GROUND_FLOOR).length === 2, 'two in the lobby');
+    assert(byFloor.get(-1).length === 1, 'and one in B1 — a basement is a place people wait');
+    assert(!byFloor.has(3), 'nobody who is not waiting is counted');
+  },
+
+  'a hole in the actor table is skipped, not crashed on'() {
+    // `sim/scheduler.js`: "A handler may remove an actor mid-sweep; skip the
+    // hole rather than shifting the table." A renderer that assumed a dense
+    // array would throw inside a frame — and an exception in a frame looks
+    // exactly like a frozen game.
+    const { tower, office } = towerWithOffice();
+    occupantsOf(tower, office)[0].waitingFloor = 2;
+    tower.actors[1] = null;
+    const byFloor = waitingActorsByFloor(tower);
+    assert(byFloor.get(2).length === 1, 'the survivor is still found');
+  },
+
+  // ------------------------------------------------------------- the queue
+
+  'queue depth is read off the rings, both directions'() {
+    const tower = createTower({ seed: 1 });
+    const carrier = createCarrier({
+      id: 0, mode: CARRIER_MODE.STANDARD, bottomFloor: -2, topFloor: 6, column: 72,
+    });
+    addCar(carrier, GROUND_FLOOR);
+    tower.carriers.push(carrier);
+
+    assert(carrierQueueDepth(carrier, GROUND_FLOOR) === 0, 'an untouched shaft has no queue');
+    enqueueRequest(carrier, 101, GROUND_FLOOR, 1);
+    enqueueRequest(carrier, 102, GROUND_FLOOR, 1);
+    enqueueRequest(carrier, 103, GROUND_FLOOR, 0);
+    assert(carrierQueueDepth(carrier, GROUND_FLOOR) === 3, 'up and down both count towards the wait');
+    assert(queueDepthAt(tower, GROUND_FLOOR) === 3, 'and the floor total agrees');
+  },
+
+  '⚠️ a basement floor has a real queue slot'() {
+    // The sentinel again, from the other side: `floor - bottomFloor` is the ring
+    // index, and B2 on a carrier that starts at B2 is index 0. A guard written
+    // as `if (floor < 0) return 0` would report an empty queue for every
+    // basement and the wait would be invisible down there.
+    const carrier = createCarrier({
+      id: 0, mode: CARRIER_MODE.STANDARD, bottomFloor: -2, topFloor: 6, column: 72,
+    });
+    addCar(carrier, GROUND_FLOOR);
+    enqueueRequest(carrier, 201, -2, 1);
+    enqueueRequest(carrier, 202, -1, 1);
+    assert(carrierQueueDepth(carrier, -2) === 1, 'B2 queues are real');
+    assert(carrierQueueDepth(carrier, -1) === 1, 'so are B1 queues');
+    assert(carrierQueueDepth(carrier, -3) === 0, 'a floor the shaft does not serve has none');
+    assert(carrierQueueDepth(carrier, 99) === 0, 'nor one above its top');
+  },
+
+  'queue pressure saturates where a player can still act, not at the ring limit'() {
+    // A 40-entry ring is a tower that has already failed. A scale that only
+    // went red there would read "fine" through the whole failure.
+    assert(queuePressure(0).ratio === 0, 'no queue is no pressure');
+    assert(queuePressure(0).colorKey === 'good', 'and it reads good');
+    assert(queuePressure(12).ratio === 1, 'twelve waiting is full pressure');
+    assert(queuePressure(40).ratio === 1, 'a deeper queue stays saturated rather than overflowing');
+    assert(queuePressure(11).colorKey === 'bad', 'nearly-twelve is already bad');
+    assert(queuePressure(-3).count === 0, 'a nonsense count is clamped, not negative');
+  },
+
+  // ---------------------------------------------------------- which sheet
+
+  'a vacant unit draws the empty SHELL, not the furnished sheet'() {
+    // The delivered `office/vacant` frame still has desks and figures in it, so
+    // a room waiting for a tenant looked exactly like one full of them. That
+    // was a real complaint against the predecessor and it is the single most
+    // important distinction on this screen.
+    const { office } = towerWithOffice();
+    const art = objectSprite(office, { night: false });
+    assert(art.name === 'room-empty' && art.animation === 'office',
+      `a vacant office drew ${art.name}/${art.animation}`);
+  },
+
+  'a let office changes with the time of day, and with its tenants\' stress'() {
+    const { office } = towerWithOffice();
+    office.occupiedFlag = true;
+    assert(objectSprite(office, { night: false }).animation === 'occupied-day', 'daytime');
+    assert(objectSprite(office, { night: true }).animation === 'occupied-night', 'night');
+    assert(objectSprite(office, { night: true, stressed: true }).animation === 'stressed',
+      'a red room says so whatever the hour — stress outranks the clock');
+  },
+
+  'a family with no art falls through to a rectangle rather than a wrong sheet'() {
+    const tower = createTower({ seed: 1 });
+    const { object } = placeObject(tower, { family: 0x99, floor: 4, left: 10, right: 15 });
+    assert(objectSprite(object, {}) === null, 'an unknown family draws no sprite');
+  },
+
+  // ----------------------------------------------------------- the clock
+
+  '⚠️ the sky follows the DISPLAYED clock, not the raw tick'() {
+    // `spec/TICK-MODEL.md` §2: the clock is piecewise. Daypart 0 alone spans
+    // five displayed hours while dayparts 1 and 2 together cover 59 minutes.
+    // Mapping ticks linearly onto a day is what put the predecessor's morning
+    // rush at 01:55 — and would put dawn there too.
+    //
+    // Linear would make tick 400 (a fifth of the way through the day) read as
+    // 04:48. It is actually 12:00 noon, and the sky has to agree with the hand.
+    const noon = timeOfDay(400);
+    assert(Math.abs(noon - 0.5) < 1e-9, `tick 400 is noon (0.5), the sky said ${noon}`);
+    const linear = 400 / 2600;
+    assert(Math.abs(noon - linear) > 0.3, 'and it is nowhere near the linear reading');
+
+    // Daypart 0 opens the day at 7 AM; the overnight window sits before dawn.
+    assert(Math.abs(timeOfDay(0) - 7 / 24) < 1e-9, 'tick 0 is 7:00 AM');
+    assert(timeOfDay(2599) < timeOfDay(0), 'the last tick of the night is before dawn');
+    for (const tick of [0, 399, 400, 1199, 1600, 2300, 2533, 2599]) {
+      const tod = timeOfDay(tick);
+      assert(tod >= 0 && tod < 1, `tick ${tick} produced ${tod}, outside 0..1`);
+    }
+  },
+};

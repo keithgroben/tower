@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Tower</title>
+<style>
+  /* The palette is `render/feel.js`'s, in the same order. A test asserts the
+     two agree, because a HUD that drifts from the world it labels is worse
+     than one that never matched. */
+  :root {
+    --bg: #0b0f14;
+    --panel: #1b2430;
+    --good: #06d6a0;
+    --warn: #ffb703;
+    --bad: #ef476f;
+    --info: #8ecae6;
+    --ink: #dbe4ee;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 12px/1.4 var(--mono);
+    overflow: hidden;
+    /* A drag on the tower must pan it, not select the HUD text behind it. */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #view {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    /* The canvas is the world; its own art is scaled by integer zoom inside
+       the renderer, so the element must never resample it again. */
+    image-rendering: pixelated;
+    touch-action: none;
+    cursor: grab;
+  }
+  #view:active { cursor: grabbing; }
+
+  /* ---------------------------------------------------------------- HUD  */
+
+  #hud {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 7px 12px;
+    background: linear-gradient(var(--bg), rgba(11, 15, 20, 0.82) 70%, transparent);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  #hud > * { pointer-events: auto; }
+
+  /* The readouts give up room first and the controls never do. A single flex
+     row with `overflow: hidden` pushed the speed buttons off the right edge on
+     a narrow window — and a clipped button is not a small cosmetic problem,
+     it is the primary control of the game becoming unclickable with no
+     symptom other than not being there. */
+  #readouts {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+  #readouts > * { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #clock { flex-shrink: 0; }
+  #cash, #pace, #speeds { flex: 0 0 auto; }
+
+  #clock { font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
+  #day { color: var(--info); font-weight: 700; }
+  #daypart, #tick, #pace { color: #7d8b9c; }
+  #leases { color: var(--warn); font-weight: 700; }
+  #waiting { color: var(--info); }
+  #cash { color: var(--good); font-weight: 700; }
+
+  #speeds { display: flex; gap: 3px; }
+  #speeds button {
+    font: 700 11px var(--mono);
+    color: #7d8b9c;
+    background: var(--panel);
+    border: 1px solid #2c3948;
+    border-radius: 3px;
+    padding: 3px 9px;
+    cursor: pointer;
+  }
+  #speeds button:hover { color: var(--ink); }
+  #speeds button.on { color: var(--bg); background: var(--info); border-color: var(--info); }
+
+  /* -------------------------------------------------------------- footer */
+
+  #foot {
+    position: absolute;
+    left: 12px; bottom: 10px;
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    color: #7d8b9c;
+    pointer-events: none;
+  }
+  #hover { color: var(--ink); min-width: 24ch; }
+  #keys { font-size: 11px; }
+
+  #legend { display: flex; gap: 10px; align-items: center; }
+  #legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+  /* The three stress bands, `specs/PEOPLE.md` § Stress Color Bands. Same three
+     values `render/canvas.js` exports as STRESS_COLORS. */
+  .s-black i { background: #9fb3c8; }
+  .s-pink  i { background: #ff9ecd; }
+  .s-red   i { background: #ef476f; }
+
+  /* An exception in a frame or a listener looks exactly like nothing
+     happening. This makes it look like a failure. */
+  #failure {
+    position: absolute;
+    left: 12px; right: 12px; top: 44px;
+    padding: 7px 10px;
+    background: var(--bad);
+    color: #14090d;
+    font-weight: 700;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <div id="hud">
+    <span id="readouts">
+      <span id="clock">—</span>
+      <span id="day">day 0</span>
+      <span id="daypart">—</span>
+      <span id="tick">t0000</span>
+      <span id="leases">0/0 let</span>
+      <span id="stress">no trips yet</span>
+      <span id="waiting">0 waiting</span>
+      <span id="people">—</span>
+    </span>
+    <span id="cash">—</span>
+    <span id="pace">—</span>
+    <span id="speeds">
+      <button data-speed="0" title="pause (space)">||</button>
+      <button data-speed="1" title="1x (1)">1&times;</button>
+      <button data-speed="2" title="2x (2)">2&times;</button>
+      <button data-speed="4" title="4x (3)">4&times;</button>
+    </span>
+  </div>
+
+  <div id="failure" hidden></div>
+
+  <div id="foot">
+    <span id="hover"></span>
+    <span id="legend">
+      <span class="s-black"><i></i>calm</span>
+      <span class="s-pink"><i></i>stressed</span>
+      <span class="s-red"><i></i>fed up</span>
+    </span>
+    <span id="keys">drag pan &middot; wheel zoom &middot; space pause &middot; 0-3 speed &middot; home lobby</span>
+  </div>
+
+  <script type="module" src="./ui/main.js"></script>
+</body>
+</html>

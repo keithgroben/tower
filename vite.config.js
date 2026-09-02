@@ -1,12 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { defineConfig } from 'vite';
-import solid from 'vite-plugin-solid';
 
-// Scoped to Lift's HUD only. `sim/**` and `render/canvas.js` stay plain JS,
-// zero-build, Node-runnable — that split is the one architectural rule this
-// repo has (see CLAUDE.md). Bloom and the game picker are untouched; they
-// keep running off harness/serve.js (`npm run play`).
+// Vite serves and bundles the page. It is not a build step for the game:
+// `sim/**`, `render/**` and `ui/**` are all plain ES modules that a browser
+// runs as-is, which is why `node test/run.js` needs no `npm install` and never
+// will. Vite is here for the dev server, the asset copy and the production
+// bundle, and for nothing else.
+//
+// The predecessor's Solid + TypeScript toolchain is gone: it was declared in
+// `package.json` and there was never a `.tsx` file to compile. See the report
+// for the reasoning, but the short version is that a TypeScript UI reading a
+// 4,200-line *untyped* sim types nothing — it would need hand-written
+// declarations mirroring `sim/state.js`, and `CLAUDE.md` is explicit that a
+// rule written in two places drifts.
 
 /**
  * Copy the runtime asset folders into the build.
@@ -22,7 +29,7 @@ import solid from 'vite-plugin-solid';
  */
 function copyRuntimeAssets(dirs) {
   return {
-    name: 'lift-copy-runtime-assets',
+    name: 'tower-copy-runtime-assets',
     apply: 'build',
     closeBundle() {
       for (const dir of dirs) {
@@ -43,13 +50,8 @@ export default defineConfig({
   // Relative, so a build runs from a subdirectory, a file server, or inside a
   // desktop wrapper without being rebuilt for each.
   base: './',
-  plugins: [
-    solid({ include: 'src/games/tower/ui/**/*.tsx' }),
-    copyRuntimeAssets(['src/games/tower/assets']),
-  ],
+  plugins: [copyRuntimeAssets(['src/games/tower/assets'])],
   build: {
-    // Every page, not just the picker. The default single entry built the
-    // game-chooser page and never followed the link into the game itself.
     rollupOptions: {
       input: {
         // One game here, deliberately. The rig can hold more; this one is about
@@ -59,8 +61,6 @@ export default defineConfig({
     },
   },
   server: {
-    // Kept on 5174 so it can run beside the old repo's server during the
-    // port. rebuild.
     port: 5174,
   },
 });
