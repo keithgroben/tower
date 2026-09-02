@@ -171,6 +171,67 @@ export function carrierSlotIndex(carrier, floor) {
 }
 
 /**
+ * ⚠️ **Move a carrier's served range, and take its per-slot tables with it.**
+ *
+ * Eight arrays are indexed by `carrierSlotIndex`, which for a standard shaft is
+ * `floor - bottomFloor`. `sim/actions.js`'s `extend_shaft` moved the two floor
+ * bounds and left every one of them at its old length, so:
+ *
+ * - raising the top left the new floors with **no queue rings at all**, and a
+ *   car that stopped on one read `carrier.queues[slot]` as `undefined` and
+ *   threw inside `drainFloorQueue`;
+ * - lowering the bottom silently **renumbered every existing slot**, so a
+ *   rider queued on F3 became a rider queued three floors down.
+ *
+ * The first is a crash and the second is worse, because it is quiet. Found by
+ * running `npm run playtest -- 24 1 --play`: the greedy builder extends the
+ * seed's lift to reach the stranded F7 bank on day zero, and the run died on
+ * day 5. It predates the lunch wave — a direct `extend_shaft` on the seed
+ * leaves `queues.length` at 9 for a 12-floor shaft — and only surfaced because
+ * every RNG draw moved and a car finally stopped up there with somebody
+ * waiting.
+ *
+ * This lives here rather than in `extend_shaft` because *which* arrays are
+ * per-slot is this module's business, and a caller that has to remember the
+ * list is a caller that will forget the next one added.
+ *
+ * Express carriers are exempt: their slots are the fixed sky-lobby stops, not
+ * floor offsets, so the range moving does not renumber anything.
+ */
+export function resizeCarrierSlots(carrier, bottomFloor, topFloor) {
+  if (carrier.mode === CARRIER_MODE.EXPRESS) {
+    carrier.bottomFloor = bottomFloor;
+    carrier.topFloor = topFloor;
+    return carrier;
+  }
+  // How far the OLD slot 0 has moved. Lowering the bottom by three pushes every
+  // existing entry three places up the array; raising the top moves nothing.
+  const shift = carrier.bottomFloor - bottomFloor;
+  const slotCount = topFloor - bottomFloor + 1;
+
+  const regrow = (previous, fill) => {
+    const next = new Array(slotCount).fill(null).map((_, index) => {
+      const old = index - shift;
+      return old >= 0 && old < previous.length ? previous[old] : fill();
+    });
+    return next;
+  };
+
+  carrier.queues = regrow(carrier.queues, () => ({ up: createRing(), down: createRing() }));
+  carrier.stopEnabled = regrow(carrier.stopEnabled, () => 1);
+  carrier.upAssignedCar = regrow(carrier.upAssignedCar, () => 0);
+  carrier.downAssignedCar = regrow(carrier.downAssignedCar, () => 0);
+  for (const car of carrier.cars) {
+    car.destinationCountBySlot = regrow(car.destinationCountBySlot, () => 0);
+  }
+
+  carrier.slotCount = slotCount;
+  carrier.bottomFloor = bottomFloor;
+  carrier.topFloor = topFloor;
+  return carrier;
+}
+
+/**
  * Pure geometry: is the floor inside `[bottomFloor, topFloor]`? NOT a
  * substitute for `carrierStopsAtFloor` — an express shaft spans every floor
  * between its ends but stops at almost none of them.
@@ -337,76 +398,6 @@ export function createCarrier({
   };
 }
 
-/**
- * Every per-slot table on a carrier, so growing a shaft cannot grow three of
- * four. Listed once, here, beside the place they are created.
- *
- * `queues` is not in the list because its entries are objects and have to be
- * *made*, not filled — {@link resizeCarrierSlots} handles it explicitly.
- */
-const PER_SLOT_TABLES = [
-  ['stopEnabled', 1],
-  ['upAssignedCar', 0],
-  ['downAssignedCar', 0],
-];
-
-/**
- * Re-slot a carrier whose served range has moved.
- *
- * ⚠️ **The tables are indexed by `floor - bottomFloor`, so this is not just a
- * resize.** Extending a shaft *downward* renumbers every existing slot: the
- * floor that was slot 0 becomes slot `k`. New entries therefore go on the front
- * for a bottom extension and the back for a top one. Getting that backwards
- * would not throw — it would quietly move every queued rider to a different
- * floor, and the lift would serve calls nobody made while people stood waiting
- * on the floors that did make them.
- *
- * This did not exist, and `extend_shaft` moved `bottomFloor`/`topFloor` without
- * it: `carrierSlotIndex` then returned an index past the end of `queues`, and
- * `drainFloorQueue` read `undefined.up`. **The suite never saw it** — 422 tests
- * green — because nothing extended a shaft and then ran the tower long enough
- * for somebody to call a lift from a newly served floor. The headless playtest
- * hit it on day 6 of a scripted player doing the most obvious thing in the
- * game. In the browser it is a caught exception, a banner, and a paused tower.
- *
- * Express carriers are exempt: their slots are the fixed `EXPRESS_SLOT_COUNT`
- * sky-lobby table, not one per floor, so their indices do not move.
- *
- * @param {object} carrier   mutated in place
- * @param {number} newBottom the new bottom floor (must be <= the current one)
- * @param {number} newTop    the new top floor (must be >= the current one)
- */
-export function resizeCarrierSlots(carrier, newBottom, newTop) {
-  if (carrier.mode === CARRIER_MODE.EXPRESS) {
-    carrier.bottomFloor = newBottom;
-    carrier.topFloor = newTop;
-    return carrier;
-  }
-  if (newBottom > carrier.bottomFloor || newTop < carrier.topFloor) {
-    throw new RangeError(
-      `carrier ${carrier.id}: slots can grow, not shrink — `
-      + `${carrier.bottomFloor}..${carrier.topFloor} to ${newBottom}..${newTop}`,
-    );
-  }
-  const below = carrier.bottomFloor - newBottom;
-  const above = newTop - carrier.topFloor;
-  if (below === 0 && above === 0) return carrier;
-
-  for (const [name, fill] of PER_SLOT_TABLES) {
-    carrier[name] = [
-      ...new Array(below).fill(fill),
-      ...carrier[name],
-      ...new Array(above).fill(fill),
-    ];
-  }
-  const freshRings = (n) => Array.from({ length: n }, () => ({ up: createRing(), down: createRing() }));
-  carrier.queues = [...freshRings(below), ...carrier.queues, ...freshRings(above)];
-
-  carrier.bottomFloor = newBottom;
-  carrier.topFloor = newTop;
-  carrier.slotCount = newTop - newBottom + 1;
-  return carrier;
-}
 
 /**
  * Add a car. `specs/ELEVATORS.md` § Home Floor: the first car homes where the

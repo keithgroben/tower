@@ -262,14 +262,10 @@ const ACTIONS = {
       if (blocked) return refuse(blocked);
     }
 
-    // ⚠️ NOT `carrier.bottomFloor = newBottom` on its own.
-    //
-    // `queues`, `stopEnabled` and the two assignment tables are indexed by
-    // `floor - bottomFloor`, so moving the ends without them leaves a lift
-    // whose slot index runs past the end of its own queue array — and the
-    // first person to call it from a newly served floor crashes the tick.
-    // `resizeCarrierSlots` grows all four together, and puts the new entries
-    // on the correct side.
+    // ⚠️ Through `resizeCarrierSlots`, never by writing the two bounds. Eight
+    // arrays are indexed off `bottomFloor`, and moving the bounds without them
+    // gave the new floors no queue rings — a crash the moment a car stopped on
+    // one — and renumbered every existing slot when the bottom dropped.
     resizeCarrierSlots(carrier, newBottom, newTop);
     tower.routeTablesDirty = true;
     return { ok: true, cost: 0, bottom: newBottom, top: newTop };
