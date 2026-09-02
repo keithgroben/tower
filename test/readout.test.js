@@ -116,7 +116,8 @@ export const tests = {
     // stops believing the next thing the bar tells them.
     const status = {
       star: 2, nextStar: 3, activity: 1200, activityNeeded: 0, activityReady: true,
-      blockers: [{ text: 'a security office', kind: 'security' }], ready: false,
+      blockers: ['a security office'],
+      blockerDetails: [{ text: 'a security office', kind: 'security' }], ready: false,
     };
     const honest = starClause(status, (kind) => kind === 'office');
     assert(honest.includes('a security office'), 'it still names the thing: ' + honest);

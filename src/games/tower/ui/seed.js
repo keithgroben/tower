@@ -20,6 +20,10 @@ import { FAMILY, GROUND_FLOOR, TILES_PER_FLOOR, createTower, placeObject } from 
 import { createSimTripRecord } from '../sim/stress.js';
 import { STARTING_CASH } from '../sim/economy.js';
 import { ledgerFor } from '../sim/ledger-adapter.js';
+// For the venue's width only. `BUILDABLE` is the sim's own table of what a
+// `build` command accepts, so the seed asks it rather than restating how wide a
+// fast food is — the day that number moves, this moves with it.
+import { BUILDABLE } from '../sim/actions.js';
 
 /**
  * The lift column, and the two office banks either side of it.
@@ -71,6 +75,30 @@ export const LAYOUT = {
    * nothing — 36/36 still let, median 81 against a failing threshold of 150.
    */
   unreachableFloors: [7],
+
+  /**
+   * Somewhere to eat, beside the office bank on F3.
+   *
+   * Added when lunch trips landed. Without a venue every office worker's midday
+   * trip has nowhere to go, and the whole tower runs 20-30 stress points worse
+   * for it — measured over twelve days, sampled off the cashflow reset:
+   *
+   *              no venue    with one on F3
+   *     F6         111            98
+   *     F5         103            81
+   *     F4         102            74
+   *     F3          87            51
+   *
+   * That is not a tuning preference, it is the seed's job. The opening tower is
+   * meant to have **one** deliberate failure in it — the bank above the lift —
+   * and a tower whose workers also cannot get lunch has two, which muddies the
+   * lesson the first one teaches. This restores it to one.
+   *
+   * It also leaves the discovery intact rather than pre-empting it: a player
+   * who builds a second office bank still has to work out that it wants feeding.
+   */
+  fastFoodFloor: 3,
+  fastFoodLeft: 94,
   /**
    * Retail in the basement, on purpose.
    *
@@ -133,6 +161,15 @@ export function seedDemoWorld({ seed = 1, cash = STARTING_CASH } = {}) {
       }, makeTripFields);
     }
   }
+
+  // The lunch venue. `BUILDABLE.fastFood` owns its width, so the seed asks for
+  // a left edge and never restates how wide a fast food is.
+  place(tower, {
+    family: FAMILY.fastFood,
+    floor: LAYOUT.fastFoodFloor,
+    left: LAYOUT.fastFoodLeft,
+    right: LAYOUT.fastFoodLeft + BUILDABLE.fastFood.width - 1,
+  }, makeTripFields);
 
   for (const floor of LAYOUT.basementFloors) {
     for (const left of LAYOUT.basementTiles) {

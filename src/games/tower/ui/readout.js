@@ -117,12 +117,13 @@ export function starClause(status, buildable = null) {
   if (status.nextStar === null) return status.blockers[0] ?? 'the top of the ladder';
   if (status.ready) return 'ready for ' + (status.nextStar) + ' stars';
 
-  const first = status.blockers[0];
+  // `blockerDetails` carries the same list with the requirement's `kind`
+  // beside each line; `blockers` is the prose alone. Preferring the detailed
+  // one is what lets the caveat below exist — without a kind there is no sound
+  // way to tell a requirement a player can satisfy from one they cannot.
+  const first = status.blockerDetails?.[0] ?? status.blockers[0];
   if (first === undefined) return 'ready for ' + status.nextStar + ' stars';
 
-  // Blockers are either bare strings or `{text, kind}`. Both are handled so the
-  // clause is right either way, and the caveat appears the moment the sim can
-  // say which requirement a blocker names.
   const text = typeof first === 'string' ? first : first.text;
   const kind = typeof first === 'string' ? null : first.kind;
 
