@@ -88,6 +88,26 @@ export const OCCUPANTS = {
   [FAMILY.condo]: 3,
 };
 
+/**
+ * How many people a let unit contributes to the tower's population.
+ *
+ * Usually its occupant count — but **not for the commercial families**.
+ * `specs/facility/COMMERCIAL.md`: retail contributes `10` while owning no
+ * resident actors at all, because a shop's population is its *customers*, not
+ * its staff. `specs/FACILITIES.md` § Commercial Readiness confirms the split:
+ * commercial families are scored on customer count, not on occupant stress.
+ *
+ * So an office's population and its actor count are the same number by
+ * coincidence, and reading one for the other is a trap the moment a shop
+ * exists.
+ */
+export const POPULATION_CONTRIBUTION = {
+  [FAMILY.office]: 6,
+  [FAMILY.condo]: 3,
+  [FAMILY.retail]: 10,
+  [FAMILY.fastFood]: 0,
+};
+
 // ------------------------------------------------------- state-code bands
 //
 // `specs/PEOPLE.md` § Shared State-Code Convention. Bit 6 is the in-transit
@@ -317,7 +337,7 @@ export function population(tower) {
     // set on a VACANT office before anyone has reached it — so counting on it
     // returned 252 people in a tower where 216 had a lease, six offices' worth
     // of staff for offices nobody could get to.
-    if (isRented(o.unitStatus)) total += OCCUPANTS[o.family] ?? 0;
+    if (isRented(o.unitStatus)) total += POPULATION_CONTRIBUTION[o.family] ?? OCCUPANTS[o.family] ?? 0;
   }
   return total;
 }
