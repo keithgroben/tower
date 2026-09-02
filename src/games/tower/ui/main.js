@@ -284,6 +284,10 @@ const targetAt = (px, py) => ({
   tile: renderer.tileAt(px),
   object: renderer.objectAt(tower, px, py),
   carrier: renderer.carrierAt(tower, px, py),
+  // The shaft in this column whatever floor the pointer is on — extending
+  // means pointing at empty sky ABOVE a lift, where the floor-bounded pick
+  // finds nothing.
+  columnCarrier: renderer.carrierColumnAt(tower, px),
 });
 
 /**

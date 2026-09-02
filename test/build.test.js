@@ -20,7 +20,8 @@ import { CONSTRUCTION_COST } from '../src/games/tower/sim/economy.js';
 import { MAX_SERVED_SPAN, SHAFT_WIDTH } from '../src/games/tower/sim/elevators.js';
 import { GROUND_FLOOR, MAX_FLOOR, TILES_PER_FLOOR, isRented } from '../src/games/tower/sim/state.js';
 import {
-  TOOLS, commandFor, costOf, lowestBuiltFloor, preview, snapLeft, toolById,
+  RENT_TIER_COUNT, TOOLS, commandFor, costOf, lowestBuiltFloor, nextRentTier,
+  preview, snapLeft, toolById,
 } from '../src/games/tower/ui/build.js';
 import { LAYOUT, seedDemoWorld } from '../src/games/tower/ui/seed.js';
 
@@ -80,6 +81,14 @@ export const tests = {
       ['an office at the right edge', 'office', () => at(EMPTY_FLOOR, TILES_PER_FLOOR - 2)],
       ['a lobby on empty air', 'lobby', () => at(EMPTY_FLOOR, 30)],
       ['a shaft to a high floor', 'shaft-standard', () => at(20, 110)],
+      // ⚠️ This case is the one that was missing, and its absence is why the
+      // ghost went on saying "passes through 12 rooms" for a whole commit after
+      // the sim started refusing it. The test that was supposed to catch it
+      // asserted `preview().ok` — MY OWN output — so it could not notice the
+      // other side moving. A test that pins one side of an agreement is not a
+      // test of the agreement.
+      ['a shaft straight through the offices', 'shaft-standard', () => at(6, LAYOUT.officeTiles[0])],
+      ['a shaft too close to the existing lift', 'shaft-standard', () => at(6, LAYOUT.shaftColumn + 6)],
       ['a shaft to the floor it starts on', 'shaft-standard', () => at(LAYOUT.carrierBottom, 110)],
       ['a shaft past the 31-floor limit', 'shaft-standard', () => at(MAX_FLOOR, 110)],
       ['a shaft off the top of the world', 'shaft-standard', () => at(MAX_FLOOR + 5, 110)],
@@ -222,19 +231,135 @@ export const tests = {
     assert(guess.footprint.bottom === LAYOUT.carrierBottom && guess.footprint.top === 20, 'and its full span');
   },
 
-  '⚠️ a shaft through occupied rooms is reported, not refused'() {
-    // `sim/actions.js` does not check whether a shaft passes through built
-    // rooms — reported to sim/. Until it is a rule, the interface says what is
-    // about to happen rather than inventing a refusal the sim does not have.
-    // If the check lands, this test fails and the note becomes a refusal.
+  'a shaft through occupied rooms is refused, in the sim\'s words'() {
+    // This was a *note* — "passes through 12 rooms" — for as long as
+    // `sim/actions.js` permitted it, because inventing a refusal the sim did
+    // not have would have been a rule in two places. It is a rule now.
     const w = world();
-    const guess = preview(w, tool('shaft-standard'), at(6, LAYOUT.officeTiles[0]));
-    assert(guess.ok, 'the sim allows it today, so the ghost must not claim otherwise');
-    assert(/passes through \d+ rooms/.test(guess.note ?? ''),
-      'the consequence has to be on screen: ' + JSON.stringify(guess.note));
+    const blocked = preview(w, tool('shaft-standard'), at(6, LAYOUT.officeTiles[0]));
+    assert(!blocked.ok, 'a lift cannot be sunk through the offices');
+    assert(blocked.reason.includes('not clear'), 'and it says why: ' + blocked.reason);
+    assert(blocked.footprint, 'a refused ghost still draws where it would have gone');
 
     const clear = preview(w, tool('shaft-standard'), at(6, 110));
-    assert(!clear.note, 'a clear column carries no warning: ' + clear.note);
+    assert(clear.ok, 'a clear column is still buildable: ' + clear.reason);
+  },
+
+  '⚠️ a shaft must not be refused for reaching the lobby it lands in'() {
+    // A ground lobby spans most of the lot. Counting it as an obstruction
+    // refuses every shaft that reaches the ground — which is every useful
+    // shaft, and would have made the whole palette useless. No test built a
+    // shaft in a tower with a wide lobby, so nothing caught it; the seed did,
+    // by being played. `spec/DEVIATIONS.md` A13.
+    const w = world();
+    const lobby = [...w.tower.objects.values()].find((o) => o.family === BUILDABLE.lobby.family);
+    assert(lobby && lobby.right - lobby.left > 40, 'precondition: the seed has a wide ground lobby');
+
+    const guess = preview(w, tool('shaft-standard'), at(8, 110));
+    assert(guess.ok, 'a shaft to the ground floor must be allowed: ' + guess.reason);
+    assert(guess.footprint.bottom <= GROUND_FLOOR, 'and it does reach the lobby');
+  },
+
+  // --------------------------------------------------------- extend a lift
+
+  '⚠️ extending is how a stranded floor gets fixed, and it is free'() {
+    // The seed strands six offices above the lift on purpose. This is the
+    // cheapest fix and should be the first one a player finds — a whole second
+    // shaft is $200,000.
+    const w = world();
+    const carrier = w.tower.carriers[0];
+    const stranded = LAYOUT.unreachableFloors[0];
+    assert(carrier.topFloor < stranded, 'precondition: the bank is above the lift');
+
+    const target = at(stranded, carrier.column, { columnCarrier: carrier });
+    const guess = preview(w, tool('extend_shaft'), target);
+    assert(guess.ok, 'the lift should reach one floor higher: ' + guess.reason);
+    assert(guess.cost === 0, 'A12: the reference never prices its elevator editor');
+    assert(guess.footprint.top === stranded, 'the ghost draws the NEW top, got ' + guess.footprint.top);
+    assert(guess.footprint.bottom === carrier.bottomFloor, 'and keeps the old bottom');
+
+    const real = applyAction(w, commandFor(w.tower, tool('extend_shaft'), target));
+    assert(real.ok, real.reason);
+    assert(carrier.topFloor === stranded, 'the lift now reaches F' + stranded);
+    assert(w.tower.routeTablesDirty, 'and the routing tables have to be rebuilt');
+  },
+
+  'pointing below a lift extends it downwards'() {
+    const w = world();
+    const carrier = w.tower.carriers[0];
+    const target = at(carrier.bottomFloor - 2, carrier.column, { columnCarrier: carrier });
+    const guess = preview(w, tool('extend_shaft'), target);
+    assert(guess.ok, guess.reason);
+    assert(guess.footprint.bottom === carrier.bottomFloor - 2, 'the bottom moved down');
+    assert(guess.footprint.top === carrier.topFloor, 'and the top stayed put');
+  },
+
+  '⚠️ pointing INSIDE a lift is not a command, rather than a no-op success'() {
+    // `extend_shaft` answers `ok` to "extend to a floor it already serves",
+    // because nothing shortened. A success that changes nothing is worse than
+    // being told to point somewhere else, so no command is composed at all —
+    // which also means the two paths cannot disagree, since the seam is never
+    // asked.
+    const w = world();
+    const carrier = w.tower.carriers[0];
+    const inside = at(carrier.topFloor - 1, carrier.column, { columnCarrier: carrier });
+    assert(commandFor(w.tower, tool('extend_shaft'), inside) === null, 'no command for a no-op');
+    const guess = preview(w, tool('extend_shaft'), inside);
+    assert(!guess.ok && guess.reason.includes('above or below'), 'it says what to do: ' + guess.reason);
+
+    const nowhere = at(20, 5);
+    assert(preview(w, tool('extend_shaft'), nowhere).reason === 'point at a lift', 'and where to point');
+  },
+
+  'a lift cannot be extended through a room, and says so'() {
+    const w = world();
+    const carrier = w.tower.carriers[0];
+    // Put a room directly in the shaft's own column, two floors up — F7 is the
+    // stranded bank and leaves the lift's column clear, so F8 is the first
+    // empty floor where a room can actually sit in the way.
+    const blockAt = carrier.topFloor + 2;
+    const placed = applyAction(w, { type: 'build', what: 'office', floor: blockAt, left: carrier.column });
+    assert(placed.ok, 'precondition: ' + placed.reason);
+
+    const target = at(blockAt, carrier.column, { columnCarrier: carrier });
+    const guess = preview(w, tool('extend_shaft'), target);
+    const real = applyAction(w, commandFor(w.tower, tool('extend_shaft'), target));
+    assert(!guess.ok && !real.ok, 'a lift cannot rise through a room');
+    assert(guess.reason === real.reason, 'one refusal, one sentence');
+  },
+
+  // ------------------------------------------------------------- the rent
+
+  'the rent tool cycles the tier and says what the next one pays'() {
+    // Four tiers do not deserve four buttons. One click cycles, and the ghost
+    // says what it becomes before the player commits.
+    const w = world();
+    const office = [...w.tower.objects.values()].find((o) => o.family === BUILDABLE.office.family);
+    const start = office.rentLevel;
+
+    const target = at(office.floor, office.left, { object: office });
+    const guess = preview(w, tool('set_rent'), target);
+    assert(guess.ok && guess.cost === 0, 'changing the rent costs nothing');
+    assert(guess.note.includes('tier ' + start + ' → ' + nextRentTier(start)), 'the ghost names both tiers: ' + guess.note);
+    assert(guess.note.includes('$'), 'and what the new one pays: ' + guess.note);
+
+    applyAction(w, commandFor(w.tower, tool('set_rent'), target));
+    assert(office.rentLevel === nextRentTier(start), 'the tier moved');
+  },
+
+  'the rent tool wraps around all four tiers and back'() {
+    // Tier 3 always passes evaluation, so a player must be able to reach it and
+    // then leave again — a cycle that dead-ended at 3 would trap a tower on the
+    // cheapest rent forever.
+    const w = world();
+    const office = [...w.tower.objects.values()].find((o) => o.family === BUILDABLE.office.family);
+    const target = at(office.floor, office.left, { object: office });
+    const seen = new Set([office.rentLevel]);
+    for (let i = 0; i < RENT_TIER_COUNT; i++) {
+      applyAction(w, commandFor(w.tower, tool('set_rent'), target));
+      seen.add(office.rentLevel);
+    }
+    assert(seen.size === RENT_TIER_COUNT, 'every tier is reachable, saw ' + [...seen]);
   },
 
   'the span limit is the reference\'s, and the ghost quotes it'() {
