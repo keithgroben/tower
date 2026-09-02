@@ -19,7 +19,9 @@
 import {
   FAMILY, OBJECT_TYPE, floorExists, isRented, placeObject, spanBlocked,
 } from './state.js';
-import { CARRIER_MODE, addCar, createCarrier, MAX_SERVED_SPAN } from './elevators.js';
+import {
+  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier,
+} from './elevators.js';
 import { CONSTRUCTION_COST, chargeConstruction, placementCost } from './economy.js';
 import { createSimTripRecord } from './stress.js';
 
@@ -35,6 +37,80 @@ export const SHAFT_KIND = {
 };
 
 const refuse = (reason) => ({ ok: false, reason });
+
+/**
+ * A shaft's clearance rectangle. `specs/COMMANDS.md` § Elevator placement
+ * rules: *"Elevators reserve width 6 for express elevators and width 4 for
+ * other carrier modes, expanded vertically from `bottom_floor - 1` through
+ * `top_floor + 1`."*
+ *
+ * The vertical overhang is not decoration — a shaft needs its machine room and
+ * its pit, so it claims a floor above and below the ones it serves.
+ */
+export function shaftClearance({ mode, bottom, top, column }) {
+  const width = SHAFT_WIDTH[mode] ?? 4;
+  return { left: column, right: column + width - 1, bottom: bottom - 1, top: top + 1 };
+}
+
+/** `specs/COMMANDS.md`: *"Elevators must have 8 empty tiles between them."* */
+export const SHAFT_SEPARATION = 8;
+
+/**
+ * Why this shaft cannot go here, or null.
+ *
+ * Nothing checked any of it before: a shaft could be sunk straight through
+ * occupied rooms and straight through another lift. The UI agent found it,
+ * reported the consequence on the ghost ("passes through 12 rooms") and
+ * deliberately did NOT invent a refusal in the interface — a rule the sim does
+ * not have is a rule in two places. It has one now.
+ */
+export function shaftObstruction(tower, spec, ignoreCarrierId = null) {
+  const box = shaftClearance(spec);
+  const columns = new Set();
+  for (let c = box.left; c <= box.right; c++) columns.add(c);
+
+  for (const object of tower.objects.values()) {
+    if (object.floor < box.bottom || object.floor > box.top) continue;
+    if (object.left > box.right || object.right < box.left) continue;
+    // The lobby is what a lift lands IN, not something it collides with. A
+    // ground-floor lobby spans most of the lot, so counting it as an
+    // obstruction refuses every shaft that reaches the ground — which is every
+    // useful shaft. `specs/COMMANDS.md`: "elevator families and lobby spans are
+    // exempt from the dispatcher-wide floor-0 rejection precheck".
+    if (object.family === FAMILY.lobby) continue;
+    return 'that column is not clear — a lift would pass through '
+      + describeObstruction(tower, box) + ' on the way up';
+  }
+
+  for (const carrier of tower.carriers) {
+    // A shaft being extended must not collide with itself, and its own
+    // clearance box overlaps the new span by definition. Caught by extending
+    // the seed's own lift and being told it overlapped an existing one.
+    if (carrier.id === ignoreCarrierId) continue;
+    const other = shaftClearance({
+      mode: carrier.mode, bottom: carrier.bottomFloor, top: carrier.topFloor, column: carrier.column,
+    });
+    if (other.bottom > box.top || other.top < box.bottom) continue;   // no vertical overlap
+    const gap = other.left > box.right ? other.left - box.right - 1
+      : box.left > other.right ? box.left - other.right - 1 : -1;
+    if (gap < SHAFT_SEPARATION) {
+      return gap < 0
+        ? 'that overlaps an existing lift'
+        : 'lifts need ' + SHAFT_SEPARATION + ' clear tiles between them — that leaves ' + gap;
+    }
+  }
+  return null;
+}
+
+const describeObstruction = (tower, box) => {
+  let n = 0;
+  for (const o of tower.objects.values()) {
+    if (o.family === FAMILY.lobby) continue;
+    if (o.floor >= box.bottom && o.floor <= box.top && o.left <= box.right && o.right >= box.left) n++;
+  }
+  return n === 1 ? '1 room' : n + ' rooms';
+};
+
 
 const ACTIONS = {
   /**
@@ -82,6 +158,9 @@ const ACTIONS = {
       return refuse('a shaft serves at most ' + MAX_SERVED_SPAN + ' floors — use a sky lobby');
     }
 
+    const blocked = shaftObstruction(tower, { mode: spec.mode, bottom, top, column });
+    if (blocked) return refuse(blocked);
+
     const cost = CONSTRUCTION_COST[spec.cost] ?? 0;
     const paid = chargeConstruction(ledger, cost);
     if (!paid.charged) {
@@ -102,6 +181,54 @@ const ACTIONS = {
     tower.carriers.push(carrier);
     tower.routeTablesDirty = true;
     return { ok: true, cost, carrier };
+  },
+
+
+  /**
+   * Make an existing lift serve more floors — the move a player reaches for
+   * first when a bank of offices sits above the top of the shaft, and which
+   * was impossible until now: the only fix was a whole second shaft at
+   * $200,000. The UI agent asked for this after watching the decision play.
+   *
+   * The reference has an elevator **editor** (`specs/COMMANDS.md` § served-floor
+   * removal, the carrier-edit confirm prompt), so editing a served range is a
+   * real move rather than an invention.
+   *
+   * TODO(parity): the reference does not price it. A shaft costs a flat
+   * $200,000 whatever its span, and no per-floor rate for editing was
+   * recovered — so extending is free here. Recorded as `spec/DEVIATIONS.md`
+   * A12 rather than invented at a number of our choosing. If it proves too
+   * cheap in play, that is a balance finding and it belongs to Keith.
+   */
+  extend_shaft({ tower }, { carrierId, bottom, top }) {
+    const carrier = tower.carriers.find((c) => c.id === carrierId);
+    if (!carrier) return refuse('no such shaft');
+
+    const newBottom = bottom ?? carrier.bottomFloor;
+    const newTop = top ?? carrier.topFloor;
+    if (!floorExists(newBottom) || !floorExists(newTop)) return refuse('that leaves the tower');
+    if (newTop <= newBottom) return refuse('a shaft has to serve more than one floor');
+    if (newBottom > carrier.bottomFloor || newTop < carrier.topFloor) {
+      return refuse('a shaft can be extended, not shortened — demolish it to move it');
+    }
+    if (newTop - newBottom + 1 > MAX_SERVED_SPAN) {
+      return refuse('a shaft serves at most ' + MAX_SERVED_SPAN + ' floors — use a sky lobby');
+    }
+
+    // Check only what is NEW, so a lift is never blocked by the rooms it
+    // already legally serves.
+    for (const [from, to] of [[newBottom, carrier.bottomFloor - 1], [carrier.topFloor + 1, newTop]]) {
+      if (from > to) continue;
+      const blocked = shaftObstruction(tower, {
+        mode: carrier.mode, bottom: from, top: to, column: carrier.column,
+      }, carrier.id);
+      if (blocked) return refuse(blocked);
+    }
+
+    carrier.bottomFloor = newBottom;
+    carrier.topFloor = newTop;
+    tower.routeTablesDirty = true;
+    return { ok: true, cost: 0, bottom: newBottom, top: newTop };
   },
 
   /** Add a car to an existing shaft. The one purchase that scales a route. */
