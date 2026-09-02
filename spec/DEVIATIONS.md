@@ -32,25 +32,38 @@ than a thing someone finds later and assumes was arbitrary.
 | A2 | Is the 300-tick no-route penalty charged before or after the trip counters drain? | `ROUTING.md:64` and `PEOPLE.md:128` each describe one half, neither states the order | **charge, then drain** | Draining first discards the 300, so a failed trip costs nothing and a tower with no elevator posts the *best* stress in the game. The old repo shipped exactly this bug once: stranded riders logged as zero wait. |
 | A3 | Does the stress average truncate? | `PEOPLE.md:182` writes the division without saying | **integer division** | The original divides 16-bit words. And the colour bands are integer ranges (`< 80`, `80–119`, `120–300`) that only tile the number line if the score is an integer — 119.5 belongs to no band as written. |
 | A4 | Family-5 (suite) score divisor: 2 or 3? | `FACILITIES.md:39` and `PEOPLE.md:190` say 2; `PEOPLE.md:280` says a suite holds 3 entities | **2** | Two sources against one, and the two agree on the question actually being asked. Not on the current build path — offices first — so cheap to revisit. |
-| A6 | Shaft construction price | The reference's binary-derived table says `0x01` $200,000 / `0x2a` $400,000 / `0x2b` $100,000, but the reference's own *implementation* charges a flat $200,000 for all three | **the table** | The table came from the original binary; the implementation may have simplified. Where a reference contradicts itself, prefer the half that was recovered from the thing we are actually copying. |
 | A5 | Sky-lobby floors | `ELEVATORS.md` + `DATA-MODEL.md`'s worked example give logical 14/29/44; `DATA-MODEL.md` prose says 15/30/45 | **14/29/44** | The EXE-derived value comes with its own arithmetic (`(exe − 10) % 15 == 14`) and an explicit translation example (EXE 24 ⇒ logical 14). The prose reads like a human-facing round number — logical 14 is the fifteenth storey if you count the ground floor as one. One constant if it flips. |
-
-| A9 | **What re-stamps `last_trip_tick` between carrier assignment and arrival?** Two functions consume it and each clears it; nothing in `ROUTING.md`, `PEOPLE.md` or `ELEVATORS.md` re-arms it in between | silent | **boarding re-stamps** | The other two readings are refutable. *"The arrival rebase isn't reached"* contradicts `PEOPLE.md` § When Counters Advance, which names the queued-car arrival callback explicitly. *"The assignment-time accumulate isn't reached"* deletes the tall-lobby rebate, which is applied only there — multi-storey lobbies would become pure decoration. Only this reading leaves **both** documented call sites reachable *and* meaningful: the accumulate measures the wait on the floor, the rebase measures the ride. It also generalises a rule the spec already states once — the resolver ends by stamping — into "every event that consumes the stamp re-arms it for the next segment". |
-
-⚠️ **A9 is the highest-consequence guess in the build.** If it is wrong, the
-symptom is *uniformly maximal stress on every elevator rider*, identical across
-tenants and insensitive to how good the lifts are — which reads as "the clamp
-is working" rather than as a bug. `stress.js` has a test named *"a cleared stamp
-reads as tick zero, and charges the whole day"* pinning that arithmetic, so the
-consequence is visible if we ever have to revisit it.
-
+| A6 | Shaft construction price | The reference's binary-derived table says `0x01` $200,000 / `0x2a` $400,000 / `0x2b` $100,000, but the reference's own *implementation* charges a flat $200,000 for all three | **the table** | The table came from the original binary; the implementation may have simplified. Where a reference contradicts itself, prefer the half that was recovered from the thing we are actually copying. |
 | A7 | Metro station construction cost | `ECONOMY.md`'s table says `$1,000,000`; `facility/METRO.md` derives `$45,000` (`3 × 30 × YEN[0]`, per-object cost zero) and the reference implementation ships `$45,000` | **⏳ open — Keith's call** | A 22× swing on a four-star purchase. `$1,000,000` is *exactly* the metro's `$100,000` operating expense × 10, which smells like a transcription slip in the table. Currently the table value, on the A6 principle — but this one is big enough to want a human. Not on the build path yet. |
 | A8 | Can the tower go broke? | The specs document a cash **ceiling** and mention bankruptcy nowhere. The reference implementation clamps cash at 0 — but it also clamps the income *ledger* at 0, where clamping is plainly defensive rather than meaningful | **⏳ open — Keith's call.** Cash currently allowed to go negative | This is a game question, not a parity one: whether losing is possible is a design decision. |
+| A9 | **What re-stamps `last_trip_tick` between carrier assignment and arrival?** Two functions consume it and each clears it; nothing in `ROUTING.md`, `PEOPLE.md` or `ELEVATORS.md` re-arms it in between | silent | **boarding re-stamps** | The other two readings are refutable. *"The arrival rebase isn't reached"* contradicts `PEOPLE.md` § When Counters Advance, which names the queued-car arrival callback explicitly. *"The assignment-time accumulate isn't reached"* deletes the tall-lobby rebate, which is applied only there — multi-storey lobbies would become pure decoration. Only this reading leaves **both** documented call sites reachable *and* meaningful: the accumulate measures the wait on the floor, the rebase measures the ride. It also generalises a rule the spec already states once — the resolver ends by stamping — into "every event that consumes the stamp re-arms it for the next segment". |
 
 **A7 and A8 need Keith.** Everything else on this page was decidable from the
-reference; these two are not.
+reference; those two are not.
 
----
+### A9 is the highest-consequence guess in the build
+
+If it is wrong, the symptom is *uniformly maximal stress on every elevator
+rider* — identical across tenants and insensitive to how good the lifts are,
+which reads as "the clamp is working" rather than as a bug. `stress.js` has a
+test named *"a cleared stamp reads as tick zero, and charges the whole day"*
+pinning that arithmetic, so the consequence stays visible.
+
+**It degrades correctly for service carriers, which is evidence for it.**
+`accumulateElapsedDelayIntoCurrentSim` returns early for a service carrier and
+leaves `last_trip_tick` **stamped** rather than clearing it. So there is nothing
+to re-arm, and the ruling needs no special case — the re-stamp is skipped
+alongside the accumulate it pairs with, and the arrival rebase's single sample
+covers wait-plus-ride as one span instead of two. The consumer is one line, and
+both halves move together for the same reason:
+
+```js
+accumulateElapsedDelayIntoCurrentSim(sim, dayTick, { sourceFloor, lobbyHeight, carrierMode });
+if (carrierMode !== CARRIER_SERVICE) stampRouteStart(sim, dayTick);
+```
+
+A reading that needed a special case for the one carrier type the reference
+excludes would be a worse reading.
 
 The 10-bit `elapsed_packed` ceiling was investigated and found **not observable**:
 every writer clamps to 300 first, and 300 < 1024. The packing is preserved

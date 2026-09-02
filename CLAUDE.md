@@ -145,6 +145,33 @@ skimming it.
 
   **Every constant quoted from the reference is in EXE floors.** Translate with
   `logical = exe − 10`, and re-check any sentinel that comes with it.
+- ⚠️ **A performance-shaped symptom deserves the same suspicion as a wrong
+  number.** `compute_car_motion_mode` picks a car's speed from `dist_to_target`
+  and `dist_from_prev`. `prev_floor` is the last floor a car **stopped** at, not
+  the last one it **passed** — it is snapshotted only at dwell expiry, and that
+  is what lets `dist_from_prev` grow. The acceleration profile is hidden in a
+  variable name.
+
+  Latching it every step reads as obviously right — you *did* just leave that
+  floor — and pins `dist_from_prev` at `0`. `0 < 2` is the first clause of the
+  mode-0 test, so every car crawls at the slowest rate for its whole journey: a
+  30-floor standard run costs **175 ticks instead of 41**, express 175 instead
+  of 22.
+
+  Nothing errored. No counter went negative. Every car arrived. The tower simply
+  read as *sluggish* — and you would tune the pacing constant forever chasing
+  it. **A 4x error that presents as a feel problem is worse than a crash.**
+
+  It survived 79 passing tests, and then survived a *second* mutation round,
+  because the first acceleration test called the step helper directly. **A test
+  that bypasses the state machine cannot find a bug that lives in it.**
+- ⚠️ **Before suppressing a zero, ask whether zero is a legal value in that
+  domain or only the absence of one.** An `if (ticks === 0) return;` in the
+  delay emitter looked like an optimisation. Two delays in `ROUTING.md` § Delays
+  genuinely cost zero and are **not inert** — they still clear the route-start
+  stamp. Treating "costs nothing" as "did not happen" silently dropped a side
+  effect. This is the sentinel bug inverted: there, a sentinel collided with
+  real data; here, a real value collided with the absence of one.
 - **Art existed and nothing drew it, six times.** A catalogued sheet with no
   reached call site now fails a test. Preloading does not count.
 - **A rule written in four places drifts.** The stairs column rule lived in the
