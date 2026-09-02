@@ -54,11 +54,22 @@
  * `resolveRouteBetweenFloors` reads `actor.id` (the queue's request reference
  * — any stable value) and `actor.homeColumn` (the tile column the distance
  * penalty is measured against). It writes `actor.route`, `actor.waitingFloor`,
- * `actor.legDestination`, `actor.destinationFloor` and `actor.routeStartTick`.
+ * `actor.legDestination`, `actor.destinationFloor` and `actor.lastTripTick`.
  * Everything it wrote is also on the returned result, so a caller that would
  * rather own its own record can ignore the mutation entirely.
  *
- * `actor.routeStartTick` is the reference's `last_trip_tick`, and it is written
+ * `actor.lastTripTick` is the reference's `last_trip_tick`, and it is written
+ * under EXACTLY that name because `sim/stress.js` reads it under that name.
+ *
+ * ⚠️ It was called `routeStartTick` here for a day. Both modules documented
+ * their seam in prose, both were internally correct, and prose does not
+ * typecheck: 216 of 216 actors had a stamp written and 0 had one read. Every
+ * measurement then started from tick 0, charged the whole day, and clamped to
+ * 300 — the uniform-maximal-stress symptom, arriving from a direction nobody
+ * had predicted. `test/integration.test.js` now fails if the two ever part
+ * again.
+ *
+ * It is written
  * **last, from inside `finish()`**, after every delay has been reported. See
  * the ordering note on `DELAY`: charging a delay clears that stamp, so writing
  * it first destroys it.
@@ -883,7 +894,7 @@ export const carrierToken = (id, directionFlag) =>
  * @param options `{ passengerRoute = true, emitDistanceFeedback = true,
  *                   heightMetric, onDelay }`
  *
- * @returns `{ code, delays, routeStartTick, advanceTripCounters,
+ * @returns `{ code, delays, lastTripTick, advanceTripCounters,
  *             legDestination, waitingFloor, token, carrierId, segmentId,
  *             emitFailureNotice }`
  *
@@ -948,8 +959,8 @@ export function resolveRouteBetweenFloors(tower, actor, sourceFloor, destination
    * field is read as tick zero by whatever measures next.
    */
   const finish = (result) => {
-    if (actor) actor.routeStartTick = clock?.dayTick ?? actor.routeStartTick;
-    return { delays, routeStartTick: clock?.dayTick ?? null, ...result };
+    if (actor) actor.lastTripTick = clock?.dayTick ?? actor.lastTripTick;
+    return { delays, lastTripTick: clock?.dayTick ?? null, ...result };
   };
 
   // § Route Resolution Results: same floor is 3, not 2, precisely so the

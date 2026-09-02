@@ -151,25 +151,25 @@ export const tests = {
     // fires, the stamp must still be the old value — never the new tick.
     const cases = [[0, 5, 'a local leg'], [0, 10, 'a carrier leg'], [7, 7, 'a same-floor arrival']];
     for (const [from, to, what] of cases) {
-      const actor = { id: 'w' + from + to, homeColumn: 0, routeStartTick: 111 };
+      const actor = { id: 'w' + from + to, homeColumn: 0, lastTripTick: 111 };
       let stampSeenDuringDelays = null;
       const result = resolveRouteBetweenFloors(tower, actor, from, to, later, {
-        onDelay: () => { stampSeenDuringDelays = actor.routeStartTick; },
+        onDelay: () => { stampSeenDuringDelays = actor.lastTripTick; },
       });
       if (stampSeenDuringDelays !== null) {
         assert(stampSeenDuringDelays === 111,
           what + ': the stamp was already ' + stampSeenDuringDelays
           + ' while delays were still firing — it must be written last');
       }
-      assert(actor.routeStartTick === later.dayTick,
-        what + ': the stamp should end at the current tick, it is ' + actor.routeStartTick);
-      assert(result.routeStartTick === later.dayTick, what + ': the result should report the stamp');
+      assert(actor.lastTripTick === later.dayTick,
+        what + ': the stamp should end at the current tick, it is ' + actor.lastTripTick);
+      assert(result.lastTripTick === later.dayTick, what + ': the result should report the stamp');
     }
 
     // ...including the two paths that only ever charge a delay. A cleared stamp
     // reads as tick zero and charges the whole day to whatever measures next.
     const failure = resolveRouteBetweenFloors(makeTower(), { id: 'x', homeColumn: 0 }, 0, 5, later);
-    assert(failure.routeStartTick === later.dayTick, 'result -1 still re-arms the stamp');
+    assert(failure.lastTripTick === later.dayTick, 'result -1 still re-arms the stamp');
   },
 
   'a floor the carrier does not serve is not routable'() {
@@ -919,7 +919,7 @@ export const tests = {
     assert(up.token === carrierToken(2, 1) && up.token === 0x40 + 2,
       'an upward token is 0x40 + carrier id, got 0x' + up.token.toString(16));
     assert(up.waitingFloor === 0, 'the rider waits on the source floor');
-    assert(actor.routeStartTick === clock.dayTick, 'the route-start timestamp is the current day tick');
+    assert(actor.lastTripTick === clock.dayTick, 'the route-start timestamp is the current day tick');
     assert(floorQueueCount(carrier, 0, 1) === 1, 'the request should be on the up ring at floor 0');
 
     const down = resolveRouteBetweenFloors(tower, { id: 'w2', homeColumn: 0 }, 10, 0, clock);

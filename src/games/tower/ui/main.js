@@ -137,7 +137,36 @@ function applyRoutingDelay(delay, actor) {
  * that opens the rental gate in the first place.
  */
 function runDailySweep() {
+  // The 3-day cashflow cadence. `specs/TIME.md` checkpoint 2533 and
+  // `specs/PEOPLE.md` § Reset: trip counters clear on this pass, via
+  // `activate_family_cashflow_if_operational`.
+  //
+  // Without it stress is a LIFETIME record instead of a rolling judgement of
+  // the last three days, so a tower carries its worst morning forever and can
+  // never recover from a bad hour. Nothing called it for a day; every office
+  // in a six-day run sat permanently at grade 0.
+  //
+  // TODO(parity): this belongs in a real checkpoint-2533 body alongside the
+  // ledger rollover, once someone writes the adapter between the tower model
+  // and `economy.js`'s `runLedgerCheckpoint`. The cadence is right here; the
+  // home is not.
+  const cashflowDay = tower.clock.dayCounter % 3 === 0;
+
   for (const { object, occupants } of offices(tower)) {
+    // Counters clear BEFORE the measurement, not after, and not gated on
+    // `occupied_flag`.
+    //
+    // Gating it on the flag deadlocks the tower: a failing office is
+    // deactivated, which CLEARS the flag, which blocks the reset, which
+    // freezes its stress, which keeps its grade at 0 forever — so the flag
+    // never returns and not one of its workers ever tries again. Measured:
+    // every office dead from day 2 of a nine-day run, trips frozen at 1218.
+    //
+    // `FACILITIES.md` § occupied_flag says the flag is "re-set every 3 days
+    // for offices/condos/retail". That is what makes the tower RECOVERABLE:
+    // clear the history, re-measure from zero, and a tower whose lifts got
+    // better gets its tenants back within a cycle.
+    if (cashflowDay) resetFacilitySimTripCounters(occupants);
     recomputeOfficeOperationalStatus(tower, object, occupants);
     deactivateIfFailing(tower, object, occupants);
   }
