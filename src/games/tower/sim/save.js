@@ -39,6 +39,7 @@
  * carry, so the fourth one fails a test instead of a playthrough.
  */
 import { makeRng } from './rng.js';
+import { ledgerFor } from './ledger-adapter.js';
 import { createActor, createObject, isRented, population } from './state.js';
 
 export const SAVE_SCHEMA = 'tower-save/v1';
@@ -178,7 +179,25 @@ export function restore(blob) {
   delete tower.routeTables;
 
   reserveIdsAbove(tower);
-  return { ok: true, world: { tower, ledger: { ...blob.ledger } }, summary: blob.summary ?? summarise({ tower, ledger: blob.ledger }) };
+  // ⚠️ `ledgerFor(tower)`, not `{ ...blob.ledger }`.
+  //
+  // The ledger is a VIEW over `tower.cash` and the tower's own bucket objects,
+  // so spreading it detaches it: the accessors flatten to the numbers they held
+  // at that instant. A loaded game would then have two balances again —
+  // construction debiting the copy, rent crediting the tower — which is exactly
+  // the defect `ui/seed.js` was fixed for, reintroduced on the path nobody
+  // walks until an hour in.
+  //
+  // Everything the view needs already rode over in `blob.tower`: `cash`,
+  // `cycleBaseCash` and the three ledgers are plain fields. `blob.ledger` is
+  // kept in the file as the readable record of what the balances were, and is
+  // still what the version and completeness checks read, but it is not the
+  // object the game plays with.
+  return {
+    ok: true,
+    world: { tower, ledger: ledgerFor(tower) },
+    summary: blob.summary ?? summarise({ tower, ledger: blob.ledger }),
+  };
 }
 
 /**

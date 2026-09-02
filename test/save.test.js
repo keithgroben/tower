@@ -20,6 +20,7 @@ import {
   recomputeOfficeOperationalStatus,
 } from '../src/games/tower/sim/office.js';
 import { resolveRouteBetweenFloors } from '../src/games/tower/sim/routing.js';
+import { starGatesOf, towerActivity } from '../src/games/tower/sim/progression.js';
 import {
   CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
   applyLocalSegmentDelay, applyQueueFullDelay, computeRuntimeTileStressAverage,
@@ -187,7 +188,7 @@ export const tests = {
     assert(actorIds.size === back.world.tower.actors.length, 'two actors share an id');
   },
 
-  'the ledger travels, because money is not part of the tower any more'() {
+  'the balance travels'() {
     const world = seedDemoWorld({ seed: 1 });
     applyAction(world, { type: 'build', what: 'office', floor: 40, left: 20 });
     const spent = world.ledger.cash;
@@ -196,6 +197,75 @@ export const tests = {
     const back = restore(JSON.parse(JSON.stringify(snapshot(world))));
     assert(back.world.ledger.cash === spent, 'cash came back as ' + back.world.ledger.cash);
     assert(back.world.ledger !== world.ledger, 'and not as the same object');
+  },
+
+  /**
+   * ⚠️ **A loaded game must have one balance, not two.**
+   *
+   * The ledger is a *view* over `tower.cash` and the tower's own bucket
+   * objects, so `{ ...ledger }` does not copy it — it flattens the accessors to
+   * whatever they held at that instant and hands back a detached number. Which
+   * is precisely the defect `ui/seed.js` was fixed for a commit earlier, and
+   * `restore` had it too: two branches, both internally right, merged clean.
+   *
+   * It bites nobody until an hour in, because it needs a load to reach it. The
+   * player it hits is the one who trusted the game enough to come back to it.
+   *
+   * Behavioural on both sides, deliberately: spend through the command seam and
+   * earn through the ledger's buckets, then check the *tower* moved. Asserting
+   * `ledger.cash === tower.cash` alone would pass on a detached copy taken one
+   * instruction earlier.
+   */
+  '⚠️ a loaded tower spends and earns the same money'() {
+    const world = seedDemoWorld({ seed: 1 });
+    const back = restore(JSON.parse(JSON.stringify(snapshot(world))));
+    assert(back.ok, back.reason);
+    const { tower, ledger } = back.world;
+
+    assert(ledger.cash === tower.cash,
+      'a loaded game opened with two balances: $' + ledger.cash + ' vs $' + tower.cash);
+
+    const before = tower.cash;
+    const built = applyAction(back.world, { type: 'build', what: 'office', floor: 41, left: 20 });
+    assert(built.ok, 'the build was refused: ' + built.reason);
+    assert(tower.cash === before - built.cost,
+      'a build after a load charged $' + built.cost + ' and left `tower.cash` at $' + tower.cash
+      + ' — the load handed out a detached ledger, so the HUD is drawing a number nothing charges');
+
+    // And the other direction: rent credits the tower, and the loaded ledger
+    // has to see it. A detached copy would sit still while the tower earns.
+    tower.cash += 1000;
+    assert(ledger.cash === before - built.cost + 1000,
+      'the tower earned $1,000 and the loaded ledger still reads $' + ledger.cash);
+
+    // The buckets are the tower's own objects too — economy.js records into
+    // `ledger.income`, and `ui/main.js` reads `tower.incomeLedger`.
+    ledger.income.office += 500;
+    assert(tower.incomeLedger.office === ledger.income.office,
+      'the income bucket is a copy: the ledger says ' + ledger.income.office
+      + ' and the tower says ' + tower.incomeLedger.office);
+  },
+
+  /**
+   * The star ladder is tower state, and it arrived in a different branch from
+   * the save. Nothing in `snapshot` names these fields — they ride over because
+   * it copies every key it is not told to rebuild — so this is here to fail if
+   * that ever becomes an allow-list and quietly drops the only thing in the
+   * game that says you are winning.
+   */
+  'the star ladder and its latched gates survive a load'() {
+    const world = seedDemoWorld({ seed: 1 });
+    world.tower.starCount = 3;
+    starGatesOf(world.tower).securityPlaced = true;
+    world.tower.populationLedger.office = 420;
+
+    const back = restore(JSON.parse(JSON.stringify(snapshot(world))));
+    assert(back.world.tower.starCount === 3,
+      'a 3-star tower came back at ' + back.world.tower.starCount + ' stars');
+    assert(starGatesOf(back.world.tower).securityPlaced === true,
+      'a latched gate came back unlatched, so the player is asked to build it twice');
+    assert(towerActivity(back.world.tower) === 420,
+      'the activity that earned those stars came back as ' + towerActivity(back.world.tower));
   },
 
   'a snapshot does not alias the running tower'() {
