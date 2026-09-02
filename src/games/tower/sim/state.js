@@ -100,6 +100,10 @@ export const OCCUPANTS = {
  * So an office's population and its actor count are the same number by
  * coincidence, and reading one for the other is a trap the moment a shop
  * exists.
+ *
+ * ⚠️ **Not yet read by `population()`** — see the note at its call site. It is
+ * here so the commercial family lands against a rule that already exists
+ * rather than inventing a second one.
  */
 export const POPULATION_CONTRIBUTION = {
   [FAMILY.office]: 6,
@@ -337,7 +341,14 @@ export function population(tower) {
     // set on a VACANT office before anyone has reached it — so counting on it
     // returned 252 people in a tower where 216 had a lease, six offices' worth
     // of staff for offices nobody could get to.
-    if (isRented(o.unitStatus)) total += POPULATION_CONTRIBUTION[o.family] ?? OCCUPANTS[o.family] ?? 0;
+    // TODO(parity): read POPULATION_CONTRIBUTION here once a commercial family
+    // machine exists. It cannot be wired yet: the seed marks shops `let` so
+    // they draw as shops, and nothing simulates them renting — so counting
+    // retail's 10 would report 40 residents in a tower where nobody has moved
+    // in. A number that arrives before the thing it counts is exactly the
+    // accounting hole this repo keeps a list of, so the rule sits unwired and
+    // documented rather than wired and wrong.
+    if (isRented(o.unitStatus)) total += OCCUPANTS[o.family] ?? 0;
   }
   return total;
 }
