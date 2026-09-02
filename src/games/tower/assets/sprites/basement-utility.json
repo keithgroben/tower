@@ -1,0 +1,11 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "idle": {
+      "col": 0,
+      "frames": 2,
+      "speed": "idle"
+    }
+  }
+}

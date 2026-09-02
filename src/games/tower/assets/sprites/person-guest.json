@@ -1,0 +1,36 @@
+{
+  "frameW": 16,
+  "frameH": 16,
+  "animations": {
+    "walk-left": {
+      "col": 0,
+      "frames": 2,
+      "speed": "walk"
+    },
+    "walk-right": {
+      "col": 2,
+      "frames": 2,
+      "speed": "walk"
+    },
+    "stand": {
+      "col": 4,
+      "frames": 1
+    },
+    "fidget": {
+      "col": 5,
+      "frames": 1
+    },
+    "wait": {
+      "col": 6,
+      "frames": 1
+    },
+    "wait-annoyed": {
+      "col": 7,
+      "frames": 1
+    },
+    "luggage": {
+      "col": 8,
+      "frames": 1
+    }
+  }
+}

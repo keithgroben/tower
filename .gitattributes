@@ -1,0 +1,6 @@
+# Normalise to LF in the index. A CRLF working tree reads as permanently
+# dirty, which is what let mirror autosave fire on every scan while the real
+# sync never ran. Cheaper to set on day one than to unpick later.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

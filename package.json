@@ -1,0 +1,21 @@
+{
+  "name": "tower",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A faithful SimTower core. Pure headless sim, disposable renderer.",
+  "scripts": {
+    "dev": "vite",
+    "test": "node test/run.js",
+    "sim": "node harness/run.js",
+    "sweep": "node harness/sweep.js",
+    "build": "vite build",
+    "preview": "vite preview --port 5175"
+  },
+  "devDependencies": {
+    "solid-js": "^1.9.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-solid": "^2.11.14"
+  }
+}

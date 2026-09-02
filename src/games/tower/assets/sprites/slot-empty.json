@@ -1,0 +1,22 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "empty": {
+      "col": 0,
+      "frames": 1
+    },
+    "selected": {
+      "col": 1,
+      "frames": 1
+    },
+    "unavailable": {
+      "col": 2,
+      "frames": 1
+    },
+    "highlighted": {
+      "col": 3,
+      "frames": 1
+    }
+  }
+}

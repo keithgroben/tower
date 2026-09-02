@@ -1,0 +1,18 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "empty": {
+      "col": 0,
+      "frames": 1
+    },
+    "one-car": {
+      "col": 1,
+      "frames": 1
+    },
+    "two-cars": {
+      "col": 2,
+      "frames": 1
+    }
+  }
+}

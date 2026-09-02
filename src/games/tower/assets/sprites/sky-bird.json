@@ -1,0 +1,10 @@
+{
+  "frameW": 10,
+  "frameH": 8,
+  "animations": {
+    "fly": {
+      "col": 0,
+      "frames": 1
+    }
+  }
+}

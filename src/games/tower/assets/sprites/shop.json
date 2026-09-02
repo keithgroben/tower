@@ -1,0 +1,26 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "vacant": {
+      "col": 0,
+      "frames": 1
+    },
+    "open-grocery": {
+      "col": 1,
+      "frames": 1
+    },
+    "open-cafe": {
+      "col": 2,
+      "frames": 1
+    },
+    "open-awning": {
+      "col": 3,
+      "frames": 1
+    },
+    "closed-night": {
+      "col": 4,
+      "frames": 1
+    }
+  }
+}

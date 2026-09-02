@@ -1,0 +1,78 @@
+{
+  "frameW": 32,
+  "frameH": 32,
+  "animations": {
+    "lobby": {
+      "col": 0,
+      "frames": 1
+    },
+    "dig": {
+      "col": 1,
+      "frames": 1
+    },
+    "stairs": {
+      "col": 2,
+      "frames": 1
+    },
+    "escalator": {
+      "col": 3,
+      "frames": 1
+    },
+    "shaft": {
+      "col": 4,
+      "frames": 1
+    },
+    "car": {
+      "col": 5,
+      "frames": 1
+    },
+    "express": {
+      "col": 6,
+      "frames": 1
+    },
+    "extend": {
+      "col": 7,
+      "frames": 1
+    },
+    "office": {
+      "col": 8,
+      "frames": 1
+    },
+    "condo": {
+      "col": 9,
+      "frames": 1
+    },
+    "shop": {
+      "col": 10,
+      "frames": 1
+    },
+    "hotel": {
+      "col": 11,
+      "frames": 1
+    },
+    "food": {
+      "col": 12,
+      "frames": 1
+    },
+    "parking": {
+      "col": 13,
+      "frames": 1
+    },
+    "medical": {
+      "col": 14,
+      "frames": 1
+    },
+    "security": {
+      "col": 15,
+      "frames": 1
+    },
+    "recycling": {
+      "col": 16,
+      "frames": 1
+    },
+    "demolish": {
+      "col": 17,
+      "frames": 1
+    }
+  }
+}

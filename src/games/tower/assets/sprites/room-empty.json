@@ -1,0 +1,22 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "office": {
+      "col": 0,
+      "frames": 1
+    },
+    "condo": {
+      "col": 1,
+      "frames": 1
+    },
+    "shop": {
+      "col": 2,
+      "frames": 1
+    },
+    "hotel": {
+      "col": 3,
+      "frames": 1
+    }
+  }
+}

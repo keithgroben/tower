@@ -1,0 +1,18 @@
+{
+  "frameW": 112,
+  "frameH": 32,
+  "animations": {
+    "small": {
+      "col": 0,
+      "frames": 1
+    },
+    "medium": {
+      "col": 1,
+      "frames": 1
+    },
+    "large": {
+      "col": 2,
+      "frames": 1
+    }
+  }
+}

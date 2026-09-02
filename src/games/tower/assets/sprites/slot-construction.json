@@ -1,0 +1,11 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "building": {
+      "col": 0,
+      "frames": 3,
+      "speed": "construction"
+    }
+  }
+}

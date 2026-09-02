@@ -1,0 +1,645 @@
+{
+  "$comment": "Ingest catalogue: one entry per delivered sheet. States are listed left to right, which is the order the strip is drawn in, and the column of each is derived from the frame counts before it. sidecars.gen.mjs writes the sidecars from this file, and test/sprites.test.js holds it level with spec/asset-request.md and with the real PNGs on disk.",
+  "ground-street": {
+    "frameW": 48,
+    "frameH": 16,
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "earth-fill": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "earth-edge": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "basement-empty": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "basement-parking": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "empty",
+        "frames": 1
+      },
+      {
+        "name": "one-car",
+        "frames": 1
+      },
+      {
+        "name": "two-cars",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "basement-utility": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "idle",
+        "frames": 2,
+        "speed": "idle"
+      }
+    ],
+    "fit": "stretch"
+  },
+  "foundation-slab": {
+    "frameW": 48,
+    "frameH": 6,
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "palette-icons": {
+    "frameW": 32,
+    "frameH": 32,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "lobby",
+        "frames": 1
+      },
+      {
+        "name": "dig",
+        "frames": 1
+      },
+      {
+        "name": "stairs",
+        "frames": 1
+      },
+      {
+        "name": "escalator",
+        "frames": 1
+      },
+      {
+        "name": "shaft",
+        "frames": 1
+      },
+      {
+        "name": "car",
+        "frames": 1
+      },
+      {
+        "name": "express",
+        "frames": 1
+      },
+      {
+        "name": "extend",
+        "frames": 1
+      },
+      {
+        "name": "office",
+        "frames": 1
+      },
+      {
+        "name": "condo",
+        "frames": 1
+      },
+      {
+        "name": "shop",
+        "frames": 1
+      },
+      {
+        "name": "hotel",
+        "frames": 1
+      },
+      {
+        "name": "food",
+        "frames": 1
+      },
+      {
+        "name": "parking",
+        "frames": 1
+      },
+      {
+        "name": "medical",
+        "frames": 1
+      },
+      {
+        "name": "security",
+        "frames": 1
+      },
+      {
+        "name": "recycling",
+        "frames": 1
+      },
+      {
+        "name": "demolish",
+        "frames": 1
+      }
+    ]
+  },
+  "office": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "vacant",
+        "frames": 1
+      },
+      {
+        "name": "occupied-day",
+        "frames": 2,
+        "speed": "idle"
+      },
+      {
+        "name": "occupied-night",
+        "frames": 1
+      },
+      {
+        "name": "stressed",
+        "frames": 1,
+        "speed": "blink"
+      }
+    ],
+    "fit": "stretch"
+  },
+  "condo": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "vacant",
+        "frames": 1
+      },
+      {
+        "name": "occupied-day",
+        "frames": 2,
+        "speed": "idle"
+      },
+      {
+        "name": "occupied-night",
+        "frames": 1
+      },
+      {
+        "name": "stressed",
+        "frames": 1,
+        "speed": "blink"
+      }
+    ],
+    "fit": "stretch"
+  },
+  "shop": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "vacant",
+        "frames": 1
+      },
+      {
+        "name": "open-grocery",
+        "frames": 1
+      },
+      {
+        "name": "open-cafe",
+        "frames": 1
+      },
+      {
+        "name": "open-awning",
+        "frames": 1
+      },
+      {
+        "name": "closed-night",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "hotel": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "vacant",
+        "frames": 1
+      },
+      {
+        "name": "booked-day",
+        "frames": 1
+      },
+      {
+        "name": "booked-night",
+        "frames": 1
+      },
+      {
+        "name": "poor-review",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "slot-empty": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "empty",
+        "frames": 1
+      },
+      {
+        "name": "selected",
+        "frames": 1
+      },
+      {
+        "name": "unavailable",
+        "frames": 1
+      },
+      {
+        "name": "highlighted",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "slot-construction": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "building",
+        "frames": 3,
+        "speed": "construction"
+      }
+    ],
+    "fit": "stretch"
+  },
+  "lobby": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "day",
+        "frames": 1
+      },
+      {
+        "name": "night",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "lobby-wing": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "day",
+        "frames": 1
+      },
+      {
+        "name": "night",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "floor-slab": {
+    "frameW": 48,
+    "frameH": 4,
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "roof-cap": {
+    "frameW": 48,
+    "frameH": 12,
+    "states": [
+      {
+        "name": "plain",
+        "frames": 1
+      },
+      {
+        "name": "antenna",
+        "frames": 1
+      }
+    ],
+    "fit": "contain"
+  },
+  "shaft-column": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "elevator-car": {
+    "frameW": 40,
+    "frameH": 26,
+    "states": [
+      {
+        "name": "closed",
+        "frames": 1
+      },
+      {
+        "name": "opening",
+        "frames": 1
+      },
+      {
+        "name": "open",
+        "frames": 1
+      }
+    ],
+    "fit": "contain"
+  },
+  "elevator-car-express": {
+    "frameW": 40,
+    "frameH": 26,
+    "states": [
+      {
+        "name": "closed",
+        "frames": 1
+      },
+      {
+        "name": "opening",
+        "frames": 1
+      },
+      {
+        "name": "open",
+        "frames": 1
+      }
+    ],
+    "fit": "contain"
+  },
+  "stairs-segment": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "tile",
+        "frames": 2
+      }
+    ]
+  },
+  "escalator-segment": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "tile",
+        "frames": 2
+      }
+    ]
+  },
+  "person-worker": {
+    "frameW": 16,
+    "frameH": 16,
+    "states": [
+      {
+        "name": "walk-left",
+        "frames": 2,
+        "speed": "walk"
+      },
+      {
+        "name": "walk-right",
+        "frames": 2,
+        "speed": "walk"
+      },
+      {
+        "name": "stand",
+        "frames": 1
+      },
+      {
+        "name": "fidget",
+        "frames": 1
+      },
+      {
+        "name": "wait",
+        "frames": 1
+      },
+      {
+        "name": "wait-annoyed",
+        "frames": 1
+      }
+    ],
+    "fit": "contain"
+  },
+  "person-resident": {
+    "frameW": 16,
+    "frameH": 16,
+    "states": [
+      {
+        "name": "walk-left",
+        "frames": 2,
+        "speed": "walk"
+      },
+      {
+        "name": "walk-right",
+        "frames": 2,
+        "speed": "walk"
+      },
+      {
+        "name": "stand",
+        "frames": 1
+      },
+      {
+        "name": "fidget",
+        "frames": 1
+      },
+      {
+        "name": "wait",
+        "frames": 1
+      },
+      {
+        "name": "wait-annoyed",
+        "frames": 1
+      },
+      {
+        "name": "carrying",
+        "frames": 1
+      }
+    ],
+    "fit": "contain"
+  },
+  "person-guest": {
+    "frameW": 16,
+    "frameH": 16,
+    "states": [
+      {
+        "name": "walk-left",
+        "frames": 2,
+        "speed": "walk"
+      },
+      {
+        "name": "walk-right",
+        "frames": 2,
+        "speed": "walk"
+      },
+      {
+        "name": "stand",
+        "frames": 1
+      },
+      {
+        "name": "fidget",
+        "frames": 1
+      },
+      {
+        "name": "wait",
+        "frames": 1
+      },
+      {
+        "name": "wait-annoyed",
+        "frames": 1
+      },
+      {
+        "name": "luggage",
+        "frames": 1
+      }
+    ],
+    "fit": "contain"
+  },
+  "sky-cloud": {
+    "frameW": 112,
+    "frameH": 32,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "small",
+        "frames": 1
+      },
+      {
+        "name": "medium",
+        "frames": 1
+      },
+      {
+        "name": "large",
+        "frames": 1
+      }
+    ]
+  },
+  "sky-bird": {
+    "frameW": 10,
+    "frameH": 8,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "fly",
+        "frames": 1
+      }
+    ]
+  },
+  "sky-plane": {
+    "frameW": 34,
+    "frameH": 11,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "fly",
+        "frames": 1
+      }
+    ]
+  },
+  "sky-balloon": {
+    "frameW": 24,
+    "frameH": 32,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "drift",
+        "frames": 1
+      }
+    ]
+  },
+  "sky-blimp": {
+    "frameW": 38,
+    "frameH": 16,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "drift",
+        "frames": 1
+      }
+    ]
+  },
+  "sky-explorer": {
+    "frameW": 34,
+    "frameH": 42,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "drift",
+        "frames": 1
+      }
+    ]
+  },
+  "sky-stunt": {
+    "frameW": 64,
+    "frameH": 27,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "fly",
+        "frames": 1
+      }
+    ]
+  },
+  "room-empty": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "office",
+        "frames": 1
+      },
+      {
+        "name": "condo",
+        "frames": 1
+      },
+      {
+        "name": "shop",
+        "frames": 1
+      },
+      {
+        "name": "hotel",
+        "frames": 1
+      }
+    ]
+  }
+}

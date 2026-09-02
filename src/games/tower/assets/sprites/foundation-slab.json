@@ -1,0 +1,10 @@
+{
+  "frameW": 48,
+  "frameH": 6,
+  "animations": {
+    "tile": {
+      "col": 0,
+      "frames": 1
+    }
+  }
+}

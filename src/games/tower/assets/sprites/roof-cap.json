@@ -1,0 +1,14 @@
+{
+  "frameW": 48,
+  "frameH": 12,
+  "animations": {
+    "plain": {
+      "col": 0,
+      "frames": 1
+    },
+    "antenna": {
+      "col": 1,
+      "frames": 1
+    }
+  }
+}

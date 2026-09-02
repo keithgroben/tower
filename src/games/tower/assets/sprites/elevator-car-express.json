@@ -1,0 +1,18 @@
+{
+  "frameW": 40,
+  "frameH": 26,
+  "animations": {
+    "closed": {
+      "col": 0,
+      "frames": 1
+    },
+    "opening": {
+      "col": 1,
+      "frames": 1
+    },
+    "open": {
+      "col": 2,
+      "frames": 1
+    }
+  }
+}

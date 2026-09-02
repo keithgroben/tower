@@ -1,0 +1,10 @@
+{
+  "frameW": 34,
+  "frameH": 42,
+  "animations": {
+    "drift": {
+      "col": 0,
+      "frames": 1
+    }
+  }
+}

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab — headless runs, visualized</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #1b2430; --line: #2a3746;
+    --ink: #dbe4ee; --ink-2: #8fa4b8; --ink-3: #52657a;
+    --accent: #8ecae6; --warn: #ffb703;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--mono); font-size: 12px; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 18px 0; }
+  h1 { font-size: 13px; letter-spacing: .18em; color: var(--accent); margin: 0; }
+  h1 small { color: var(--ink-3); letter-spacing: .04em; font-size: 10px; margin-left: 10px; }
+  header a { color: var(--ink-3); font-size: 10px; margin-left: auto; }
+
+  #controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 18px; }
+  #controls label { color: var(--ink-3); font-size: 10px; letter-spacing: .08em; }
+  select, input[type="number"], input[type="text"] {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 4px; font-family: var(--mono); font-size: 11px; padding: 5px 7px;
+  }
+  input[type="number"] { width: 64px; }
+  button {
+    font-family: var(--mono); font-size: 11px; padding: 6px 12px; cursor: pointer;
+    background: #223041; color: #cfe0ee; border: 1px solid var(--line); border-radius: 4px;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  #run { color: #10271f; background: #3ddc97; border-color: #3ddc97; font-weight: 700; }
+
+  #policies { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 0 18px 4px; }
+  .policy-toggle { display: flex; align-items: center; gap: 5px; font-size: 11px; cursor: pointer; }
+  .policy-chip { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
+  .policy-toggle input { accent-color: var(--accent); }
+  .policy-toggle .off { color: var(--ink-3); text-decoration: line-through; }
+
+  #knobs-box { margin: 6px 18px; border: 1px solid var(--line); border-radius: 6px; }
+  #knobs-box summary { color: var(--ink-2); font-size: 10px; letter-spacing: .1em; cursor: pointer; padding: 7px 10px; }
+  #knob-filter { width: 260px; margin: 0 10px 8px; }
+  #knob-hint { color: var(--ink-3); font-size: 10px; padding: 0 10px 8px; }
+  #knob-list { max-height: 240px; overflow-y: auto; padding: 0 10px 8px; }
+  .knob-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+  .knob-row code { color: var(--ink-2); font-size: 10px; flex: 1; }
+  .knob-row input { width: 110px; }
+  .knob-row.changed code { color: var(--warn); }
+  #knob-changes { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px; }
+  .change-chip { background: rgba(255,183,3,.1); border: 1px solid rgba(255,183,3,.4); color: var(--warn);
+    border-radius: 3px; font-size: 9px; padding: 2px 6px; cursor: pointer; }
+
+  #progress { height: 3px; background: var(--panel); margin: 4px 18px; border-radius: 2px; overflow: hidden; }
+  #progress div { height: 100%; width: 0%; background: var(--accent); transition: width .15s; }
+  #status { color: var(--ink-3); font-size: 10px; padding: 0 18px 6px; min-height: 14px; }
+
+  #spread { margin: 8px 18px; padding: 9px 12px; border-left: 3px solid var(--warn);
+    background: rgba(255,183,3,.05); font-size: 11px; line-height: 1.5; display: none; }
+  #spread b { color: var(--warn); letter-spacing: .08em; }
+
+  #legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 8px 18px 0; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-2); }
+
+  #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(430px, 1fr)); gap: 14px; padding: 12px 18px; }
+  .chart-card { background: rgba(27,36,48,.45); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px 6px; }
+  .chart-card h2 { font-size: 10px; letter-spacing: .14em; color: var(--ink-2); margin: 0 0 6px; font-weight: 600; }
+  .chart-card canvas { width: 100%; height: 190px; display: block; cursor: crosshair; }
+
+  #tooltip { position: fixed; pointer-events: none; display: none; z-index: 10;
+    background: #10161d; border: 1px solid var(--line); border-radius: 4px;
+    padding: 6px 9px; font-size: 10px; line-height: 1.6; white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+  #tooltip .tt-day { color: var(--ink-3); }
+  #tooltip .tt-row { display: flex; align-items: center; gap: 6px; }
+  #tooltip .tt-row i { width: 8px; height: 8px; border-radius: 2px; }
+  #tooltip .tt-row span { color: var(--ink-2); }
+  #tooltip .tt-row b { margin-left: auto; padding-left: 12px; color: var(--ink); font-weight: 600; }
+
+  #table-box { margin: 4px 18px 20px; border: 1px solid var(--line); border-radius: 6px; }
+  #table-box summary { color: var(--ink-2); font-size: 10px; letter-spacing: .1em; cursor: pointer; padding: 7px 10px; }
+  #final-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  #final-table th, #final-table td { text-align: right; padding: 4px 10px; border-top: 1px solid var(--line); }
+  #final-table th { color: var(--ink-3); font-weight: 600; font-size: 10px; letter-spacing: .06em; }
+  #final-table td:first-child, #final-table th:first-child { text-align: left; }
+  #final-table .dead { color: #ef476f; }
+  #final-table .won { color: #3ddc97; font-weight: 700; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>LAB<small>headless runs, visualized — the sim at full speed, no waiting</small></h1>
+    <a href="/index.html">← games</a>
+  </header>
+
+  <div id="controls">
+    <label>GAME</label><select id="game"></select>
+    <label>DAYS</label><input id="days" type="number" min="5" max="2000" value="60" title="more days = longer runs; 60 days × 1 seed ≈ half a minute, 120 × 2 ≈ four minutes">
+    <label>SEEDS</label><input id="seeds" type="number" min="1" max="10" value="1" title="seeds average out luck; add more once a result looks interesting">
+    <button id="run">▶ run</button>
+    <span id="status"></span>
+  </div>
+  <div id="policies"></div>
+
+  <details id="knobs-box">
+    <summary>TUNING KNOBS — override any config number, then re-run</summary>
+    <input id="knob-filter" type="text" placeholder="filter… e.g. elevator, rent, capacity">
+    <div id="knob-hint">Type to search every numeric setting in the game's config. Changes apply to the next run only — the real game is untouched.</div>
+    <div id="knob-list"></div>
+    <div id="knob-changes"></div>
+  </details>
+
+  <div id="progress"><div></div></div>
+  <div id="spread"></div>
+  <div id="legend"></div>
+  <div id="charts"></div>
+
+  <details id="table-box" open>
+    <summary>FINAL-DAY TABLE</summary>
+    <table id="final-table"></table>
+  </details>
+
+  <div id="tooltip"></div>
+  <script type="module" src="./lab.js"></script>
+</body>
+</html>

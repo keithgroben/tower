@@ -1,0 +1,14 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "day": {
+      "col": 0,
+      "frames": 1
+    },
+    "night": {
+      "col": 1,
+      "frames": 1
+    }
+  }
+}

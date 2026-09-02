@@ -1,0 +1,24 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "vacant": {
+      "col": 0,
+      "frames": 1
+    },
+    "occupied-day": {
+      "col": 1,
+      "frames": 2,
+      "speed": "idle"
+    },
+    "occupied-night": {
+      "col": 3,
+      "frames": 1
+    },
+    "stressed": {
+      "col": 4,
+      "frames": 1,
+      "speed": "blink"
+    }
+  }
+}

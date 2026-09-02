@@ -1,0 +1,22 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "vacant": {
+      "col": 0,
+      "frames": 1
+    },
+    "booked-day": {
+      "col": 1,
+      "frames": 1
+    },
+    "booked-night": {
+      "col": 2,
+      "frames": 1
+    },
+    "poor-review": {
+      "col": 3,
+      "frames": 1
+    }
+  }
+}
