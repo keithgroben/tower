@@ -28,6 +28,7 @@
  */
 import { tickCarriers } from '../sim/elevators.js';
 import { createScheduler } from '../sim/scheduler.js';
+import { advanceSimTripCounters, rebaseSimElapsedFromClock } from '../sim/stress.js';
 import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
 
 /**
@@ -36,7 +37,7 @@ import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
  *                 dispatch handlers. Passed in rather than imported so this
  *                 file keeps knowing nothing about any specific family.
  */
-export function makeTowerScheduler(tower, families = {}) {
+export function makeTowerScheduler(tower, families = {}, arrivals = {}) {
   /** An actor by id. The carrier queues hold ids, not references. */
   const actorById = (ref) => tower.actors.find((a) => a && a.id === ref) ?? null;
 
@@ -56,9 +57,17 @@ export function makeTowerScheduler(tower, families = {}) {
     onArrive: (ref, floor) => {
       const actor = actorById(ref);
       if (!actor) return;
-      actor.anchorFloor = floor;
       actor.waitingFloor = null;
       actor.route = null;
+      // The ride is over: rebase the elapsed span and count the trip. The
+      // router reports arrivals as `{rebaseElapsed, advanceTripCounters}`, and
+      // this is the ONE end of an accepted leg where the trip is counted —
+      // counting at both ends halves the apparent stress.
+      rebaseSimElapsedFromClock(actor, tower.clock.dayTick);
+      advanceSimTripCounters(actor);
+      // Then the family says what arriving means. Without this the worker
+      // never leaves its in-transit state.
+      arrivals[actor.family]?.(actor, floor);
     },
     onRequeueFailure: (ref) => {
       const actor = actorById(ref);

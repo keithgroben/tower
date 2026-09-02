@@ -49,12 +49,99 @@ function reportFailure(what, error) {
 window.addEventListener('error', (e) => reportFailure('uncaught', e.error ?? e.message));
 window.addEventListener('unhandledrejection', (e) => reportFailure('promise', e.reason));
 
+import { FAMILY } from '../sim/state.js';
+import {
+  deactivateIfFailing, officeArrival, officeFamilyHandler, offices,
+  recomputeOfficeOperationalStatus,
+} from '../sim/office.js';
+import { resolveRouteBetweenFloors } from '../sim/routing.js';
+import {
+  CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
+  applyLocalSegmentDelay, stampRouteStart,
+  applyQueueFullDelay,
+  recordNoRouteFailure,
+} from '../sim/stress.js';
+
 const canvas = $('view');
 const tower = seedDemoTower({ seed: 1 });
-// `families` is empty: nothing in sim/ implements one yet. See ui/tick.js.
-// Landing `sim/office.js` is a two-line edit here — the rent moment in
-// `render/canvas.js` watches `officeIsLet()` and needs no change either way.
-const scheduler = makeTowerScheduler(tower, {});
+
+/**
+ * **The loop, wired.**
+ *
+ * Family 7 asks the router whether a worker can get from the lobby to its
+ * office. If the route resolves the office rents; if it does not, the worker
+ * waits and tries again and the office stays FOR RENT. Nothing here decides
+ * occupancy — transport does.
+ */
+const scheduler = makeTowerScheduler(tower, {
+  [FAMILY.office]: officeFamilyHandler({
+    resolveRoute: (t, actor, from, to, clock, options) =>
+      resolveRouteBetweenFloors(t, actor, from, to, clock, options),
+    // Every delay the router reports is priced by the stress pipeline, which
+    // owns those constants. The router reports events; it never prices them.
+    onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    onRent: () => { rentedThisFrame++; },
+  }),
+}, {
+  [FAMILY.office]: officeArrival,
+});
+
+let rentedThisFrame = 0;
+
+/**
+ * Route delays -> stress, the one seam that must not double-count.
+ *
+ * The actor arrives as the second argument because the router does not echo
+ * it onto the delay. Every kind the router can emit is handled here; an
+ * unhandled kind is a silently unpriced delay, which is how stress stayed at
+ * zero the first time this was wired.
+ */
+function applyRoutingDelay(delay, actor) {
+  if (!actor) return;
+  switch (delay.kind) {
+    case 'no-route': return void recordNoRouteFailure(actor);
+    case 'local-transit': return void applyLocalSegmentDelay(actor, delay.modeAndSpan);
+    case 'queue-full': return void applyQueueFullDelay(actor);
+    case 'distance': return void applyDistancePenalty(actor, {
+      heightMetricDelta: delay.heightMetricDelta,
+      emitDistanceFeedback: true,          // the router only emits when gated in
+      carrierMode: delay.carrierMode,
+    });
+    case 'boarding': {
+      // spec/DEVIATIONS.md A9: boarding re-stamps. The accumulate measures the
+      // WAIT on the floor and clears the stamp; without re-arming it the
+      // arrival rebase reads `last_trip_tick == 0` and charges the entire day
+      // tick, which clamps to 300. The symptom is uniformly maximal stress on
+      // every rider, insensitive to how good the lifts are — it reads as "the
+      // clamp is working" rather than as a bug. Omitting this line produced
+      // exactly that, and the predicted symptom is how it was found.
+      //
+      // Service carriers are exempt: the accumulate returns early for them and
+      // leaves the stamp intact, so there is nothing to re-arm. Both halves
+      // move together for the same reason.
+      accumulateElapsedDelayIntoCurrentSim(actor, tower.clock.dayTick, {
+        sourceFloor: delay.sourceFloor,
+        lobbyHeight: tower.lobbyHeight,
+        carrierMode: delay.carrierMode,
+      });
+      if (delay.carrierMode !== CARRIER_SERVICE) stampRouteStart(actor, tower.clock.dayTick);
+      return;
+    }
+    default: return;                        // requeue-failure and invalid-venue cost 0
+  }
+}
+
+/**
+ * The daily sweep. `recompute_object_operational_status` runs every day, and
+ * it is what sets `occupied_flag` on a freshly placed office — the bootstrap
+ * that opens the rental gate in the first place.
+ */
+function runDailySweep() {
+  for (const { object, occupants } of offices(tower)) {
+    recomputeOfficeOperationalStatus(tower, object, occupants);
+    deactivateIfFailing(tower, object, occupants);
+  }
+}
 const renderer = makeRenderer(canvas, { sprites: { onWarn: (m) => console.warn(m) } });
 const pump = makeTickPump();
 
@@ -240,7 +327,12 @@ function frame(nowMs) {
 
   try {
     // Real milliseconds in, whole ticks out. This is the entire boundary.
-    pump.advance(dtMs, speed, () => scheduler.tick(tower));
+    pump.advance(dtMs, speed, () => {
+      const moved = scheduler.tick(tower);
+      // The daily sweep. Without it `occupied_flag` is never set and no office
+      // can ever rent — the bootstrap in sim/office.js lives here.
+      if (moved.dayAdvanced) runDailySweep();
+    });
     // Render dt, not sim dt: the sky and the sprite clock run at wall speed so
     // a paused tower still has weather.
     renderer.draw(tower, dtMs);

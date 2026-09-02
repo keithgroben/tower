@@ -42,6 +42,9 @@ import {
   SPRITE_DIR, deliveredSheets, diskSpriteLoaders, pngSize, sheetAnimations, stubCanvas,
 } from './_headless.js';
 
+/** Renting sets BOTH: the lease band and the measured flag. */
+const letUnit = (o) => { o.occupiedFlag = true; o.unitStatus = 0; return o; };
+
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
 /** A tower holding one of everything the renderer knows how to draw. */
@@ -59,8 +62,8 @@ function towerWithEverything() {
   // Keeping the furious one separate from the calm one matters: a room takes
   // the WORST band among its occupants, so one red worker in the calm office
   // would silently hide `occupied-day` behind `stressed`.
-  offices[1].occupiedFlag = true;
-  offices[2].occupiedFlag = true;
+  letUnit(offices[1]);
+  letUnit(offices[2]);
   for (const actor of tower.actors) {
     if (actor.objectId !== offices[1].id) continue;
     actor.tripCount = 1;
@@ -69,15 +72,15 @@ function towerWithEverything() {
 
   // Retail: three let, so `object.id % 3` covers all three shop fronts, and one
   // left vacant so the empty shell is drawn too.
-  for (const shop of retail.slice(0, 3)) shop.occupiedFlag = true;
+  for (const shop of retail.slice(0, 3)) letUnit(shop);
   const residues = new Set(retail.slice(0, 3).map((s) => s.id % 3));
   assert(residues.size === 3, 'the let shops must cover all three storefronts, got ' + [...residues]);
 
   // Condos, arranged the same way: For Rent, let-and-furious, let-and-calm.
   const condos = [54, 60, 66].map((left) => placeObject(tower,
     { family: FAMILY.condo, floor: 7, left, right: left + 5 }, trips).object);
-  condos[1].occupiedFlag = true;
-  condos[2].occupiedFlag = true;
+  letUnit(condos[1]);
+  letUnit(condos[2]);
   for (const actor of tower.actors) {
     if (actor.objectId !== condos[1].id) continue;
     actor.tripCount = 1;

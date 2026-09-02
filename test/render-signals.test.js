@@ -37,30 +37,46 @@ function towerWithOffice() {
 
 const occupantsOf = (tower, object) => tower.actors.filter((a) => a.objectId === object.id);
 
+/** Renting sets BOTH: the lease band and the measured flag. */
+const letUnit = (o) => { o.occupiedFlag = true; o.unitStatus = 0; return o; };
+
 export const tests = {
   // ------------------------------------------------------- let vs For Rent
 
-  '⚠️ a freshly placed office is FOR RENT, even though unitStatus says rented'() {
-    // The trap, and the reason `officeIsLet` exists at all. `createObject` sets
-    // `unitStatus: 0` — inside the active band, so `isRented()` alone answers
-    // YES — while `occupiedFlag` is false, because `specs/facility/OFFICE.md`
-    // § Parity says placement does not set it.
-    //
-    // Reading `unitStatus` alone paints every office as occupied on the frame
-    // it is built, which erases the exact state this build exists to show:
-    // "For Rent, because nobody could reach it".
+  'a freshly placed office is FOR RENT, on both halves of the test'() {
+    // Placement puts an office at `unitStatus = 0x10` — the vacant band —
+    // per the reference implementation's own comment, "Office starts at 0x10
+    // (unoccupied)". `specs/facility/OFFICE.md` says 0 and is wrong; see
+    // spec/DEVIATIONS.md A11. This test previously asserted the buggy
+    // precondition, which is why `officeIsLet` was written as a conjunction.
     const { office } = towerWithOffice();
-    assert(isRented(office.unitStatus), 'precondition: the raw band reads as rented at placement');
-    assert(office.occupiedFlag === false, 'precondition: placement does not set occupiedFlag');
+    assert(!isRented(office.unitStatus), 'a placed office must be in the vacant band');
+    assert(office.occupiedFlag === false, 'placement does not set occupiedFlag');
     assert(officeIsLet(office) === false, 'a placed, unreached office must draw as vacant');
     assert(objectStatusTag(office) === 'FOR RENT', 'and it must say so');
+  },
+
+  /**
+   * The state that only exists because transport decides occupancy: an office
+   * whose tenants ARE being measured, which still nobody has reached. Reading
+   * either field alone would paint this one wrong.
+   */
+  'a measured but unreached office still says FOR RENT'() {
+    const { office } = towerWithOffice();
+    // ONLY the flag — deliberately not letUnit(). This test is about the state
+    // between being measured and being reached, so signing the lease here
+    // would erase the thing under test.
+    office.occupiedFlag = true;
+    assert(!isRented(office.unitStatus), 'the lease has not been signed');
+    assert(officeIsLet(office) === false, 'a measured office is not a let office');
+    assert(objectStatusTag(office) === 'FOR RENT', 'it must still read FOR RENT');
   },
 
   'the move-in flips it, and that is the whole loop'() {
     // `spec/simtower-loop.md` §4: a worker's route resolves, the office rents,
     // population +6. `occupiedFlag` IS that move-in — `population()` counts it.
     const { office } = towerWithOffice();
-    office.occupiedFlag = true;
+    letUnit(office);
     assert(officeIsLet(office), 'an occupied office in the active band is let');
     assert(objectStatusTag(office) === '', 'a let office carries no tag');
   },
@@ -70,7 +86,7 @@ export const tests = {
     // deactivation. Above 0x0f, so `isRented()` says no — and the room has to
     // go back to For Rent whichever of the two fields moved.
     const { office } = towerWithOffice();
-    office.occupiedFlag = true;
+    letUnit(office);
     office.unitStatus = DEACTIVATED_EARLY;
     assert(DEACTIVATED_EARLY > UNIT_STATUS.activeMax, 'precondition: 0x10 is outside the active band');
     assert(!officeIsLet(office), 'a deactivated unit is not let');
@@ -232,7 +248,7 @@ export const tests = {
 
   'a let office changes with the time of day, and with its tenants\' stress'() {
     const { office } = towerWithOffice();
-    office.occupiedFlag = true;
+    letUnit(office);
     assert(objectSprite(office, { night: false }).animation === 'occupied-day', 'daytime');
     assert(objectSprite(office, { night: true }).animation === 'occupied-night', 'night');
     assert(objectSprite(office, { night: true, stressed: true }).animation === 'stressed',
@@ -254,38 +270,47 @@ export const tests = {
     const { tower, office } = towerWithOffice();
     const seen = new Map();
 
-    office.occupiedFlag = true;
+    letUnit(office);
     assert(diffLetStatus(seen, tower).length === 0, 'the first sighting is recorded silently');
     assert(diffLetStatus(seen, tower).length === 0, 'and a steady state stays quiet');
 
-    // Now the thing this whole build exists to show.
-    office.occupiedFlag = false;
+    // Now the thing this whole build exists to show. The closure is written as
+    // the vacant band rather than by clearing the flag, because that is what
+    // deactivation actually does — `occupiedFlag` stays set on a unit whose
+    // tenants are still being measured.
+    office.unitStatus = DEACTIVATED_EARLY;
     const closed = diffLetStatus(seen, tower);
     assert(closed.length === 1 && closed[0].direction === 'vacated', 'a closure is seen');
-    office.occupiedFlag = true;
+    letUnit(office);
     const let_ = diffLetStatus(seen, tower);
     assert(let_.length === 1 && let_[0].direction === 'let', 'and so is a move-in');
     assert(let_[0].object === office, 'and it names the unit that changed');
   },
 
-  'the moment follows officeIsLet, so unitStatus alone can trigger it too'() {
-    // The detector must not hold a second opinion about what "let" means. An
-    // office deactivated through the status band has stopped being let just as
-    // surely as one that lost its tenants, and both have to show.
-    const { tower, office } = towerWithOffice();
-    const seen = new Map();
-    office.occupiedFlag = true;
-    diffLetStatus(seen, tower);
-    office.unitStatus = DEACTIVATED_EARLY;
-    const changes = diffLetStatus(seen, tower);
-    assert(changes.length === 1 && changes[0].direction === 'vacated',
-      'a deactivated unit reads as vacated');
+  'the moment follows officeIsLet, so EITHER half can trigger it'() {
+    // The detector must not hold a second opinion about what "let" means — it
+    // asks `officeIsLet()` and nothing else. So a unit that loses its lease
+    // band and a unit that stops being measured both show, and the renderer
+    // cannot drift from the one definition.
+    for (const close of [
+      { what: 'the lease band goes vacant', apply: (o) => { o.unitStatus = DEACTIVATED_EARLY; } },
+      { what: 'the unit stops being measured', apply: (o) => { o.occupiedFlag = false; } },
+    ]) {
+      const { tower, office } = towerWithOffice();
+      const seen = new Map();
+      letUnit(office);
+      diffLetStatus(seen, tower);
+      close.apply(office);
+      const changes = diffLetStatus(seen, tower);
+      assert(changes.length === 1 && changes[0].direction === 'vacated',
+        'no closure seen when ' + close.what);
+    }
   },
 
   'a demolished unit does not leave a stale answer behind'() {
     const { tower, office } = towerWithOffice();
     const seen = new Map();
-    office.occupiedFlag = true;
+    letUnit(office);
     diffLetStatus(seen, tower);
     assert(seen.has(office.id), 'precondition: it was recorded');
     tower.objects.delete(office.id);

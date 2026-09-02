@@ -106,7 +106,8 @@ export const tests = {
   'the initial stored state matches the reference field for field'() {
     // specs/facility/OFFICE.md § Parity: Placement And Stored State.
     const { object } = towerWithOffice();
-    assert(object.unitStatus === 0, 'rental status starts at the open-band value 0');
+    assert(object.unitStatus === 0x10, 'an office starts VACANT at 0x10, not in the open band');
+    assert(!isRented(object.unitStatus), 'a freshly placed office must not read as rented');
     assert(object.rentLevel === 1, 'default placement tier is 1, got ' + object.rentLevel);
     assert(object.activationTickCount === 0, 'activation age starts at 0');
     assert(object.rebuildCountdown === 12, 'the deferred-init countdown is 12 at placement');
@@ -116,7 +117,7 @@ export const tests = {
     // "operational score = unsampled / unset" — and NOT zero, because a zero
     // eval level is what closes an office. Scoring an unsampled office as 0
     // would evict a tenant it never had.
-    assert(object.evalLevel === null, 'a fresh office should be unsampled, not scored zero');
+    assert(object.evalLevel === 0xff, 'a fresh office should be unsampled (0xff), not scored zero');
   },
 
   'rental status is a comparison against 0x0f and nothing else'() {
