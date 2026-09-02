@@ -792,6 +792,10 @@ export function makeRenderer(canvas, options = {}) {
     // that nothing draws over it.
     noteLetChanges(tower);
     drawLetMoments(L, tower);
+    // Over everything, because it is about to BE everything: the ghost is what
+    // the next click does, and anything drawn on top of it would be describing
+    // a tower that is one moment out of date.
+    drawGhost(L);
 
     drawMinimap(L, tower);
   }
@@ -1134,6 +1138,94 @@ export function makeRenderer(canvas, options = {}) {
       }
       dotX += gap;
     }
+  }
+
+  // ---------------------------------------------------------- the ghost
+
+  /**
+   * What the next click would do, drawn where it would land.
+   *
+   * Set by `ui/main.js` from `preview()`, never computed here — the renderer
+   * does not decide whether a build is legal, it draws somebody else's answer.
+   * `null` clears it.
+   *
+   * @param preview `{ ok, reason, cost, footprint, note }` or null
+   */
+  function setGhost(preview) { ghost = preview ?? null; }
+  let ghost = null;
+
+  /**
+   * The ghost: a footprint, a price, and — when it will not land — the reason,
+   * in the sim's own words.
+   *
+   * Green for yes and red for no is the whole interface here, so the two must
+   * not be the only difference: a refused ghost also carries its sentence, and
+   * a permitted one carries its price. Colour alone is a poor signal and an
+   * unreadable one for the eight percent of players who cannot separate those
+   * two hues.
+   */
+  function drawGhost(L) {
+    if (!ghost?.footprint) return;
+    const ink = ghost.ok ? GOOD : BAD;
+    const box = ghostBox(L, ghost.footprint);
+    if (!box) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = ghost.ok ? 'rgba(6,214,160,0.18)' : 'rgba(239,71,111,0.20)';
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(ghost.ok ? [] : [5, 4]);
+    ctx.strokeRect(Math.round(box.x) + 1, Math.round(box.y) + 1, box.w - 2, box.h - 2);
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+
+    // The label sits ABOVE the footprint where there is room and inside it
+    // where there is not, so a ghost on the top floor does not write into the
+    // sky and a ghost at the bottom does not write into the earth.
+    const text = ghost.ok
+      ? (ghost.cost ? '$' + ghost.cost.toLocaleString('en-US') : 'free') + (ghost.note ? ' · ' + ghost.note : '')
+      : ghost.reason;
+    if (text) {
+      ctx.font = '700 10px ui-monospace, monospace';
+      const w = ctx.measureText(text).width + 10;
+      const above = box.y - 15 > 0;
+      const lx = Math.max(2, Math.min(W - w - 2, box.x + box.w / 2 - w / 2));
+      const ly = above ? box.y - 15 : Math.min(H - 15, box.y + 2);
+      ctx.fillStyle = 'rgba(11,15,20,0.9)';
+      roundRect(ctx, lx, ly, w, 13, 3);
+      ctx.fill();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = ink;
+      ctx.textAlign = 'left';
+      ctx.fillText(text, lx + 5, ly + 10);
+    }
+    ctx.restore();
+  }
+
+  /** Screen rectangle for a footprint, or null when it is off the world. */
+  function ghostBox(L, f) {
+    if (f.kind === 'room') {
+      return {
+        x: L.tileX(f.left), y: L.floorY(f.floor),
+        w: (f.right - f.left + 1) * L.tw, h: L.fh - 2,
+      };
+    }
+    if (f.kind === 'shaft') {
+      const top = L.floorY(f.top);
+      return { x: L.tileX(f.column), y: top, w: f.width * L.tw, h: L.floorY(f.bottom) + L.fh - top };
+    }
+    if (f.kind === 'carrier' && f.carrier) {
+      const top = L.floorY(f.carrier.topFloor);
+      return {
+        x: L.tileX(f.carrier.column), y: top,
+        w: f.carrier.shaftWidth * L.tw, h: L.floorY(f.carrier.bottomFloor) + L.fh - top,
+      };
+    }
+    return null;
   }
 
   // --------------------------------------------------- the rent moment
@@ -1683,9 +1775,21 @@ export function makeRenderer(canvas, options = {}) {
     return true;
   }
 
+  /** The shaft under a point, for the add-car tool. */
+  function carrierAt(tower, px, py) {
+    const floor = floorAt(px, py);
+    const tile = tileAt(px);
+    if (floor === null || tile === null) return null;
+    for (const c of tower.carriers) {
+      if (floor < c.bottomFloor || floor > c.topFloor) continue;
+      if (tile >= c.column && tile < c.column + c.shaftWidth) return c;
+    }
+    return null;
+  }
+
   return {
-    draw, resize, layout,
-    floorAt, tileAt, objectAt,
+    draw, resize, layout, setGhost,
+    floorAt, tileAt, objectAt, carrierAt,
     dragBy, setZoom, zoomBy, goTo, frameLobby, minimapAt, minimapJump,
     /** The sky, so a check can put something in the air on demand rather than
      *  waiting out a rate meant to make surprises rare. */

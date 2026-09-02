@@ -21,7 +21,9 @@ import { DAYPART_LABELS, formatClock } from '../sim/clock.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { STRESS_COLORS, makeRenderer, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
-import { seedDemoTower } from './seed.js';
+import { applyAction } from '../sim/actions.js';
+import { TOOLS, preview } from './build.js';
+import { seedDemoWorld } from './seed.js';
 import { makeTowerScheduler } from './tick.js';
 
 const $ = (id) => document.getElementById(id);
@@ -53,7 +55,7 @@ import {
   deactivateIfFailing, officeArrival, officeFamilyHandler, offices,
   recomputeOfficeOperationalStatus,
 } from '../sim/office.js';
-import { resolveRouteBetweenFloors } from '../sim/routing.js';
+import { rebuildRouteTables, resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
   CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
   applyLocalSegmentDelay, stampRouteStart,
@@ -62,7 +64,8 @@ import {
 } from '../sim/stress.js';
 
 const canvas = $('view');
-const tower = seedDemoTower({ seed: 1 });
+const world = seedDemoWorld({ seed: 1 });
+const { tower, ledger } = world;
 
 /**
  * **The loop, wired.**
@@ -224,16 +227,32 @@ canvas.addEventListener('pointermove', (e) => {
   if (Math.abs(dx) + Math.abs(dy) > 2) dragged = true;
   renderer.dragBy(dx, dy);
   lastX = e.clientX; lastY = e.clientY;
+  // Panning under a held tool must not leave a stale ghost behind.
+  if (activeTool) updateHover(px, py);
 });
 
 const endDrag = (e) => {
   if (!dragging) return;
   dragging = false;
-  if (!dragged) updateHover(...localPoint(e));
+  const point = localPoint(e);
+  // A drag pans; a click builds. Without the distinction, every pan would end
+  // by dropping an office wherever the pointer happened to stop.
+  if (!dragged && activeTool) build(...point);
+  if (!dragged) updateHover(...point);
   try { canvas.releasePointerCapture(e.pointerId); } catch { /* pointer already gone */ }
 };
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
+
+// Right-click puts the tool down. A modal cursor with no obvious way out is
+// the oldest interface trap there is, so there are three ways: the button
+// again, Escape, and this.
+canvas.addEventListener('contextmenu', (e) => {
+  if (!activeTool) return;
+  e.preventDefault();
+  selectTool(null);
+});
+canvas.addEventListener('pointerleave', () => renderer.setGhost(null));
 
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
@@ -242,8 +261,13 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { selectTool(null); return; }
+  const tool = TOOLS.find((t) => t.key === e.key);
+  if (tool) { selectTool(activeTool?.id === tool.id ? null : tool); return; }
   if (e.key === ' ') { e.preventDefault(); setSpeed(speed === 0 ? 1 : 0); return; }
-  const index = ['0', '1', '2', '3'].indexOf(e.key);
+  // Speeds move to the function keys' neighbours because 1-5 now pick tools.
+  // A player builds far more often than they change speed.
+  const index = ['q', 'w', 'e', 'r'].indexOf(e.key.toLowerCase());
   if (index >= 0) { setSpeed(SPEEDS[index]); return; }
   if (e.key === '+' || e.key === '=') renderer.zoomBy(1);
   if (e.key === '-' || e.key === '_') renderer.zoomBy(-1);
@@ -257,13 +281,88 @@ function localPoint(e) {
   return [e.clientX - r.left, e.clientY - r.top];
 }
 
+// ------------------------------------------------------------------ building
+//
+// Every player action in the game is these twenty lines: pick a tool, point at
+// a place, and send `applyAction` a command. Nothing here touches the tower,
+// and nothing here decides whether a move is legal — `preview()` guesses so the
+// ghost can be green or red before the click, and `applyAction` answers for
+// real when the click comes.
+
+let activeTool = null;
+
+function selectTool(tool) {
+  activeTool = tool ?? null;
+  for (const button of document.querySelectorAll('[data-tool]')) {
+    button.classList.toggle('on', button.dataset.tool === activeTool?.id);
+  }
+  canvas.style.cursor = activeTool ? 'crosshair' : '';
+  if (!activeTool) renderer.setGhost(null);
+}
+
+/** What is under the pointer, in the shape `preview()` wants. */
+const targetAt = (px, py) => ({
+  floor: renderer.floorAt(px, py),
+  tile: renderer.tileAt(px),
+  object: renderer.objectAt(tower, px, py),
+  carrier: renderer.carrierAt(tower, px, py),
+});
+
+/**
+ * Send the command and show the answer.
+ *
+ * The refusal shown is **`applyAction`'s**, never the ghost's. The ghost is a
+ * prediction and this is the authority; when they disagree the player sees the
+ * real sentence rather than a ghost that lied, and the disagreement is
+ * something a person can report instead of a silent wrong colour.
+ */
+function build(px, py) {
+  const target = targetAt(px, py);
+  const guess = preview(world, activeTool, target);
+  if (!guess.command) { say(guess.reason, false); return; }
+
+  const result = applyAction(world, guess.command);
+  if (!result.ok) { say(result.reason, false); return; }
+
+  // A new shaft or a demolition changes what can be reached, and a stale
+  // routing table is a route that silently fails. `sim/actions.js` raises the
+  // flag; somebody has to act on it.
+  if (tower.routeTablesDirty) { rebuildRouteTables(tower); tower.routeTablesDirty = false; }
+
+  say(built(activeTool, result), true);
+  drawHud();
+}
+
+const built = (tool, result) => (result.cost
+  ? `${tool.label} · $${result.cost.toLocaleString('en-US')}`
+  : `${tool.label} done`);
+
+/** One line under the tower. Refusals linger; confirmations fade. */
+let sayTimer = null;
+function say(text, ok) {
+  const el = $('answer');
+  el.textContent = text ?? '';
+  el.classList.toggle('bad', !ok);
+  clearTimeout(sayTimer);
+  if (text) sayTimer = setTimeout(() => { el.textContent = ''; }, ok ? 2200 : 4000);
+}
+
 /**
  * What is under the pointer, in one line above the tower. Not a panel and not
  * a selection: a room's real state is already drawn on the room.
+ *
+ * With a tool held it also drives the ghost, because "what is under the
+ * pointer" and "what would happen there" are the same question once you are
+ * holding something.
  */
 function updateHover(px, py) {
   const object = renderer.objectAt(tower, px, py);
   const floor = renderer.floorAt(px, py);
+
+  if (activeTool) {
+    renderer.setGhost(preview(world, activeTool, targetAt(px, py)));
+  }
+
   if (!object) {
     $('hover').textContent = floor === null ? '' : `floor ${floor}`;
     return;
@@ -336,7 +435,7 @@ function drawHud() {
   // accounting hole that reads as good news is the failure this repo keeps a
   // list of.
   $('people').textContent = `${tenants} living here · ${tower.actors.length} people`;
-  $('cash').textContent = '$' + tower.cash.toLocaleString('en-US');
+  $('cash').textContent = '$' + ledger.cash.toLocaleString('en-US');
 
   // The loop's own number: the stress of a TYPICAL worker.
   //
@@ -404,11 +503,35 @@ window.addEventListener('resize', resize);
 renderer.resize();
 renderer.frameLobby(tower);
 setSpeed(1);
+buildPalette();
 drawHud();
 requestAnimationFrame(frame);
+
+/**
+ * The palette, generated from `TOOLS` — which is itself generated from the
+ * sim's `BUILDABLE` and `SHAFT_KIND`. Add a buildable to the sim and a button
+ * appears here; there is no list in the markup to forget to update, which is
+ * the same reason the sprite preload is derived rather than written twice.
+ */
+function buildPalette() {
+  const bar = $('palette');
+  for (const tool of TOOLS) {
+    const button = document.createElement('button');
+    button.dataset.tool = tool.id;
+    button.title = tool.label + '  (' + tool.key + ')';
+    // No price on the button. What a thing costs depends on the floor it lands
+    // on — an office is $40,000 plus its tiles — so a number here would
+    // disagree with the ghost, and a price that changes when you point at it is
+    // worse than one that only appears when you do.
+    button.innerHTML = '<b>' + tool.key + '</b> ' + tool.label;
+    button.addEventListener('click', () => selectTool(activeTool?.id === tool.id ? null : tool));
+    bar.appendChild(button);
+  }
+}
 
 // Handy from the console, and the only thing this file exposes. Read-only in
 // spirit: it is here so a playtest can say what it saw, not so the page can
 // reach in and change the game.
+window.world = world;
 window.tower = tower;
 window.renderer = renderer;

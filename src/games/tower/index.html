@@ -116,6 +116,42 @@
   #speeds button:hover { color: var(--ink); }
   #speeds button.on { color: var(--bg); background: var(--info); border-color: var(--info); }
 
+  /* ------------------------------------------------------------- palette */
+
+  #palette {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #palette button {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 108px;
+    font: 600 11px var(--mono);
+    text-align: left;
+    color: #9fb3c8;
+    background: rgba(27, 36, 48, 0.92);
+    border: 1px solid #2c3948;
+    border-radius: 3px;
+    padding: 6px 9px;
+    cursor: pointer;
+  }
+  #palette button b { color: #56687d; font-weight: 700; }
+  #palette button:hover { color: var(--ink); border-color: #3d4d60; }
+  /* The held tool has to be obvious from across the screen — a modal cursor
+     whose mode is not visible is how you place an office you did not mean to. */
+  #palette button.on {
+    color: var(--bg);
+    background: var(--info);
+    border-color: var(--info);
+  }
+  #palette button.on b { color: rgba(11, 15, 20, 0.55); }
+
   /* -------------------------------------------------------------- footer */
 
   #foot {
@@ -128,6 +164,11 @@
     pointer-events: none;
   }
   #hover { color: var(--ink); min-width: 24ch; }
+  /* What just happened, or why it did not. A refusal is an answer and it has
+     to be readable at a glance, so it takes the same red as everything else
+     that means "no". */
+  #answer { color: var(--good); font-weight: 700; min-width: 20ch; }
+  #answer.bad { color: var(--bad); }
   #keys { font-size: 11px; }
 
   #legend { display: flex; gap: 10px; align-items: center; }
@@ -168,23 +209,29 @@
     <span id="cash">—</span>
     <span id="pace">—</span>
     <span id="speeds">
-      <button data-speed="0" title="pause (space)">||</button>
-      <button data-speed="1" title="1x (1)">1&times;</button>
-      <button data-speed="2" title="2x (2)">2&times;</button>
-      <button data-speed="4" title="4x (3)">4&times;</button>
+      <button data-speed="0" title="pause (space or q)">||</button>
+      <button data-speed="1" title="1x (w)">1&times;</button>
+      <button data-speed="2" title="2x (e)">2&times;</button>
+      <button data-speed="4" title="4x (r)">4&times;</button>
     </span>
   </div>
 
   <div id="failure" hidden></div>
 
+  <!-- The palette. Buttons are generated from the sim's own BUILDABLE and
+       SHAFT_KIND, so this stays empty in the markup on purpose: a hand-written
+       list here would be a second place to remember. -->
+  <div id="palette"></div>
+
   <div id="foot">
+    <span id="answer"></span>
     <span id="hover"></span>
     <span id="legend">
       <span class="s-black"><i></i>calm</span>
       <span class="s-pink"><i></i>stressed</span>
       <span class="s-red"><i></i>fed up</span>
     </span>
-    <span id="keys">drag pan &middot; wheel zoom &middot; space pause &middot; 0-3 speed &middot; home lobby</span>
+    <span id="keys">1-5 tool &middot; click build &middot; esc cancel &middot; drag pan &middot; wheel zoom &middot; space pause &middot; qwer speed</span>
   </div>
 
   <script type="module" src="./ui/main.js"></script>

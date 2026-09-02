@@ -18,6 +18,7 @@
 import { addCar, CARRIER_MODE, createCarrier } from '../sim/elevators.js';
 import { FAMILY, GROUND_FLOOR, TILES_PER_FLOOR, createTower, placeObject } from '../sim/state.js';
 import { createSimTripRecord } from '../sim/stress.js';
+import { STARTING_CASH, createLedger } from '../sim/economy.js';
 
 /**
  * The lift column, and the two office banks either side of it.
@@ -86,19 +87,23 @@ export const LAYOUT = {
 };
 
 /**
- * Build the starting tower.
+ * The starting position: a tower somebody already built, and the money to
+ * change it.
  *
- * **Every direct sim mutation in the UI layer is inside this one function**,
- * deliberately — the `placeObject` / `createCarrier` / `addCar` calls below are
- * the complete list. When `applyAction()` lands there is one place to switch
- * and nothing scattered to hunt down. "Demo" is in the name because that is
- * what this is: a tower somebody already built, so the loop can be watched
- * before there are tools to build one.
+ * **The last direct sim mutation in the UI layer lives here**, and it is
+ * deliberately the only one. Everything a *player* does goes through
+ * `applyAction()`; this is the position the game opens on, which is not a move
+ * anyone made. `CLAUDE.md` rule 1 is otherwise unqualified, so the exception is
+ * worth naming rather than leaving to be discovered.
  *
- * @param {{seed?:number}} options
- * @returns the tower, ready for `makeTowerScheduler`
+ * Returns the `world` shape `applyAction` takes — `{ tower, ledger }` — so
+ * there is one object to pass around and no chance of a UI holding a tower
+ * whose cash lives somewhere else.
+ *
+ * @param {{seed?:number, cash?:number}} options
+ * @returns {{tower: object, ledger: object}}
  */
-export function seedDemoTower({ seed = 1 } = {}) {
+export function seedDemoWorld({ seed = 1, cash = STARTING_CASH } = {}) {
   const tower = createTower({ seed });
   /** Stairs and escalators. Empty, but `sim/routing.js` reads it, and an
    *  undefined table there means "rebuild from nothing" every single tick. */
@@ -151,7 +156,10 @@ export function seedDemoTower({ seed = 1 } = {}) {
   for (let i = 0; i < LAYOUT.cars; i++) addCar(carrier, GROUND_FLOOR);
   tower.carriers.push(carrier);
 
-  return tower;
+  // The ledger, not `tower.cash`. `applyAction` charges the ledger and nothing
+  // else does, so the tower's own `cash` field is not the money any more — a
+  // HUD reading it would show a balance that never moves while the player spends.
+  return { tower, ledger: createLedger({ cash }) };
 }
 
 /** `placeObject` reports failure rather than throwing. A seed that silently
