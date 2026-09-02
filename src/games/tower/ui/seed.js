@@ -61,10 +61,17 @@ export const LAYOUT = {
 /**
  * Build the starting tower.
  *
+ * **Every direct sim mutation in the UI layer is inside this one function**,
+ * deliberately — the `placeObject` / `createCarrier` / `addCar` calls below are
+ * the complete list. When `applyAction()` lands there is one place to switch
+ * and nothing scattered to hunt down. "Demo" is in the name because that is
+ * what this is: a tower somebody already built, so the loop can be watched
+ * before there are tools to build one.
+ *
  * @param {{seed?:number}} options
  * @returns the tower, ready for `makeTowerScheduler`
  */
-export function seedTower({ seed = 1 } = {}) {
+export function seedDemoTower({ seed = 1 } = {}) {
   const tower = createTower({ seed });
   /** Stairs and escalators. Empty, but `sim/routing.js` reads it, and an
    *  undefined table there means "rebuild from nothing" every single tick. */

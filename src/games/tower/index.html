@@ -80,7 +80,26 @@
   #clock { font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
   #day { color: var(--info); font-weight: 700; }
   #daypart, #tick, #pace { color: #7d8b9c; }
-  #leases { color: var(--warn); font-weight: 700; }
+  /* inline-block, or `transform` on the bump below silently does nothing. */
+  #leases { color: var(--warn); font-weight: 700; display: inline-block; }
+
+  /* The HUD's half of the rent moment. An office renting is the event this
+     whole rebuild exists to show, so the counter that tracks it does not get to
+     change silently — it jumps, and it takes the colour of the direction it
+     moved. Green up, red down; the two must never look alike. */
+  #leases.bump { animation: bump 620ms ease-out; }
+  #leases.bump.up { color: var(--good); }
+  #leases.bump.down { color: var(--bad); }
+  @keyframes bump {
+    0%   { transform: scale(1);    }
+    18%  { transform: scale(1.35); }
+    100% { transform: scale(1);    }
+  }
+  /* Somebody reading this on a machine set to reduce motion still needs to know
+     the number moved, so the colour stays and only the jump goes. */
+  @media (prefers-reduced-motion: reduce) {
+    #leases.bump { animation: none; }
+  }
   #waiting { color: var(--info); }
   #cash { color: var(--good); font-weight: 700; }
 

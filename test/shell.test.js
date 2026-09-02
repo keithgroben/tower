@@ -14,7 +14,7 @@ import {
   TILES_PER_FLOOR, floorExists, population,
 } from '../src/games/tower/sim/state.js';
 import { officeIsLet, makeRenderer } from '../src/games/tower/render/canvas.js';
-import { LAYOUT, seedTower } from '../src/games/tower/ui/seed.js';
+import { LAYOUT, seedDemoTower } from '../src/games/tower/ui/seed.js';
 import { makeTowerScheduler } from '../src/games/tower/ui/tick.js';
 import { diskSpriteLoaders, stubCanvas } from './_headless.js';
 
@@ -23,7 +23,7 @@ const objects = (tower) => [...tower.objects.values()];
 
 export const tests = {
   'the seed builds a tower somebody could plausibly have built'() {
-    const tower = seedTower();
+    const tower = seedDemoTower();
     const offices = objects(tower).filter((o) => o.family === FAMILY.office);
     const lobbies = objects(tower).filter((o) => o.family === FAMILY.lobby);
 
@@ -43,7 +43,7 @@ export const tests = {
     // for B1, and idle cars read "no target" as a floor and parked in the first
     // basement. Neither is reachable in a tower with nothing underground, which
     // is why the opening tower has some.
-    const tower = seedTower();
+    const tower = seedDemoTower();
     const below = objects(tower).filter((o) => o.floor < GROUND_FLOOR);
     assert(below.length > 0, 'the opening tower has to have a basement in it');
     for (const o of below) assert(floorExists(o.floor), `${o.floor} is outside the world`);
@@ -51,7 +51,7 @@ export const tests = {
   },
 
   'nothing in the seed overlaps the lift shaft or runs off the lot'() {
-    const tower = seedTower();
+    const tower = seedDemoTower();
     const carrier = tower.carriers[0];
     const shaft = { left: carrier.column, right: carrier.column + carrier.shaftWidth - 1 };
     for (const o of objects(tower)) {
@@ -66,7 +66,7 @@ export const tests = {
   },
 
   'the shaft is a legal carrier with cars in it'() {
-    const tower = seedTower();
+    const tower = seedDemoTower();
     assert(tower.carriers.length === 1, 'one shaft to start with');
     const carrier = tower.carriers[0];
     assert(carrier.mode === CARRIER_MODE.STANDARD, 'a standard lift, not an express one');
@@ -79,7 +79,7 @@ export const tests = {
   },
 
   'a full day of ticks runs, and the clock comes out where it went in'() {
-    const tower = seedTower();
+    const tower = seedDemoTower();
     const scheduler = makeTowerScheduler(tower, {});
     const startTick = tower.clock.dayTick;
     const startDay = tower.clock.dayCounter;
@@ -99,7 +99,7 @@ export const tests = {
     // exists, so an empty map is a tower that ticks and does not live. When a
     // family module lands this test still passes; it is about the contract, not
     // about the hole.
-    const tower = seedTower();
+    const tower = seedDemoTower();
     const scheduler = makeTowerScheduler(tower, {});
     const results = scheduler.advance(tower, 500);
 
@@ -114,7 +114,7 @@ export const tests = {
   },
 
   'a frame draws against the real sheets without throwing'() {
-    const tower = seedTower();
+    const tower = seedDemoTower();
     const scheduler = makeTowerScheduler(tower, {});
     const renderer = makeRenderer(stubCanvas(1200, 760), { sprites: diskSpriteLoaders });
     renderer.resize();
@@ -129,7 +129,7 @@ export const tests = {
   },
 
   'the camera can be driven to the roof and to the deepest basement'() {
-    const tower = seedTower();
+    const tower = seedDemoTower();
     const renderer = makeRenderer(stubCanvas(1200, 760), { sprites: diskSpriteLoaders });
     renderer.resize();
     for (const floor of [MAX_FLOOR, MIN_FLOOR, GROUND_FLOOR, -1]) {
