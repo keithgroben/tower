@@ -51,10 +51,8 @@ window.addEventListener('error', (e) => reportFailure('uncaught', e.error ?? e.m
 window.addEventListener('unhandledrejection', (e) => reportFailure('promise', e.reason));
 
 import { FAMILY } from '../sim/state.js';
-import {
-  deactivateIfFailing, officeArrival, officeFamilyHandler, offices,
-  recomputeOfficeOperationalStatus,
-} from '../sim/office.js';
+import { officeArrival, officeFamilyHandler } from '../sim/office.js';
+import { officeCashflowHooks } from '../sim/ledger-adapter.js';
 import { rebuildRouteTables, resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
   CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
@@ -66,6 +64,13 @@ import {
 const canvas = $('view');
 const world = seedDemoWorld({ seed: 1 });
 const { tower, ledger } = world;
+
+/**
+ * The two moments money moves outside checkpoint 2533: an office rents, or an
+ * office is vacated. Both go through `sim/ledger-adapter.js` onto the tower's
+ * own `cash`, which is the number the HUD draws — one balance, not two.
+ */
+const cashflow = officeCashflowHooks(tower);
 
 /**
  * **The loop, wired.**
@@ -82,13 +87,16 @@ const scheduler = makeTowerScheduler(tower, {
     // Every delay the router reports is priced by the stress pipeline, which
     // owns those constants. The router reports events; it never prices them.
     onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
-    onRent: () => { rentedThisFrame++; },
+    // The rent moment. `sim/office.js` sets `everRented` and calls this the
+    // instant a worker's route resolves; the hook pays the first rent and adds
+    // the six workers to the population ledger. The payment is guarded by the
+    // same once-per-cycle mark checkpoint 2533 uses, so an office that rents on
+    // a cashflow day is paid once, not twice.
+    onRent: cashflow.onRent,
   }),
 }, {
   [FAMILY.office]: officeArrival,
 }, applyRoutingDelay);
-
-let rentedThisFrame = 0;
 
 /**
  * Route delays -> stress, the one seam that must not double-count.
@@ -133,46 +141,16 @@ function applyRoutingDelay(delay, actor) {
   }
 }
 
-/**
- * The daily sweep. `recompute_object_operational_status` runs every day, and
- * it is what sets `occupied_flag` on a freshly placed office — the bootstrap
- * that opens the rental gate in the first place.
- */
-function runDailySweep() {
-  // The 3-day cashflow cadence. `specs/TIME.md` checkpoint 2533 and
-  // `specs/PEOPLE.md` § Reset: trip counters clear on this pass, via
-  // `activate_family_cashflow_if_operational`.
-  //
-  // Without it stress is a LIFETIME record instead of a rolling judgement of
-  // the last three days, so a tower carries its worst morning forever and can
-  // never recover from a bad hour. Nothing called it for a day; every office
-  // in a six-day run sat permanently at grade 0.
-  //
-  // TODO(parity): this belongs in a real checkpoint-2533 body alongside the
-  // ledger rollover, once someone writes the adapter between the tower model
-  // and `economy.js`'s `runLedgerCheckpoint`. The cadence is right here; the
-  // home is not.
-  const cashflowDay = tower.clock.dayCounter % 3 === 0;
+// The daily sweep used to live here, on `dayAdvanced`. It is now checkpoint
+// 2533's object sweep, in `sim/ledger-adapter.js`, wired by `ui/tick.js` — the
+// same body the headless harness and the integration tests run, rather than one
+// copy per driver. It fires on the same days it always did: the day counter
+// moves at 2300, so 2533 reads the same value 233 ticks later.
+//
+// It also no longer throws. `resetFacilitySimTripCounters` was called here and
+// never imported, so the first cashflow day raised a ReferenceError, the frame
+// handler caught it, and the game paused itself with a banner on day 3.
 
-  for (const { object, occupants } of offices(tower)) {
-    // Counters clear BEFORE the measurement, not after, and not gated on
-    // `occupied_flag`.
-    //
-    // Gating it on the flag deadlocks the tower: a failing office is
-    // deactivated, which CLEARS the flag, which blocks the reset, which
-    // freezes its stress, which keeps its grade at 0 forever — so the flag
-    // never returns and not one of its workers ever tries again. Measured:
-    // every office dead from day 2 of a nine-day run, trips frozen at 1218.
-    //
-    // `FACILITIES.md` § occupied_flag says the flag is "re-set every 3 days
-    // for offices/condos/retail". That is what makes the tower RECOVERABLE:
-    // clear the history, re-measure from zero, and a tower whose lifts got
-    // better gets its tenants back within a cycle.
-    if (cashflowDay) resetFacilitySimTripCounters(occupants);
-    recomputeOfficeOperationalStatus(tower, object, occupants);
-    deactivateIfFailing(tower, object, occupants);
-  }
-}
 const renderer = makeRenderer(canvas, { sprites: { onWarn: (m) => console.warn(m) } });
 const pump = makeTickPump();
 
@@ -477,12 +455,9 @@ function frame(nowMs) {
 
   try {
     // Real milliseconds in, whole ticks out. This is the entire boundary.
-    pump.advance(dtMs, speed, () => {
-      const moved = scheduler.tick(tower);
-      // The daily sweep. Without it `occupied_flag` is never set and no office
-      // can ever rent — the bootstrap in sim/office.js lives here.
-      if (moved.dayAdvanced) runDailySweep();
-    });
+    // Every daily and 3-day rule now rides inside the scheduler's own
+    // checkpoint table, so this is the whole of the sim step.
+    pump.advance(dtMs, speed, () => scheduler.tick(tower));
     // Render dt, not sim dt: the sky and the sprite clock run at wall speed so
     // a paused tower still has weather.
     renderer.draw(tower, dtMs);

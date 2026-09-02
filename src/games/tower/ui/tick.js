@@ -30,6 +30,8 @@ import { tickCarriers } from '../sim/elevators.js';
 import { createScheduler } from '../sim/scheduler.js';
 import { advanceSimTripCounters, rebaseSimElapsedFromClock } from '../sim/stress.js';
 import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
+import { LEDGER_CHECKPOINT_TICK } from '../sim/economy.js';
+import { runTowerLedgerCheckpoint } from '../sim/ledger-adapter.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -105,9 +107,21 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
   });
 
   return createScheduler({
-    // § Daily Checkpoints, tick 0: "rebuild the reachability/path tables".
-    // Nothing else calls it, and a stale table is a route that silently fails.
-    checkpoints: { 0: (t) => rebuildRouteTables(t) },
+    checkpoints: {
+      // § Daily Checkpoints, tick 0: "rebuild the reachability/path tables".
+      // Nothing else calls it, and a stale table is a route that silently fails.
+      0: (t) => rebuildRouteTables(t),
+      // § 2533: ledger rollover, cashflow activation, periodic expenses — plus
+      // the daily operational recompute that runs inside its object sweep.
+      //
+      // It lives here rather than on `dayAdvanced` in a driver, which is where
+      // it used to be, so that every consumer of this composition gets the same
+      // one: the browser, the headless harness and `test/integration.test.js`
+      // were each keeping their own version of the daily sweep and only one of
+      // them ran the whole of it. The tick number comes from `economy.js` so it
+      // is not written down twice.
+      [LEDGER_CHECKPOINT_TICK]: (t) => runTowerLedgerCheckpoint(t),
+    },
     families,
     carriers: (t) => tickCarriers(t.carriers, t.clock, carrierContext),
   });

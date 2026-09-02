@@ -26,6 +26,7 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
 const objects = (tower) => [...tower.objects.values()];
 
 export const tests = {
+
   'the seed builds a tower somebody could plausibly have built'() {
     const { tower } = seedDemoWorld();
     const offices = objects(tower).filter((o) => o.family === FAMILY.office);
