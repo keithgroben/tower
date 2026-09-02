@@ -302,7 +302,10 @@ export const tests = {
         // 36 more offices either side of the seeded banks, all served by the
         // existing lift. 78 offices is 468 activity if they all let.
         for (const floor of [1, 2, 3, 4, 5, 6]) {
-          for (const left of [30, 36, 42, 94, 100, 106]) {
+          // 112/118/124 rather than 94/100/106: the seed now puts its lunch
+          // venue at 94..109 on F3, and the fixture only needs 36 free office
+          // slots — which tiles they are is not what it is testing.
+          for (const left of [30, 36, 42, 112, 118, 124]) {
             built.push(applyAction(world, { type: 'build', what: 'office', floor, left }).ok);
           }
         }
