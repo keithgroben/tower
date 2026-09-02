@@ -31,8 +31,11 @@ import { createScheduler } from '../sim/scheduler.js';
 import { advanceSimTripCounters, rebaseSimElapsedFromClock } from '../sim/stress.js';
 import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
 import { LEDGER_CHECKPOINT_TICK } from '../sim/economy.js';
-import { runTowerLedgerCheckpoint } from '../sim/ledger-adapter.js';
+import {
+  runCommercialClosure, runCommercialRebuild, runTowerLedgerCheckpoint,
+} from '../sim/ledger-adapter.js';
 import { refreshStartOfDayGates, tryAdvanceStar } from '../sim/progression.js';
+import { CLOSURE_TICK, REBUILD_TICK } from '../sim/commercial.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -117,6 +120,22 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
       // `rebuild_path_seed_bucket_table()` setting `route_viable` — this same
       // start-of-day rebuild — which is why that gate latches a day late.
       0: (t) => { rebuildRouteTables(t); refreshStartOfDayGates(t); },
+      /**
+       * `specs/facility/COMMERCIAL.md` § Capacity, the daily recompute. It
+       * runs at 240 rather than 0 because 240 is also the tick every venue's
+       * own gate waits for — *"dayparts 0-3, tick <= 240: no dispatch"* — so
+       * the day's capacity is written just before the first customer is
+       * allowed to want it. Reopening the venues at tick 0 instead would leave
+       * them open for 240 ticks with yesterday's capacity still on the record.
+       */
+      [REBUILD_TICK]: (t) => runCommercialRebuild(t),
+      /**
+       * The off-hours closure sweep: the day's visitors become the day's
+       * money, and every venue closes to new customers. This is where a fast
+       * food that nobody could reach loses its $3,000 — the commercial half of
+       * "transport decides whether you have tenants".
+       */
+      [CLOSURE_TICK]: (t) => runCommercialClosure(t),
       // § 2533: ledger rollover, cashflow activation, periodic expenses — plus
       // the daily operational recompute that runs inside its object sweep.
       //

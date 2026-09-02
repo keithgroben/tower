@@ -70,22 +70,49 @@ export const OBJECT_TYPE = {
   lobby: 0x18,
   office: 7,
   condo: 9,
-  fastFood: 6,
+  restaurant: 6,
   retail: 10,
+  fastFood: 0x0c,
 };
 
 export const FAMILY = {
   lobby: 0x18,
   office: 7,
   condo: 9,
-  fastFood: 6,
+  /**
+   * ⚠️ **Fast food is `0x0c`. `6` is the Restaurant.**
+   *
+   * `fastFood` was `6` here until commercial landed, and `sim/economy.js` has
+   * always priced `0x06` at $200,000 (Restaurant) and `0x0c` at $100,000 (Fast
+   * Food). `sim/ledger-adapter.js` caught the clash and said *"nothing turns on
+   * it today — but it will the day commercial lands"*. It did: a fast food
+   * placed as type 6 would have been charged restaurant money and run the
+   * restaurant's evening gate instead of the all-day trickle.
+   *
+   * `specs/facility/COMMERCIAL.md` § Included Types is triple-checked against
+   * the construction string table: *"type 6→'Restaurant - $200000', type
+   * 10→'Retail Shop - $100000', type 12→'Fast Food - $100000'"*. Every use of
+   * these names is symbolic, so the codes moving is invisible everywhere except
+   * where it was wrong.
+   */
+  restaurant: 6,
   retail: 10,
+  fastFood: 0x0c,
 };
 
-/** How many runtime actors a placed object owns. `specs/DATA-MODEL.md` § occupant_index. */
+/**
+ * How many runtime actors a placed object owns. `specs/DATA-MODEL.md`
+ * § occupant_index, and `specs/facility/COMMERCIAL.md` § Role for the venues:
+ * *"fast food (12): 48 sim slots plus one linked CommercialVenueRecord"*.
+ *
+ * A venue's 48 are its **customers**, not its staff — which is why the venue
+ * contributes no fixed population of its own and why the daily capacity limit
+ * matters: it decides how many of the 48 actually travel today.
+ */
 export const OCCUPANTS = {
   [FAMILY.office]: 6,
   [FAMILY.condo]: 3,
+  [FAMILY.fastFood]: 48,
 };
 
 /**
@@ -99,18 +126,24 @@ export const OCCUPANTS = {
  *
  * So an office's population and its actor count are the same number by
  * coincidence, and reading one for the other is a trap the moment a shop
- * exists.
+ * exists. A fast food owns **48** actors and contributes `0`: they are its
+ * customers, and they are counted where customers are counted — the venue's
+ * daily visitor roll into the population ledger, not here.
  *
- * ⚠️ **Not yet read by `population()`** — see the note at its call site. It is
- * here so the commercial family lands against a rule that already exists
- * rather than inventing a second one.
+ * Read by `population()` since the commercial family machine landed. The gate
+ * on a commercial unit is its **linked venue record**, not its `unit_status` —
+ * see the note there.
  */
 export const POPULATION_CONTRIBUTION = {
   [FAMILY.office]: 6,
   [FAMILY.condo]: 3,
   [FAMILY.retail]: 10,
+  [FAMILY.restaurant]: 0,
   [FAMILY.fastFood]: 0,
 };
+
+/** Families whose population is gated on a linked venue record rather than a lease. */
+export const COMMERCIAL_FAMILY_CODES = new Set([FAMILY.restaurant, FAMILY.retail, FAMILY.fastFood]);
 
 // ------------------------------------------------------- state-code bands
 //
@@ -280,9 +313,14 @@ export function createTower({ seed = 1, startingCash = 2000000 } = {}) {
  * @param {{family:number, type?:number, floor:number, left:number, right:number, rentLevel?:number}} placement
  * @param {(fields:object) => object} [makeTripFields] supplied by the stress
  *   pipeline so actor records carry their accounting from birth
+ * @param {(tower:object, object:object) => void} [finalize] the family-specific
+ *   placement finalizer. `specs/FACILITIES.md` § Placement Finalizer: most
+ *   families run one after the core record is written, and it is where a
+ *   commercial venue's linked record is created. Passed in rather than
+ *   imported, so this file stays the spine and learns nothing about families.
  * @returns {{ok:boolean, reason?:string, object?:object}}
  */
-export function placeObject(tower, placement, makeTripFields = () => ({})) {
+export function placeObject(tower, placement, makeTripFields = () => ({}), finalize = null) {
   const { family, floor, left, right } = placement;
   if (!floorExists(floor)) return { ok: false, reason: 'floor ' + floor + ' is outside the tower' };
   if (!Number.isInteger(left) || !Number.isInteger(right) || right < left) {
@@ -293,6 +331,9 @@ export function placeObject(tower, placement, makeTripFields = () => ({})) {
 
   const object = createObject({ ...placement, daypart: tower.clock?.daypart ?? 0 });
   tower.objects.set(object.id, object);
+  // Before the actors, because a family finalizer builds the thing they act
+  // on — a venue's customers must never exist without the venue's record.
+  finalize?.(tower, object);
 
   // The six workers, at placement, before anything is rented.
   const count = OCCUPANTS[family] ?? 0;
@@ -341,16 +382,34 @@ export function population(tower) {
     // set on a VACANT office before anyone has reached it — so counting on it
     // returned 252 people in a tower where 216 had a lease, six offices' worth
     // of staff for offices nobody could get to.
-    // TODO(parity): read POPULATION_CONTRIBUTION here once a commercial family
-    // machine exists. It cannot be wired yet: the seed marks shops `let` so
-    // they draw as shops, and nothing simulates them renting — so counting
-    // retail's 10 would report 40 residents in a tower where nobody has moved
-    // in. A number that arrives before the thing it counts is exactly the
-    // accounting hole this repo keeps a list of, so the rule sits unwired and
-    // documented rather than wired and wrong.
-    if (isRented(o.unitStatus)) total += OCCUPANTS[o.family] ?? 0;
+    if (!isRented(o.unitStatus)) continue;
+    if (!contributesPopulation(o)) continue;
+    total += POPULATION_CONTRIBUTION[o.family] ?? OCCUPANTS[o.family] ?? 0;
   }
   return total;
+}
+
+/**
+ * Is this unit actually contributing its people yet?
+ *
+ * For anything with a lease, the lease is the answer. For a **commercial**
+ * unit it is not: `initialUnitStatus` starts a shop at `0`, which reads as let
+ * the instant it is placed, so `isRented` alone would have counted retail's
+ * `10` for four shops nobody had ever visited — the 40 phantom residents the
+ * old `TODO(parity)` here refused to ship.
+ *
+ * `specs/facility/COMMERCIAL.md` § Retail Income Timing draws the line in the
+ * reference's own terms: *"first open marks the linked venue record available
+ * ... it adds `+10` to the primary family ledger"*, and the status panel
+ * *"keys retail visibility off the linked venue record's dormant flag, not off
+ * its current occupancy count"*. So a commercial unit counts once its linked
+ * record exists and is not dormant, and a shop with no record — which is every
+ * retail shop until family 10 gets a machine — counts nobody.
+ */
+function contributesPopulation(object) {
+  if (!COMMERCIAL_FAMILY_CODES.has(object.family)) return true;
+  const venue = object.venue;
+  return !!venue && venue.availability !== 0xff;
 }
 
 /** Reset the id counters. Tests only — the sim never needs this. */

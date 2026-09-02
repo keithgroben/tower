@@ -29,7 +29,7 @@
  * **its** refusal, so a disagreement surfaces as a visible sentence rather than
  * as a ghost that lied.
  */
-import { BUILDABLE, SHAFT_KIND, shaftObstruction } from '../sim/actions.js';
+import { BUILDABLE, SHAFT_KIND, hasTenant, shaftObstruction } from '../sim/actions.js';
 import {
   chargeConstruction, payout, placementCost, CONSTRUCTION_COST, TYPE_CODES,
 } from '../sim/economy.js';
@@ -50,7 +50,7 @@ import {
 const RENT_KEY = Object.fromEntries(
   Object.entries(TYPE_CODES).map(([name, code]) => [code, name]),
 );
-import { GROUND_FLOOR, TILES_PER_FLOOR, floorExists, floorLabel, isRented, spanBlocked } from '../sim/state.js';
+import { GROUND_FLOOR, TILES_PER_FLOOR, floorExists, floorLabel, spanBlocked } from '../sim/state.js';
 import { MAX_SERVED_SPAN, SHAFT_WIDTH } from '../sim/elevators.js';
 
 /** Rent tiers run 0 (dearest) to 3 (the one that always passes). */
@@ -281,7 +281,9 @@ export function preview(world, tool, target) {
   if (command.type === 'demolish') {
     const o = target.object;
     const footprint = { kind: 'room', floor: o.floor, left: o.left, right: o.right };
-    if (isRented(o.unitStatus)) return refuse('that unit is let — you cannot evict a tenant', { cost: 0, footprint });
+    // The sim's own predicate, not a second reading of `unitStatus` — a shop is
+    // in the open band from the moment it is placed and has no tenant to evict.
+    if (hasTenant(o)) return refuse('that unit is let — you cannot evict a tenant', { cost: 0, footprint });
     return { ok: true, cost: 0, footprint, command };
   }
 
