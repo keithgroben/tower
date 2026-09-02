@@ -135,8 +135,64 @@ export const LAYOUT = {
 };
 
 /**
- * The starting position: a tower somebody already built, and the money to
- * change it.
+ * **The new game: an empty lot with a ground lobby, and the money.**
+ *
+ * This is what the game opens on. `seedDemoWorld` below is no longer it.
+ *
+ * ## Why it changed
+ *
+ * The demo tower was seeded back when there was no build palette. The argument
+ * then was sound: a player who cannot build cannot break a working tower
+ * themselves, so the opening position had to contain its own lesson — a bank of
+ * offices stranded above the lift, teaching "your lift decides who rents"
+ * through geometry rather than text.
+ *
+ * That argument expired the day the palette landed. **The first office should
+ * be the player's own**, because a tenant you placed and then watched move in
+ * is the loop; a tenant that was already there is a diagram of the loop. And
+ * the stranded-bank lesson is not lost by removing it — a player stacking
+ * offices above their own lift rediscovers it within minutes, which teaches it
+ * harder than being shown.
+ *
+ * ## What you get, and why exactly this
+ *
+ * A ground lobby and nothing else. The lobby is not a courtesy: it is the
+ * origin every route is measured from, and `sim/routing.js` has nowhere to
+ * start without it. SimTower opens the same way.
+ *
+ * `segments` and `transferFloors` are empty ARRAYS rather than absent —
+ * `sim/routing.js` reads both, and `undefined` there means "rebuild the tables
+ * from nothing" on every single tick.
+ *
+ * @param {{seed?:number, cash?:number}} options
+ * @returns {{tower: object, ledger: object}}
+ */
+export function newTowerWorld({ seed = 1, cash = STARTING_CASH } = {}) {
+  const tower = createTower({ seed, startingCash: cash });
+  tower.segments = [];
+  tower.transferFloors = [];
+  place(tower, {
+    family: FAMILY.lobby, floor: GROUND_FLOOR,
+    left: LAYOUT.lobbyLeft, right: LAYOUT.lobbyRight,
+  }, () => createSimTripRecord());
+  // The same view, for the same reason as below: one balance, not two.
+  return { tower, ledger: ledgerFor(tower) };
+}
+
+/**
+ * ⚠️ **A measurement fixture, not the game's opening position any more.**
+ *
+ * `newTowerWorld` above is what a player sees. This builds the 48-room tower
+ * the harness and most of the suite measure against, and it is kept precisely
+ * *because* it is fixed: a benchmark that changed whenever the new-game
+ * position was tuned would make every number in `harness/playtest.js`
+ * incomparable with the one before it.
+ *
+ * Its stranded bank on F7 is therefore a **fixture property** now rather than a
+ * lesson — `test/seed.test.js` still pins it, because a fixture that quietly
+ * stopped stranding anything would silently weaken every test built on it.
+ *
+ * The original note, still true:
  *
  * **The last direct sim mutation in the UI layer lives here**, and it is
  * deliberately the only one. Everything a *player* does goes through

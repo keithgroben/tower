@@ -27,7 +27,7 @@ import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
 import { applyAction } from '../sim/actions.js';
 import { TOOLS, preview } from './build.js';
 import { discardSavedWorld, loadSavedWorld, makeAutosave } from './persist.js';
-import { seedDemoWorld } from './seed.js';
+import { newTowerWorld } from './seed.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -71,7 +71,9 @@ const canvas = $('view');
  * why, because the player is about to see an empty tower where their tower was.
  */
 const resumed = await loadSavedWorld();
-const world = resumed.world ?? seedDemoWorld({ seed: 1 });
+// An empty lot with a ground lobby. `seedDemoWorld` is a measurement fixture
+// now, not the opening position — the first office should be the player's own.
+const world = resumed.world ?? newTowerWorld({ seed: 1 });
 const { tower, ledger } = world;
 
 /**
