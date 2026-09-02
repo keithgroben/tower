@@ -318,6 +318,22 @@ export function createCarrier({
 
     cars: [],
     homeFloor: homeFloor ?? bottomFloor,
+
+    /**
+     * Every request reference with a live claim on this carrier — queued in a
+     * ring, or aboard a car and not yet delivered.
+     *
+     * This is what stops one person occupying a queue forty times. A rider in
+     * an in-transit state is dispatched **unconditionally every stride** until
+     * its leg completes (`specs/PEOPLE.md` § Refresh handler flow), so the
+     * family calls `resolve_sim_route_between_floors` again roughly every 16
+     * ticks while it stands there waiting. Without this set each of those
+     * calls appends another copy: measured on the seeded tower, one 40-entry
+     * ring held **14 copies of the same worker**, so three people could fill a
+     * queue meant for forty and everybody behind them got the queue-full
+     * result instead of a ride.
+     */
+    liveRequests: new Set(),
   };
 }
 
@@ -380,6 +396,13 @@ const nonemptyDestinationCount = (car) =>
  * creation is mutating".
  */
 export function enqueueRequest(carrier, ref, floor, directionFlag) {
+  // § Queues, "Elevator queue creation is mutating": a sim that calls resolve
+  // twice must not double-enqueue. Reported as success, because from the
+  // caller's point of view the request IS on the carrier — it just did not
+  // need adding twice. Returning false here would report a full queue and
+  // charge the 5-tick waiting delay to somebody who is already in the queue.
+  if (carrier.liveRequests.has(ref)) return true;
+
   const slot = carrierSlotIndex(carrier, floor);
   if (slot < 0) {
     // Binary quirk, § Queues: enqueue's body is gated on a valid slot, so an
@@ -393,9 +416,19 @@ export function enqueueRequest(carrier, ref, floor, directionFlag) {
   if (ringIsFull(ring)) return false;
   const wasEmpty = ringIsEmpty(ring);
   ringPush(ring, ref);
+  // Claimed only once the push succeeded: a refused request has no claim, and
+  // marking one would strand that rider from ever queueing again.
+  carrier.liveRequests.add(ref);
   if (wasEmpty) assignCarToFloorRequest(carrier, floor, directionFlag);
   return true;
 }
+
+/**
+ * Does this reference already have a live claim on this carrier — queued, or
+ * aboard? The claim is released when the rider is delivered, when a transfer
+ * cannot be resolved, or when the route is cancelled.
+ */
+export const hasLiveRequest = (carrier, ref) => carrier.liveRequests.has(ref);
 
 /** Depth of one floor/direction ring, capped at the full sentinel. § Route Costs. */
 export function floorQueueCount(carrier, floor, directionFlag) {
@@ -431,6 +464,7 @@ export function cancelRequest(carrier, ref) {
       removed = true;
     }
   }
+  carrier.liveRequests.delete(ref);
   return removed;
 }
 
@@ -866,9 +900,14 @@ export function drainFloorQueue(carrier, car, carIndex, ctx) {
       const targetFloor = ctx.targetFloorOf(ref);
       const alight = ctx.chooseTransferFloor(carrier, ref, car.currentFloor, targetFloor);
       if (alight === NO_TRANSFER_FLOOR || alight === car.currentFloor) {
-        // § Queue Drain step 7. The delay is zero ticks and still has to be
-        // reported: it clears the route-start stamp, and a consumer that
-        // optimises the zero away loses that.
+        // § Queue Drain step 7. The rider leaves the carrier entirely, so its
+        // claim goes with it — otherwise the dedup would bar it from ever
+        // queueing here again and it would retry forever against a carrier
+        // that has quietly stopped accepting it.
+        carrier.liveRequests.delete(ref);
+        // The delay is zero ticks and still has to be reported: it clears the
+        // route-start stamp, and a consumer that optimises the zero away
+        // loses that.
         ctx.emitDelay?.(ref, { kind: 'requeue-failure' });
         ctx.onRequeueFailure?.(ref);
         continue;
@@ -923,6 +962,9 @@ export function dispatchCarArrivals(carrier, car, ctx) {
     slot.ref = null;
     slot.destination = FREE_SLOT;
     car.assignedCount = Math.max(0, car.assignedCount - 1);
+    // Delivered: the claim is spent, and this rider may call the carrier again
+    // for its next leg.
+    carrier.liveRequests.delete(ref);
     unloaded += 1;
     ctx.onArrive?.(ref, car.currentFloor, { rebaseElapsed: true, advanceTripCounters: true });
   }
@@ -946,6 +988,14 @@ export function advanceCarState(carrier, car, carIndex, clock, ctx = {}) {
   if (car.currentFloor < carrier.bottomFloor || car.currentFloor > carrier.topFloor) {
     // The shaft was shortened under the car. Put it back on its home floor
     // rather than let it keep serving floors that no longer exist.
+    for (let i = 0; i < carrier.assignmentCapacity; i++) {
+      const slot = car.slots[i];
+      if (slot.ref !== null) carrier.liveRequests.delete(slot.ref);
+      slot.ref = null;
+      slot.destination = FREE_SLOT;
+    }
+    car.destinationCountBySlot.fill(0);
+    car.assignedCount = 0;
     car.currentFloor = car.homeFloor;
     car.prevFloor = car.homeFloor;
     car.targetFloor = car.homeFloor;
