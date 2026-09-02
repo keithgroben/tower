@@ -123,6 +123,66 @@ export const tests = {
   },
 
   /**
+   * ⚠️ **And its per-slot tables move with it.**
+   *
+   * Eight arrays are indexed by `carrierSlotIndex`, which for a standard shaft
+   * is `floor - bottomFloor`. `extend_shaft` used to write the two floor bounds
+   * and leave every one of them at its old length: the new floors had no queue
+   * rings at all, so the first car to stop on one read `carrier.queues[slot]`
+   * as `undefined` and threw inside `drainFloorQueue`.
+   *
+   * Found by `npm run playtest -- 24 1 --play`, which extends the seed's lift
+   * to reach the stranded F7 bank on day zero and died on day 5. It is not a
+   * timing accident — a bare `extend_shaft` on the seed leaves nine rings for a
+   * twelve-floor shaft — it just needed a car to stop up there with somebody
+   * waiting.
+   */
+  'extending a lift gives the new floors somewhere to queue'() {
+    const w = seedDemoWorld({ seed: 1 });
+    const lift = w.tower.carriers[0];
+
+    const extended = applyAction(w, { type: 'extend_shaft', carrierId: lift.id, top: lift.topFloor + 3 });
+    assert(extended.ok, 'the extension was refused: ' + extended.reason);
+
+    const span = lift.topFloor - lift.bottomFloor + 1;
+    assert(lift.queues.length === span,
+      'a ' + span + '-floor lift has ' + lift.queues.length + ' queue rings. The floors past the end '
+      + 'have nowhere to queue, and the first car that stops on one throws.');
+    assert(lift.slotCount === span, 'slotCount says ' + lift.slotCount + ' for a ' + span + '-floor lift');
+    for (const name of ['stopEnabled', 'upAssignedCar', 'downAssignedCar']) {
+      assert(lift[name].length === span, name + ' is ' + lift[name].length + ' long, expected ' + span);
+    }
+    for (const car of lift.cars) {
+      assert(car.destinationCountBySlot.length === span,
+        'a car still counts destinations for ' + car.destinationCountBySlot.length + ' floors');
+    }
+    assert(lift.queues.every((q) => q && q.up && q.down), 'a floor was given a hole instead of a ring');
+  },
+
+  /**
+   * ⚠️ The quieter half of the same bug. Lowering the bottom **renumbers every
+   * slot**, because the index is an offset from it — so a rider queued on F3
+   * silently becomes a rider queued three floors down. That one does not throw;
+   * it just moves people, which is why it gets its own row rather than being
+   * assumed to ride along with the crash.
+   */
+  'dropping a lift’s bottom does not renumber the people already queued'() {
+    const w = seedDemoWorld({ seed: 1 });
+    const lift = w.tower.carriers[0];
+    const floor = 3;
+    const before = lift.queues[floor - lift.bottomFloor];
+    before.up.marker = 'the F3 queue';
+
+    const extended = applyAction(w, { type: 'extend_shaft', carrierId: lift.id, bottom: lift.bottomFloor - 3 });
+    assert(extended.ok, 'the extension was refused: ' + extended.reason);
+
+    const after = lift.queues[floor - lift.bottomFloor];
+    assert(after.up.marker === 'the F3 queue',
+      'the F3 queue is now at slot ' + lift.queues.findIndex((q) => q.up.marker) + ' and floor 3 reads '
+      + 'somebody else’s — every waiting rider moved three floors down');
+  },
+
+  /**
    * The bug this caught on its first run: `shaftObstruction` walked every
    * carrier including the one being extended, whose own clearance box overlaps
    * the new span by definition. Extending the seed's lift reported that it

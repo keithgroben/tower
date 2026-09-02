@@ -20,7 +20,7 @@ import {
   COMMERCIAL_FAMILY_CODES, FAMILY, OBJECT_TYPE, floorExists, isRented, placeObject, spanBlocked,
 } from './state.js';
 import {
-  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier,
+  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier, resizeCarrierSlots,
 } from './elevators.js';
 import { CONSTRUCTION_COST, chargeConstruction, placementCost } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
@@ -262,8 +262,11 @@ const ACTIONS = {
       if (blocked) return refuse(blocked);
     }
 
-    carrier.bottomFloor = newBottom;
-    carrier.topFloor = newTop;
+    // ⚠️ Through `resizeCarrierSlots`, never by writing the two bounds. Eight
+    // arrays are indexed off `bottomFloor`, and moving the bounds without them
+    // gave the new floors no queue rings — a crash the moment a car stopped on
+    // one — and renumbered every existing slot when the bottom dropped.
+    resizeCarrierSlots(carrier, newBottom, newTop);
     tower.routeTablesDirty = true;
     return { ok: true, cost: 0, bottom: newBottom, top: newTop };
   },
