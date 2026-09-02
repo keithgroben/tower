@@ -12,10 +12,10 @@ import {
   FREE_SLOT, MAX_CARRIERS, MAX_CARS_PER_CARRIER, MAX_SERVED_SPAN, MOTION_STEP_BY_MODE,
   NO_TARGET_FLOOR, NO_TRANSFER_FLOOR,
   PASSENGER_CAPACITY, QUEUE_CAPACITY, SCHEDULE_SLOTS, SETTLE_BY_MODE, SHAFT_WIDTH,
-  addCar, advanceCarOneStep, advanceCarState, assignCarToFloorRequest, carrierSlotIndex,
+  addCar, advanceCarOneStep, advanceCarState, assignCarToFloorRequest, cancelRequest, carrierSlotIndex,
   carrierSpansFloor, carrierStopsAtFloor, computeCarMotionMode, createCarrier, createRing,
   dispatchCarArrivals, drainFloorQueue, enqueueRequest, expressSlotIndex, floorQueueCount,
-  isExpressStopFloor, maxTopFloorFor, ringIsFull, ringPush, ringShift, scheduleIndex,
+  hasLiveRequest, isExpressStopFloor, maxTopFloorFor, ringIsFull, ringPush, ringShift, scheduleIndex,
   selectNextTargetFloor, shouldCarDepart,
 } from '../src/games/tower/sim/elevators.js';
 
@@ -490,6 +490,100 @@ export const tests = {
       'a standard car should load 21, loaded ' + loaded);
     assert(floorQueueCount(carrier, 0, 1) === 4, '4 riders should still be queued, ' + floorQueueCount(carrier, 0, 1) + ' are');
     assert(car.assignedCount === 21, 'assignedCount is ' + car.assignedCount);
+  },
+
+  /**
+   * The one that made the whole tower look under-served.
+   *
+   * A rider in an in-transit state is dispatched **unconditionally every
+   * stride** until its leg completes (`specs/PEOPLE.md` § Refresh handler
+   * flow), so its family asks for a route again roughly every 16 ticks while it
+   * stands on the floor waiting. Without a claim check each of those calls
+   * appends another copy of the same person: measured on the seeded tower, one
+   * 40-entry ring held **14 copies of one worker**, so three people could fill a
+   * queue meant for forty and everyone behind them was told the queue was full.
+   */
+  'a rider already on this carrier is not queued a second time'() {
+    // § Queues, "Elevator queue creation is mutating" — the reference's own
+    // port deduplicates on the sim id for exactly this reason.
+    const carrier = shaft({ bottomFloor: 0, topFloor: 20 });
+    assert(enqueueRequest(carrier, 'w1', 0, 1), 'the first request should be accepted');
+    assert(hasLiveRequest(carrier, 'w1'), 'and should hold a claim on the carrier');
+
+    for (let stride = 0; stride < 20; stride++) {
+      assert(enqueueRequest(carrier, 'w1', 0, 1) === true,
+        're-queueing must report success: the rider IS on the carrier, it just '
+        + 'did not need adding again. Reporting failure would charge the 5-tick '
+        + 'queue-full delay to somebody already in the queue');
+    }
+    assert(floorQueueCount(carrier, 0, 1) === 1,
+      'twenty re-resolutions left ' + floorQueueCount(carrier, 0, 1) + ' copies in the ring');
+
+    // A different rider is unaffected — the check is per reference, not a lock.
+    assert(enqueueRequest(carrier, 'w2', 0, 1), 'a second rider should still be able to queue');
+    assert(floorQueueCount(carrier, 0, 1) === 2, 'the ring should hold two distinct riders');
+  },
+
+  'the claim is released when a rider leaves the carrier, by any of its three exits'() {
+    // Delivered, requeue-failed, or cancelled. Hold the claim past any of them
+    // and that rider can never call this carrier again — it would retry
+    // forever against a shaft that has quietly stopped accepting it.
+    const targets = new Map([['w1', 10]]);
+
+    // 1. Delivered.
+    const delivered = shaft({ bottomFloor: 0, topFloor: 20 });
+    delivered.cars[0].currentFloor = 0;
+    enqueueRequest(delivered, 'w1', 0, 1);
+    drainFloorQueue(delivered, delivered.cars[0], 0, passthroughContext(targets));
+    assert(hasLiveRequest(delivered, 'w1'), 'a rider aboard still holds its claim');
+    delivered.cars[0].currentFloor = 10;
+    dispatchCarArrivals(delivered, delivered.cars[0], {});
+    assert(!hasLiveRequest(delivered, 'w1'), 'delivery must release the claim');
+    assert(enqueueRequest(delivered, 'w1', 10, 0), 'and the rider can queue for its next leg');
+
+    // 2. Transfer could not be resolved.
+    const stuck = shaft({ bottomFloor: 0, topFloor: 20 });
+    stuck.cars[0].currentFloor = 0;
+    enqueueRequest(stuck, 'w1', 0, 1);
+    drainFloorQueue(stuck, stuck.cars[0], 0, {
+      targetFloorOf: () => 40,
+      chooseTransferFloor: () => NO_TRANSFER_FLOOR,
+    });
+    assert(!hasLiveRequest(stuck, 'w1'), 'a requeue failure must release the claim');
+
+    // 3. Cancelled.
+    const cancelled = shaft({ bottomFloor: 0, topFloor: 20 });
+    enqueueRequest(cancelled, 'w1', 0, 1);
+    cancelRequest(cancelled, 'w1');
+    assert(!hasLiveRequest(cancelled, 'w1'), 'cancellation must release the claim');
+    assert(floorQueueCount(cancelled, 0, 1) === 0, 'and take the ring entry with it');
+  },
+
+  'deduplication does not hide a genuinely full queue from a new rider'() {
+    // Bounding the rule: the claim check must not become a blanket "always
+    // succeed", which would turn every queue-full into a phantom ride.
+    const carrier = shaft({ bottomFloor: 0, topFloor: 20 });
+    for (let i = 0; i < QUEUE_CAPACITY; i++) enqueueRequest(carrier, 'r' + i, 0, 1);
+    assert(enqueueRequest(carrier, 'r5', 0, 1) === true,
+      'somebody already in the full queue re-resolving is still a success');
+    assert(enqueueRequest(carrier, 'newcomer', 0, 1) === false,
+      'but a rider with no claim must still be refused by a full ring');
+    assert(floorQueueCount(carrier, 0, 1) === 40, 'and the ring must not grow past 40');
+
+    // A refusal is not a claim. Marking one would bar that rider from this
+    // carrier for good: it would be told "you are already queued" on every
+    // retry while occupying no slot, and would wait for a car that was never
+    // coming. It is the sentinel bug's shape again — a state meaning "no" that
+    // is stored as though it meant "yes".
+    assert(!hasLiveRequest(carrier, 'newcomer'),
+      'a rider the ring refused must hold no claim on the carrier');
+    carrier.cars[0].currentFloor = 0;
+    drainFloorQueue(carrier, carrier.cars[0], 0, passthroughContext(new Map(
+      Array.from({ length: 40 }, (unused, i) => ['r' + i, 10]),
+    )));
+    assert(floorQueueCount(carrier, 0, 1) === 19, 'the car should have taken its 21');
+    assert(enqueueRequest(carrier, 'newcomer', 0, 1) === true,
+      'and once there is room the refused rider must be able to queue after all');
   },
 
   'a rider whose transfer floor cannot be resolved goes back to its family'() {

@@ -40,6 +40,11 @@ import { EVENING_DAYPART } from './clock.js';
 import {
   computeObjectOperationalScore, computeRuntimeTileStressAverage,
 } from './stress.js';
+// Imported directly rather than passed through `ctx`, deliberately: a ctx entry
+// with a permissive default is a thing that can be forgotten, and forgetting
+// THIS one makes the tower look better than it is. See the note in
+// `officeFamilyHandler`.
+import { shouldWaitForQueuedCarrier } from './routing.js';
 
 /** The lobby. Logical floor 0 — the reference's EXE floor 10. */
 export const LOBBY_FLOOR = 0;
@@ -349,7 +354,23 @@ export function officeFamilyHandler(ctx) {
     const object = tower.objects.get(actor.objectId);
     if (!object || object.family !== FAMILY.office) return;
 
-    if (actor.state >= 0x40) return void officeDispatch(tower, actor, object, tower.clock, ctx);
+    if (actor.state >= 0x40) {
+      // `specs/PEOPLE.md` § Refresh handler flow splits on the ROUTE TOKEN, not
+      // just the state: a rider holding a **carrier** token is waiting for a
+      // car and goes to `maybe_dispatch_queued_route_after_wait`; one holding a
+      // **segment** token walks and goes to family dispatch. Both branches sit
+      // under the same `state >= 0x40` test, which is what makes this easy to
+      // miss — and it was missed.
+      //
+      // Re-asking the router while queued does not just waste a call: every
+      // re-resolution RE-STAMPS the route start, so the wait being accrued is
+      // thrown away. Measured average stress read **7 where the honest figure
+      // was 81**. It fails in the flattering direction — a tower that looks
+      // perfect however bad its lifts are, which is the failure this repo
+      // keeps a list of.
+      if (shouldWaitForQueuedCarrier(actor, tower.clock)) return;
+      return void officeDispatch(tower, actor, object, tower.clock, ctx);
+    }
 
     const verdict = officeGate(actor, object, tower.clock, tower.rng);
     if (verdict === 'hold') return;

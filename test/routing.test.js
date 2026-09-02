@@ -18,10 +18,11 @@ import {
   LOCAL_ACCESS_CENTRES, MAX_TRANSFER_GROUPS, QUEUED_LEG_TIMEOUT, ROUTE,
   STAIRS_EXTRA_COST, TRANSFER_ROUTE_COST, WAITING_TOKEN,
   baseState, buildLocalAccessRecords, buildWalkability, carrierToken, chooseTransferFloor,
-  createSegment, emitsDistanceFeedback, isSpanWalkableForLocalRoute,
+  QUEUED_LEG_TIMEOUT as TIMEOUT,
+  createSegment, emitsDistanceFeedback, isQueuedOnCarrier, isSpanWalkableForLocalRoute,
   isSpanWalkableForServiceRoute, makeCarrierContext, rebuildRouteTables,
   resolveRouteBetweenFloors, scoreCarrier, scoreLocalSegment, selectBestRouteCandidate,
-  walkabilityAt,
+  shouldWaitForQueuedCarrier, walkabilityAt,
 } from '../src/games/tower/sim/routing.js';
 import * as routing from '../src/games/tower/sim/routing.js';
 
@@ -979,6 +980,78 @@ export const tests = {
       'arrival is where a carrier leg counts its trip');
     assert(queued.advanceTripCounters === false,
       'and the resolver must not have counted the same ride at the other end');
+  },
+
+  /**
+   * The stamp has to be the field the stress pipeline actually reads.
+   *
+   * It was `routeStartTick` here once — the same quantity under a second name,
+   * with nothing bridging it to `sim/stress.js`'s `lastTripTick`. The stress
+   * record's stamp therefore stayed at 0 forever, and
+   * `accumulate_elapsed_delay_into_current_sim` computed
+   * `elapsed + day_tick - 0` and charged the whole day tick. Measured on the
+   * seeded tower: **612 of 612 boardings** charged the 300-tick clamp, every
+   * office failed its evaluation, and the whole building emptied. Nothing
+   * errored; the tower merely looked hopeless.
+   */
+  'the route-start stamp is written to lastTripTick, the field stress reads'() {
+    // PEOPLE.md § Per-Sim Trip Fields, offset `+0x0a`: the field is
+    // `last_trip_tick`. One field, one name, across every module that touches it.
+    const tower = makeTower({ carriers: [shaft({ bottomFloor: 0, topFloor: 20 })] });
+    const actor = { id: 'w1', homeColumn: 0, lastTripTick: 0 };
+    const later = { dayTick: 900, daypart: 0, calendarPhase: false };
+
+    const result = resolveRouteBetweenFloors(tower, actor, 0, 10, later);
+    assert(result.code === ROUTE.QUEUED, 'the fixture should queue');
+    assert(actor.lastTripTick === 900,
+      'the stamp must land on lastTripTick, it is ' + actor.lastTripTick);
+    assert(result.lastTripTick === 900, 'and the result reports it under the same name');
+    assert(actor.routeStartTick === undefined,
+      'a second name for the same field is what broke this; there must be only one');
+  },
+
+  /**
+   * The other half of the same failure, and it fails in the *flattering*
+   * direction. A rider in an in-transit state is dispatched every stride; if
+   * its family re-resolves instead of waiting, each call re-stamps the route
+   * start, so the wait it was accruing is thrown away. Measured on the seeded
+   * tower, that made average stress read 7 where the honest figure was 81 —
+   * a metric improving while the thing it measures gets worse.
+   */
+  'a rider queued on a carrier waits, and is released only by the timeout'() {
+    // PEOPLE.md § Refresh handler flow: a state >= 0x40 actor holding a CARRIER
+    // token goes to `maybe_dispatch_queued_route_after_wait`, not to the family
+    // dispatch. ELEVATORS.md § Queue-Full Retry: "there is no retry counter or
+    // maximum retry limit — the timeout is the only gate."
+    assert(TIMEOUT === 300, 'the queued-leg timeout is 300 ticks');
+    const at = (dayTick) => ({ dayTick, daypart: 0, calendarPhase: false });
+
+    const tower = makeTower({ carriers: [shaft({ bottomFloor: 0, topFloor: 20 })] });
+    const actor = { id: 'w1', homeColumn: 0, lastTripTick: 0 };
+    resolveRouteBetweenFloors(tower, actor, 0, 10, at(500));
+
+    assert(isQueuedOnCarrier(actor), 'the rider should be holding a carrier token');
+    assert(shouldWaitForQueuedCarrier(actor, at(500)), 'it waits from the moment it queues');
+    assert(shouldWaitForQueuedCarrier(actor, at(800)),
+      'and for the full 300 ticks — 800 - 500 is exactly the timeout');
+    assert(!shouldWaitForQueuedCarrier(actor, at(801)),
+      'past 300 ticks the timeout releases it to re-dispatch');
+
+    // A rider walking a local leg is NOT queued: it must re-resolve each stride
+    // to advance to the next landing, which is the other half of the split.
+    const walkable = makeTower({
+      segments: [createSegment({ kind: 'stairs', column: 0, entryFloor: 0 })],
+    });
+    const walker = { id: 'w2', homeColumn: 0, lastTripTick: 0 };
+    const leg = resolveRouteBetweenFloors(walkable, walker, 0, 1, at(500));
+    assert(leg.code === ROUTE.LOCAL_LEG, 'the fixture should be a local leg');
+    assert(!isQueuedOnCarrier(walker), 'a local leg is not a carrier queue');
+    assert(!shouldWaitForQueuedCarrier(walker, at(500)),
+      'a walker must keep resolving, or it never reaches the next landing');
+
+    // And an actor with no route at all never waits.
+    assert(!shouldWaitForQueuedCarrier({ id: 'w3' }, at(500)),
+      'an actor holding no route has nothing to wait for');
   },
 
   'delays are reported and never applied'() {

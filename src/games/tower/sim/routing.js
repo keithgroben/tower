@@ -58,21 +58,23 @@
  * Everything it wrote is also on the returned result, so a caller that would
  * rather own its own record can ignore the mutation entirely.
  *
- * `actor.lastTripTick` is the reference's `last_trip_tick`, and it is written
- * under EXACTLY that name because `sim/stress.js` reads it under that name.
+ * **The stamp is `actor.lastTripTick` — the reference's own field name
+ * (`entity[+0x0a]`), and the one `sim/stress.js` reads.** It was called
+ * `routeStartTick` here once, which is the same field under a second name, and
+ * nothing bridged the two: the stress pipeline's stamp stayed at 0 forever, so
+ * `accumulate_elapsed_delay_into_current_sim` computed
+ * `elapsed + day_tick - 0` and charged the whole day tick at every boarding.
+ * Measured on the seeded tower: **612 of 612 boardings** charged the clamp, and
+ * every office in the building failed its evaluation and closed. One field, one
+ * name.
  *
- * ⚠️ It was called `routeStartTick` here for a day. Both modules documented
- * their seam in prose, both were internally correct, and prose does not
- * typecheck: 216 of 216 actors had a stamp written and 0 had one read. Every
- * measurement then started from tick 0, charged the whole day, and clamped to
- * 300 — the uniform-maximal-stress symptom, arriving from a direction nobody
- * had predicted. `test/integration.test.js` now fails if the two ever part
- * again.
+ * It is written **last, from inside `finish()`**, after every delay has been
+ * reported. See the ordering note on `DELAY`: charging a delay clears the
+ * stamp, so writing it first destroys it.
  *
- * It is written
- * **last, from inside `finish()`**, after every delay has been reported. See
- * the ordering note on `DELAY`: charging a delay clears that stamp, so writing
- * it first destroys it.
+ * `test/integration.test.js` now fails if the two ever part again: it asserts
+ * behaviourally that a stamp written by the router is a stamp the stress
+ * pipeline can read, and names no field, so a rename cannot pass it.
  *
  * The two `onDelay` seams take different arguments on purpose. The resolver's
  * is `onDelay(event)` — it was handed the actor, so the event needs no subject.
@@ -879,6 +881,44 @@ export const WAITING_TOKEN = 0xff;
 
 export const carrierToken = (id, directionFlag) =>
   (directionFlag === 1 ? CARRIER_TOKEN_UP : CARRIER_TOKEN_DOWN) + id;
+
+/** Is this actor standing in a carrier queue, or riding, right now? */
+export const isQueuedOnCarrier = (actor) => actor?.route?.mode === 'carrier';
+
+/**
+ * **The family must ask this before dispatching an in-transit actor.**
+ *
+ * `specs/PEOPLE.md` § Refresh handler flow splits on the route token, and the
+ * split is easy to miss because both branches sit under `state >= 0x40`:
+ *
+ * - token `< 0x40` (a stairs/escalator leg) -> call the family dispatch
+ *   handler, which resolves the next leg
+ * - token `>= 0x40` (**queued on a carrier**) -> call
+ *   `maybe_dispatch_queued_route_after_wait`, which does **not** re-resolve
+ *
+ * Dispatch both the same way and every queued rider asks for a fresh route
+ * roughly every 16 ticks while it stands on the floor waiting. Measured on the
+ * seeded tower before this existed: all 216 workers re-resolved while already
+ * queued, 32% of every resolve call came from somebody already in the queue,
+ * and the re-resolution re-stamped the route start each time, so the wait it
+ * was accruing was thrown away and never showed up as stress.
+ *
+ * `ELEVATORS.md` § Queue-Full Retry Behavior gives the release condition:
+ * "re-evaluated after the 300-tick queued-leg timeout ... there is no retry
+ * counter or maximum retry limit — the timeout is the only gate."
+ *
+ * @returns true while the actor should keep waiting rather than re-resolve
+ */
+export function shouldWaitForQueuedCarrier(actor, clock) {
+  if (!isQueuedOnCarrier(actor)) return false;
+  const started = actor.lastTripTick;
+  if (started === undefined || started === null) return false;
+  // `spec/DEVIATIONS.md` A1: a leg stamped before the day-tick wrap and read
+  // after it computes a negative span. Floored at 0, so the wrap makes a rider
+  // re-dispatch early rather than wait a whole extra day.
+  const waited = Math.max(0, (clock?.dayTick ?? 0) - started);
+  return waited <= QUEUED_LEG_TIMEOUT;
+}
 
 // --------------------------------------------------------------- resolver
 
