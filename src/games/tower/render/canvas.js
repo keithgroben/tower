@@ -206,19 +206,15 @@ export function minimapContains(metrics, screenX, screenY) {
  * Is this unit actually let?
  *
  * ⚠️ Two fields, and at placement they disagree. `createObject` sets
- * `unitStatus: 0` — inside the active band, so `isRented()` alone says yes —
- * and `occupiedFlag: false`, because `specs/facility/OFFICE.md` § Parity is
- * explicit that placement does not set it. `population()` in `sim/state.js`
- * counts `occupiedFlag`, and `spec/simtower-loop.md` §4 calls the flip to
- * occupied *the move-in*. So `occupiedFlag` is "has tenants" and `unitStatus`
- * is the cashflow/visible-status band that deactivation writes into
- * (`sim/economy.js` `DEACTIVATED_EARLY = 0x10`).
+ * Two independent facts, and a let office needs both. `occupiedFlag` means
+ * "this facility's tenants are being measured" — it is set the moment
+ * `eval_level` first goes nonzero, which happens to a *vacant* office before
+ * anyone has reached it (`sim/office.js`, the bootstrap). `unitStatus` is the
+ * lease: `<= 0x0f` is let, `>= 0x10` is For Rent.
  *
- * A room is let when **both** hold: it has tenants, and it has not been
- * deactivated. Reading either one alone draws a lie — `unitStatus` alone paints
- * every freshly placed office as occupied on the frame it is built, which is
- * precisely the "For Rent because nobody could reach it" state this whole build
- * exists to make visible.
+ * So the conjunction distinguishes three states the player can actually see:
+ * placed and unmeasured, measured but nobody could get there, and let. The
+ * middle one is the state this whole build exists to make visible.
  *
  * The band half goes through `isRented()` and never through a hand-written
  * comparison against `0x0f`, so the threshold has exactly one home.

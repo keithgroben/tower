@@ -118,6 +118,31 @@ export const enterTransit = (state) => state | IN_TRANSIT_FLAG;
 export const UNIT_STATUS = { activeMax: 0x0f, syncMarker: 0x10 };
 export const isRented = (unitStatus) => unitStatus <= UNIT_STATUS.activeMax;
 
+/** `eval_level` before anything has been scored. The reference's own sentinel. */
+export const EVAL_UNSET = 0xff;
+
+/**
+ * What `unit_status` a freshly placed object starts in.
+ *
+ * ⚠️ `specs/facility/OFFICE.md` § Parity: Placement And Stored State says
+ * *"rental status = open-band value `0`"*, and that is **wrong** — it
+ * contradicts the same file's "new offices start vacant", and it contradicts
+ * the dispatch table, whose `0x20` rows test vacancy as `unit_status >= 0x10`
+ * and would never fire "if vacant" for an office placed at 0.
+ *
+ * The reference's own implementation settles it, with a comment saying so:
+ * *"Office starts at 0x10 (unoccupied). Others start at 0."* Hotels and condos
+ * start in the unsold band, `0x18` before daypart 4 and `0x20` after.
+ *
+ * Caught because a test asserted a placed office is not rented and it was —
+ * `isRented(0)` is true. Recorded as `spec/DEVIATIONS.md` A11.
+ */
+export function initialUnitStatus(family, daypart = 0) {
+  if (family === FAMILY.office) return 0x10;
+  if (family === FAMILY.condo) return daypart < 4 ? 0x18 : 0x20;
+  return 0;
+}
+
 // ------------------------------------------------------------- the records
 
 let nextObjectId = 1;
@@ -133,7 +158,7 @@ let nextActorId = 1;
  * eval closes an office, so a freshly placed one that read as 0 would evict a
  * tenant it never had.
  */
-export function createObject({ family, type, floor, left, right, rentLevel = 1 }) {
+export function createObject({ family, type, floor, left, right, rentLevel = 1, daypart = 0 }) {
   return {
     id: nextObjectId++,
     family,
@@ -141,12 +166,12 @@ export function createObject({ family, type, floor, left, right, rentLevel = 1 }
     floor,
     left,
     right,
-    /** Open band. Offices place at 0 — open — and rent separately. */
-    unitStatus: 0,
+    /** Vacant for anything that can be let. See `initialUnitStatus`. */
+    unitStatus: initialUnitStatus(family, daypart),
     /** Does it have active tenants? Placement does NOT set this. */
     occupiedFlag: false,
-    /** Readiness grade 0/1/2, or null when never sampled. */
-    evalLevel: null,
+    /** Readiness grade 0/1/2, or `EVAL_UNSET` (0xff) when never sampled. */
+    evalLevel: EVAL_UNSET,
     /** The operational-evaluation latch. Active from placement, and NOT the rental flag. */
     evalLatch: true,
     rentLevel,
@@ -242,7 +267,7 @@ export function placeObject(tower, placement, makeTripFields = () => ({})) {
   if (left < 0 || right >= TILES_PER_FLOOR) return { ok: false, reason: 'that span runs off the lot' };
   if (spanBlocked(tower, floor, left, right)) return { ok: false, reason: 'something is already built there' };
 
-  const object = createObject(placement);
+  const object = createObject({ ...placement, daypart: tower.clock?.daypart ?? 0 });
   tower.objects.set(object.id, object);
 
   // The six workers, at placement, before anything is rented.
