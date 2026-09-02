@@ -1184,8 +1184,11 @@ export function makeRenderer(canvas, options = {}) {
     // The label sits ABOVE the footprint where there is room and inside it
     // where there is not, so a ghost on the top floor does not write into the
     // sky and a ghost at the bottom does not write into the earth.
+    // A price when there is one, a note when there is not, both when both.
+    // "free" alone is a poor label for a rent change, and a rent change with a
+    // price is a lie — the tier is the thing that moved, not the balance.
     const text = ghost.ok
-      ? (ghost.cost ? '$' + ghost.cost.toLocaleString('en-US') : 'free') + (ghost.note ? ' · ' + ghost.note : '')
+      ? [ghost.cost ? '$' + ghost.cost.toLocaleString('en-US') : null, ghost.note].filter(Boolean).join(' · ') || 'free'
       : ghost.reason;
     if (text) {
       ctx.font = '700 10px ui-monospace, monospace';
@@ -1787,9 +1790,25 @@ export function makeRenderer(canvas, options = {}) {
     return null;
   }
 
+  /**
+   * The shaft standing in this COLUMN, whatever floor the pointer is on.
+   *
+   * Extending a lift means pointing at the sky above it, where by definition
+   * there is no lift yet — so the floor-bounded pick above cannot answer, and
+   * the tool would be unusable at exactly the place it is used.
+   */
+  function carrierColumnAt(tower, px) {
+    const tile = tileAt(px);
+    if (tile === null) return null;
+    for (const c of tower.carriers) {
+      if (tile >= c.column && tile < c.column + c.shaftWidth) return c;
+    }
+    return null;
+  }
+
   return {
     draw, resize, layout, setGhost,
-    floorAt, tileAt, objectAt, carrierAt,
+    floorAt, tileAt, objectAt, carrierAt, carrierColumnAt,
     dragBy, setZoom, zoomBy, goTo, frameLobby, minimapAt, minimapJump,
     /** The sky, so a check can put something in the air on demand rather than
      *  waiting out a rate meant to make surprises rare. */
