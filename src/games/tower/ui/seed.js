@@ -40,8 +40,35 @@ export const LAYOUT = {
   officeTiles: [54, 60, 66, 76, 82, 88],
   lobbyLeft: 48,
   lobbyRight: 101,
-  /** Offices go on these. `1..6` — high enough that the walk matters. */
+  /** Offices go on these. `1..6` — every one of them served by the lift. */
   officeFloors: [1, 2, 3, 4, 5, 6],
+  /**
+   * **A bank of offices above where the lift stops.** They can never rent, and
+   * that is the entire point of them.
+   *
+   * The alternative seeds were "a tower that works" and "a tower that fails",
+   * and both are worse. All-working teaches nothing, and the player cannot
+   * break it themselves yet because there is no build palette. All-failing
+   * reads as a broken build rather than as a lesson, and leaves no baseline —
+   * you have to watch the thing work once before its failure is information.
+   *
+   * So the opening tower does both at once, and the geometry explains itself
+   * with no text. Measured over nine days, `logs` below are per floor:
+   *
+   *     F1  6/6 let   median stress 77   calm
+   *     F2  6/6 let                 62   calm
+   *     F3  6/6 let                 75   calm
+   *     F4  6/6 let                 89   stressed   <- longer commute
+   *     F5  6/6 let                 85   stressed
+   *     F6  6/6 let                 87   stressed
+   *     F7  0/6 let               huge   fed up     <- above the lift
+   *
+   * All three stress bands on screen at once, each one caused by something the
+   * player can see: low floors are quick, high floors cost more, and above the
+   * shaft you cannot get there at all. The failing bank costs the served floors
+   * nothing — 36/36 still let, median 81 against a failing threshold of 150.
+   */
+  unreachableFloors: [7],
   /**
    * Retail in the basement, on purpose.
    *
@@ -88,7 +115,11 @@ export function seedDemoTower({ seed = 1 } = {}) {
     left: LAYOUT.lobbyLeft, right: LAYOUT.lobbyRight,
   }, makeTripFields);
 
-  for (const floor of LAYOUT.officeFloors) {
+  // The served floors and the unreachable bank are placed identically. Nothing
+  // marks the bank as special — it is ordinary offices that happen to sit above
+  // the top of the shaft, and the sim works out the rest. Anything else would
+  // be the seed teaching the lesson instead of the tower doing it.
+  for (const floor of [...LAYOUT.officeFloors, ...LAYOUT.unreachableFloors]) {
     for (const left of LAYOUT.officeTiles) {
       place(tower, {
         family: FAMILY.office, floor,

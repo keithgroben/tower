@@ -47,6 +47,22 @@ const letUnit = (o) => { o.occupiedFlag = true; o.unitStatus = 0; return o; };
 
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
+/**
+ * Place, and refuse to continue quietly if the span was rejected.
+ *
+ * `placeObject` returns `{ok:false, reason}` rather than throwing, so a
+ * fixture that ignores the result carries an `undefined` object forward and
+ * fails somewhere else entirely — which is exactly what happened when the
+ * seed's unreachable bank landed on the floor these condos used.
+ */
+function place(tower, placement, trips) {
+  const result = placeObject(tower, placement, trips);
+  if (!result.ok) {
+    throw new Error(`fixture: F${placement.floor} ${placement.left}..${placement.right}: ${result.reason}`);
+  }
+  return result.object;
+}
+
 /** A tower holding one of everything the renderer knows how to draw. */
 function towerWithEverything() {
   const tower = seedDemoTower({ seed: 1 });
@@ -77,8 +93,13 @@ function towerWithEverything() {
   assert(residues.size === 3, 'the let shops must cover all three storefronts, got ' + [...residues]);
 
   // Condos, arranged the same way: For Rent, let-and-furious, let-and-calm.
-  const condos = [54, 60, 66].map((left) => placeObject(tower,
-    { family: FAMILY.condo, floor: 7, left, right: left + 5 }, trips).object);
+  // On F9, clear of both the seed's unreachable office bank and the floor the
+  // late placement below uses — `placeObject` REFUSES an overlapping span and
+  // reports it rather than throwing, so a collision here would surface as
+  // "cannot set property of undefined" three frames later.
+  const CONDO_FLOOR = 9;
+  const condos = [54, 60, 66].map((left) => place(tower,
+    { family: FAMILY.condo, floor: CONDO_FLOOR, left, right: left + 5 }, trips));
   letUnit(condos[1]);
   letUnit(condos[2]);
   for (const actor of tower.actors) {

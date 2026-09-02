@@ -18,7 +18,6 @@
  * headless harness. A debugger is not an interface.
  */
 import { DAYPART_LABELS, formatClock } from '../sim/clock.js';
-import { population } from '../sim/state.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { STRESS_COLORS, makeRenderer, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -311,11 +310,13 @@ function drawHud() {
   // "Leasable" is "owns occupants": `OCCUPANTS` in sim/state.js gives six to an
   // office and three to a condo and nothing to a lobby, so the table already
   // says which units can be let and this does not need a second list.
-  let let_ = 0, leasable = 0;
+  let let_ = 0, leasable = 0, tenants = 0;
   for (const object of tower.objects.values()) {
     if (object.occupants.length === 0) continue;
     leasable++;
-    if (officeIsLet(object)) let_++;
+    if (!officeIsLet(object)) continue;
+    let_++;
+    tenants += object.occupants.length;
   }
   // The HUD's half of the rent moment. The world says WHICH office rented; the
   // counter says how the tower is doing overall, and a number that changes
@@ -324,23 +325,44 @@ function drawHud() {
   if (lastLetCount >= 0 && let_ !== lastLetCount) bumpLeases(leasesEl, let_ > lastLetCount);
   lastLetCount = let_;
   leasesEl.textContent = `${let_}/${leasable} let`;
-  $('people').textContent = `${population(tower)} living here · ${tower.actors.length} people`;
+  // ⚠️ NOT `population(tower)`. That sums occupants over `occupiedFlag`, and
+  // since the bootstrap that flag means "this facility's tenants are being
+  // measured" — it is set on a VACANT office before anyone has reached it. On
+  // the shipped seed `population()` returns 252 while only 216 people have a
+  // lease, counting the six offices above the lift that nobody can get to.
+  //
+  // Reported to sim/; until it moves, the HUD must not print a number that
+  // disagrees with the "36/42 let" sitting next to it on the same bar. An
+  // accounting hole that reads as good news is the failure this repo keeps a
+  // list of.
+  $('people').textContent = `${tenants} living here · ${tower.actors.length} people`;
   $('cash').textContent = '$' + tower.cash.toLocaleString('en-US');
 
-  // The loop's own number: mean stress across everyone who has taken a trip.
+  // The loop's own number: the stress of a TYPICAL worker.
+  //
   // People with no trips are excluded — `computeRuntimeTileStressAverage`
-  // scores them 0, the BEST value, so averaging them in makes a tower that
-  // cannot move anybody read as a perfect one.
-  let total = 0, counted = 0;
+  // scores them 0, the BEST value, so counting them makes a tower that cannot
+  // move anybody read as a perfect one.
+  //
+  // The median, not the mean, and for a measured reason. A worker in an office
+  // nobody can reach fails a route every service tick, and `trip_count` is a
+  // byte: over three days it laps 256 while `accumulated_elapsed` keeps
+  // climbing, so their average comes out in the thousands rather than at the
+  // 300-tick clamp. Thirty-six of those against two hundred healthy commuters
+  // drags a mean to ~350 and puts "stress 350" on the bar of a tower that is
+  // almost entirely fine. The median says what a typical worker actually
+  // experiences and is not moved by the stranded ones — who are already saying
+  // so themselves, in red, over their own rooms.
+  const scores = [];
   for (const actor of tower.actors) {
     if (!actor || actor.tripCount === 0) continue;
-    total += computeRuntimeTileStressAverage(actor);
-    counted++;
+    scores.push(computeRuntimeTileStressAverage(actor));
   }
-  const mean = counted ? Math.floor(total / counted) : null;
+  scores.sort((a, b) => a - b);
+  const typical = scores.length ? scores[Math.floor(scores.length / 2)] : null;
   const stressEl = $('stress');
-  stressEl.textContent = mean === null ? 'no trips yet' : `stress ${mean} (${stressBand(mean)})`;
-  stressEl.style.color = mean === null ? '' : STRESS_COLORS[stressBand(mean)];
+  stressEl.textContent = typical === null ? 'no trips yet' : `stress ${typical} (${stressBand(typical)})`;
+  stressEl.style.color = typical === null ? '' : STRESS_COLORS[stressBand(typical)];
 
   let waiting = 0;
   for (const actor of tower.actors) if (actor && actor.waitingFloor != null) waiting++;
