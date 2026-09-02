@@ -12,7 +12,10 @@ import {
   SHAFT_SEPARATION, applyAction, shaftClearance, shaftObstruction,
 } from '../src/games/tower/sim/actions.js';
 import { createTower, isRented } from '../src/games/tower/sim/state.js';
-import { CARRIER_MODE, MAX_SERVED_SPAN } from '../src/games/tower/sim/elevators.js';
+import {
+  CARRIER_MODE, MAX_SERVED_SPAN, carrierSlotIndex, resizeCarrierSlots,
+} from '../src/games/tower/sim/elevators.js';
+import { makeDriver } from '../src/games/tower/ui/driver.js';
 import { createLedger } from '../src/games/tower/sim/economy.js';
 import { seedDemoWorld } from '../src/games/tower/ui/seed.js';
 
@@ -139,6 +142,70 @@ export const tests = {
       'fixture is not tight enough — the lift should collide with itself when not excluded');
     assert(shaftObstruction(w.tower, box, lift.id) === null,
       'a lift still collided with itself after being excluded by id');
+  },
+
+  /**
+   * ⚠️ **Extending a shaft has to grow its per-slot tables.**
+   *
+   * `queues`, `stopEnabled` and the two assignment tables are indexed by
+   * `floor - bottomFloor`. `extend_shaft` moved the ends and left all four at
+   * their old length, so `carrierSlotIndex` returned an index past the end of
+   * `queues` and `drainFloorQueue` read `undefined.up`.
+   *
+   * **422 tests were green over it.** Nothing extended a shaft and then ran the
+   * tower long enough for somebody to call a lift from a newly served floor —
+   * the headless playtest hit it on day 6 of a scripted player doing the most
+   * obvious thing in the game. In the browser it is a caught exception, a
+   * banner, and a tower that stops.
+   *
+   * Behavioural, not a length check: a length check passes on tables grown on
+   * the wrong side.
+   */
+  '⚠️ a lift that was extended can still be called from its new floors'() {
+    const w = seedDemoWorld({ seed: 1 });
+    const lift = w.tower.carriers[0];
+    const target = Math.max(...[...w.tower.objects.values()].map((o) => o.floor));
+    assert(applyAction(w, { type: 'extend_shaft', carrierId: lift.id, top: target }).ok,
+      'the fixture could not extend the lift');
+
+    const slot = carrierSlotIndex(lift, target);
+    assert(lift.queues[slot] !== undefined,
+      'floor ' + target + ' maps to slot ' + slot + ' and the lift has only '
+      + lift.queues.length + ' queues — the first call from up there crashes the tick');
+
+    // And run it, because the crash was in the drain rather than the lookup.
+    const { scheduler } = makeDriver(w);
+    for (let i = 0; i < 2600 * 7; i++) scheduler.tick(w.tower);
+    const upstairs = [...w.tower.objects.values()].filter((o) => o.floor === target);
+    assert(upstairs.some((o) => isRented(o.unitStatus)),
+      'nothing on the newly reached floor ever rented, so this test would pass on a lift '
+      + 'that silently never serves it');
+  },
+
+  /**
+   * The half that would not throw: extending DOWNWARD renumbers every existing
+   * slot, because slot 0 is the bottom floor. New entries belong on the front.
+   * Grown on the back instead, nothing errors — every queued rider is quietly
+   * moved to a different floor, and the lift serves calls nobody made.
+   */
+  'extending downward keeps each floor pointing at its own queue'() {
+    const w = seedDemoWorld({ seed: 1 });
+    const lift = w.tower.carriers[0];
+    const marked = lift.bottomFloor + 1;
+    lift.stopEnabled[carrierSlotIndex(lift, marked)] = 0;      // a distinguishable slot
+
+    resizeCarrierSlots(lift, lift.bottomFloor - 3, lift.topFloor);
+
+    assert(lift.slotCount === lift.topFloor - lift.bottomFloor + 1,
+      'slotCount is ' + lift.slotCount + ' for a ' + (lift.topFloor - lift.bottomFloor + 1)
+      + '-floor shaft');
+    assert(lift.stopEnabled[carrierSlotIndex(lift, marked)] === 0,
+      'floor ' + marked + ' lost its own setting — the new slots went on the wrong end, so every '
+      + 'floor now reads another floor’s queue');
+    assert(lift.queues.length === lift.slotCount && lift.stopEnabled.length === lift.slotCount
+      && lift.upAssignedCar.length === lift.slotCount
+      && lift.downAssignedCar.length === lift.slotCount,
+      'the per-slot tables grew to different lengths, which is the same bug one table at a time');
   },
 
   'a shaft extends but never shortens, and never past the span limit'() {

@@ -22,6 +22,7 @@
  */
 import { FAMILY } from '../sim/state.js';
 import { officeArrival, officeFamilyHandler } from '../sim/office.js';
+import { commercialArrival, commercialFamilyHandler } from '../sim/commercial.js';
 import { officeCashflowHooks } from '../sim/ledger-adapter.js';
 import { resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
@@ -81,21 +82,52 @@ export function makeDelayPricer(tower) {
 /**
  * The scheduler the game runs on, for a given world.
  *
+ * ## `observe`
+ *
+ * Two optional callbacks, `route(result)` and `delay(kind)`, invoked *beside*
+ * the real handling and never in place of it. They exist because the tests want
+ * to count what crossed the seam — "the delay seam carries traffic in both
+ * directions" is only meaningful if something counted — and the alternative was
+ * `test/integration.test.js` restating this whole composition to slip its
+ * counters in.
+ *
+ * It had already restated it, and the copy had already drifted: the moment fast
+ * food and the lunch trips landed, the fixture was running a tower where nobody
+ * goes to lunch, and reporting on it confidently. It caught that itself, by
+ * asserting its own fixture reached the state it was about to test — which is
+ * the only reason this is a note about a seam rather than a bug hunt.
+ *
+ * Observers must not mutate. Nothing enforces that; it is why they are two
+ * narrow callbacks rather than a general hook.
+ *
  * @param {{tower: object, ledger: object}} world
+ * @param {{observe?: {route?: Function, delay?: Function}}} [options]
  * @returns {{scheduler: object, applyRoutingDelay: Function, cashflow: object}}
  */
-export function makeDriver(world) {
+export function makeDriver(world, { observe } = {}) {
   const { tower } = world;
   // The two moments money moves outside checkpoint 2533: an office rents, or an
   // office is vacated. Both go through `sim/ledger-adapter.js` onto the tower's
   // own `cash`, which is the number the HUD draws — one balance, not two.
   const cashflow = officeCashflowHooks(tower);
-  const applyRoutingDelay = makeDelayPricer(tower);
+  const price = makeDelayPricer(tower);
+
+  // The observers wrap, they do not replace. A `route` that forgot to return
+  // the result, or a `delay` that swallowed the pricing, would be a fixture
+  // quietly changing the game it is measuring.
+  const resolveRoute = (t, actor, from, to, clock, options) => {
+    const result = resolveRouteBetweenFloors(t, actor, from, to, clock, options);
+    observe?.route?.(result);
+    return result;
+  };
+  const applyRoutingDelay = (delay, actor) => {
+    observe?.delay?.(delay.kind, delay);
+    price(delay, actor);
+  };
 
   const scheduler = makeTowerScheduler(tower, {
     [FAMILY.office]: officeFamilyHandler({
-      resolveRoute: (t, actor, from, to, clock, options) =>
-        resolveRouteBetweenFloors(t, actor, from, to, clock, options),
+      resolveRoute,
       // Every delay the router reports is priced by the stress pipeline, which
       // owns those constants. The router reports events; it never prices them.
       onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
@@ -106,8 +138,22 @@ export function makeDriver(world) {
       // a cashflow day is paid once, not twice.
       onRent: cashflow.onRent,
     }),
+    /**
+     * The other half of the lunch trip. A fast food's 48 customers are demand
+     * generators in their own right: they ride the same lifts the office
+     * workers do, capped each day by the venue's capacity, and the venue is
+     * paid at closing for however many of them arrived.
+     *
+     * No `onRent` — a venue is not let. Its money is the daily closure payout
+     * in `sim/ledger-adapter.js`, keyed on the day's visitor count.
+     */
+    [FAMILY.fastFood]: commercialFamilyHandler({
+      resolveRoute,
+      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    }),
   }, {
     [FAMILY.office]: officeArrival,
+    [FAMILY.fastFood]: commercialArrival,
   }, applyRoutingDelay);
 
   return { scheduler, applyRoutingDelay, cashflow };

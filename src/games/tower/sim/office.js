@@ -40,6 +40,9 @@ import { EVENING_DAYPART } from './clock.js';
 import {
   computeObjectOperationalScore, computeRuntimeTileStressAverage,
 } from './stress.js';
+import {
+  MINIMUM_STAY, SLOT, acquireVenueSlot, releaseVenueSlot, selectVenue, venueOf,
+} from './commercial.js';
 // Imported directly rather than passed through `ctx`, deliberately: a ctx entry
 // with a permissive default is a thing that can be forgotten, and forgetting
 // THIS one makes the tower look better than it is. See the note in
@@ -67,6 +70,10 @@ export const OFFICE_STATE = {
   seekingWork: 0x20,
   /** Arrived at the office. */
   atWork: 0x21,
+  /** Leaving the venue: give the slot back and route to the saved target. */
+  lunchReturn: 0x22,
+  /** At the venue, eating. Holds a slot; the dwell is enforced here. */
+  atLunch: 0x23,
   /** Route failed while the office was already open. */
   strandedOpen: 0x25,
   /** Route failed outright. */
@@ -226,6 +233,15 @@ export function officeGate(actor, object, clock, rng) {
       if (evening) return OFFICE_STATE.parked;
       return daypart === 3 ? chance(rng, 12) : 'hold';
 
+    case OFFICE_STATE.lunchReturn:
+    case OFFICE_STATE.atLunch:
+      // `specs/DEMAND.md` § Family 7 gate table, the `0x22, 0x23` rows:
+      // daypart >= 4 parks directly in `0x27` — note NOT through `0x05`, so a
+      // worker caught at lunch by the evening does not commute home, it simply
+      // stops. Dayparts 0-1 hold, 2-3 always dispatch.
+      if (evening) return OFFICE_STATE.parked;
+      return daypart >= 2 ? 'dispatch' : 'hold';
+
     case OFFICE_STATE.strandedOpen:
     case OFFICE_STATE.strandedFailed:
     case OFFICE_STATE.parked:
@@ -251,13 +267,16 @@ const chance = (rng, n) => (rng.chance(n) ? 'dispatch' : 'hold');
 export function officeDispatch(tower, actor, object, clock, ctx) {
   const state = baseState(actor.state);
 
-  // Lunch needs commercial venues, which this build does not have yet. A
-  // worker that would go to lunch simply stays at work until the evening gate
-  // sends it home — the commute loop is complete without it.
-  // TODO(parity): states 0x01/0x02/0x22/0x23 once fast food exists.
+  // **The lunch wave.** `specs/facility/OFFICE.md` § Daily Worker Simulation
+  // lists "offices create midday traffic toward fast-food businesses" as an
+  // effect to preserve, and until commercial existed this was a `TODO(parity)`
+  // that sent a hungry worker back to its desk — so a third of the trips the
+  // lifts have to carry were simply absent from the model.
   if (state === OFFICE_STATE.lunchOut || state === OFFICE_STATE.lunchTransit) {
-    actor.state = OFFICE_STATE.atWork;
-    return { moved: false };
+    return lunchOutbound(tower, actor, object, clock, ctx, state);
+  }
+  if (state === OFFICE_STATE.lunchReturn || state === OFFICE_STATE.atLunch) {
+    return lunchHomeward(tower, actor, object, clock, ctx, state);
   }
 
   const inbound = state === OFFICE_STATE.commuteIn || state === OFFICE_STATE.seekingWork;
@@ -327,9 +346,221 @@ function seekingWorkResult(tower, object, actor, code, ctx) {
     object.dirty = true;
   }
 
-  actor.state = code === 3 ? OFFICE_STATE.atWork : enterTransit(OFFICE_STATE.seekingWork);
+  actor.state = code === 3 ? nextStateAfterArrival(actor) : enterTransit(OFFICE_STATE.seekingWork);
   return { moved: true, code, rented: wasVacant };
 }
+
+// ------------------------------------------------------------------ lunch
+
+/**
+ * The office's own dwell, `specs/facility/OFFICE.md` § Parity: Worker Loop:
+ * *"venue dwell uses a fixed 16-tick hold before the return leg can start"*.
+ *
+ * ⚠️ It is **not** the number that usually decides how long lunch takes.
+ * `specs/facility/COMMERCIAL.md` § Availability blocks the slot release until
+ * the venue's own minimum stay — 60 ticks for every commercial type — has
+ * elapsed, and a worker that walked out while still holding a slot would leave
+ * the venue counting somebody who is not there. So the effective dwell at a
+ * real venue is 60, and the 16 binds only when there is no record to release:
+ * a venue demolished while somebody was eating in it. Both rules are the
+ * reference's, they are enforced as one expression below, and which one binds
+ * is a fact about the tower rather than a choice made here.
+ * `spec/DEVIATIONS.md` A19.
+ */
+export const LUNCH_DWELL = 16;
+
+/** How long this worker must stay put before it may leave the venue. */
+export const lunchDwellFor = (record) => Math.max(LUNCH_DWELL, record ? MINIMUM_STAY : 0);
+
+/**
+ * `0x01` / `0x02` — out to lunch. `specs/DEMAND.md` § Family 7 dispatch table:
+ * `0x01` picks a venue through the fast-food bucket (selector 2), `0x02`
+ * continues toward the one already chosen.
+ *
+ * ## The fallback, which is the common case in a young tower
+ *
+ * `specs/facility/OFFICE.md` § Parity: No Fast Food Available spends a page on
+ * what happens when the bucket is empty, and the reason is worth keeping in
+ * view: **a tower usually has offices before it has anywhere to eat.** The
+ * reference stores the venue index `-1`, and its
+ * `get_current_commercial_venue_destination_floor` reads that back as the
+ * lobby — so the worker takes a wasted round trip downstairs instead of
+ * getting stuck.
+ *
+ * ⚠️ Ours stores `null`, never `-1`. That is `CLAUDE.md`'s first entry: the
+ * reference can afford `-1` because its floors are EXE-indexed and never
+ * negative; ours are logical and `-1` is B1, a real floor with real shops on
+ * it. A literal port here would send every hungry worker to the basement.
+ */
+function lunchOutbound(tower, actor, object, clock, ctx, state) {
+  if (state === OFFICE_STATE.lunchOut) {
+    // The stagger is per-worker and it reaches the venue choice, not just the
+    // timing: each worker draws on its own stride tick, so six workers in one
+    // office scatter across the bucket instead of arriving as a block.
+    const picked = selectVenue(tower, FAMILY.fastFood, object.floor);
+    actor.venueObjectId = picked ? picked.id : null;
+  }
+
+  const venueObject = lunchVenue(tower, actor);
+  // No venue, or one that has gone: the lobby is the destination, and the trip
+  // is real — it costs the lifts exactly what a lunch trip costs them.
+  const destination = venueObject ? venueObject.floor : LOBBY_FLOOR;
+  const result = ctx.resolveRoute(tower, actor, actor.anchorFloor ?? object.floor, destination, clock, {
+    passengerRoute: true,
+    emitDistanceFeedback: emitsDistanceFeedback(state),
+    onDelay: (delay) => ctx.onDelay?.(delay, actor),
+  });
+  const code = result.code ?? result;
+
+  if (code === -1) {
+    if (!venueObject) {
+      // § Route to Lobby Fails. The reference parks the worker in `0x41` behind
+      // a fake queued-car sentinel and lets the route delay expire, whereupon
+      // it advances the presence counter and writes `0x05`. We write `0x05`
+      // now: the spec's own § Net Effect for this branch is *"the worker skips
+      // the lunch cycle entirely and enters evening departure"*, and `0x05`
+      // holds at its gate until daypart 4 either way, so the sentinel buys a
+      // delay nobody can observe. `spec/DEVIATIONS.md` A20.
+      actor.state = OFFICE_STATE.commuteOut;
+      return { moved: false, code };
+    }
+    actor.state = OFFICE_STATE.strandedFailed;
+    return { moved: false, code };
+  }
+
+  if (code === 3) return claimLunchSlot(tower, actor, venueObject, clock, ctx);
+  actor.state = enterTransit(state);
+  return { moved: true, code };
+}
+
+/**
+ * Standing on the venue's floor: take a slot, wait, or write this venue off.
+ *
+ * `specs/facility/OFFICE.md` § Dispatch Table, the `0x02` row, gives all four
+ * answers — *"claimed -> 0x23, busy -> 0x42, none -> 0x41"* — plus the
+ * no-venue case from the fallback section, where acquiring against index `-1`
+ * short-circuits to success and writes `0x22`.
+ *
+ * **Busy is not failure.** An over-capacity venue means "wait and try again",
+ * and turning that into a route failure would charge the worker the 300-tick
+ * no-route penalty for a queue that is merely popular.
+ */
+function claimLunchSlot(tower, actor, venueObject, clock, ctx) {
+  if (!venueObject) {
+    // The fake lunch: nothing was claimed, so there is nothing to dwell for
+    // and nothing to release. Straight to the leg home.
+    actor.state = OFFICE_STATE.lunchReturn;
+    return { moved: true, code: 3, claimed: false };
+  }
+
+  // Standing at the venue means standing on its floor — stated, not assumed.
+  actor.anchorFloor = venueObject.floor;
+  const outcome = acquireVenueSlot(venueOf(venueObject), actor, clock, venueObject.family);
+  if (outcome === SLOT.acquired) {
+    actor.state = OFFICE_STATE.atLunch;
+    return { moved: true, code: 3, claimed: true };
+  }
+  if (outcome === SLOT.full) {
+    actor.state = enterTransit(OFFICE_STATE.lunchTransit);
+    return { moved: false, code: 3, claimed: false };
+  }
+  // Unavailable — closed under them, or demolished. `COMMERCIAL.md` § Venue
+  // Selection: *"if the selected venue is invalid or demolished, the sim
+  // receives an immediate retry (delay = 0)"*. Zero ticks and NOT inert: the
+  // delay still clears the route-start stamp, which is why it is emitted
+  // rather than optimised away — `CLAUDE.md`'s "before suppressing a zero".
+  ctx.onDelay?.({ kind: 'invalid-venue' }, actor);
+  actor.venueObjectId = null;
+  actor.state = enterTransit(OFFICE_STATE.lunchOut);
+  return { moved: false, code: 3, claimed: false };
+}
+
+/**
+ * `0x22` / `0x23` — the way back. `specs/facility/OFFICE.md` § Dispatch Table:
+ * `0x23` *"enforce the 16-tick lunch dwell, then route to the saved target"*,
+ * `0x22` *"release the lunch-venue slot, route home"*. One handler, because
+ * they differ only in whether a dwell has to be waited out first — which is
+ * how the reference's own `office_refresh_0x22/0x23` is written.
+ *
+ * The arrival branch is the odd one and it is faithful: *"occupant_index == 1
+ * -> 0x00, else -> 0x05"*. Worker 1 goes back round the daytime loop; everyone
+ * else is done for the day the moment lunch ends.
+ */
+function lunchHomeward(tower, actor, object, clock, ctx, state) {
+  const venueObject = lunchVenue(tower, actor);
+  const record = venueOf(venueObject);
+
+  // ⚠️ **No stamp means the meal is over, not that it never started.**
+  // `releaseVenueSlot` clears `venueEnteredTick` on the way out, and `0x63` —
+  // in transit home — re-enters this handler every stride with base state
+  // `0x23`. Defaulting the missing stamp to "now" made `stayed` zero, which is
+  // for ever less than the dwell, so the worker held on every stride and never
+  // moved again. It failed FLATTERINGLY, which is why it needed measuring
+  // rather than reading: those workers dropped out of the stress sample
+  // entirely and the tower's median read **76 where the honest figure was 90**.
+  // `CLAUDE.md`: an absent value that reads as a real one.
+  if (state === OFFICE_STATE.atLunch && actor.venueEnteredTick != null) {
+    // Floored for the day-tick wrap, `spec/DEVIATIONS.md` A1: a stay stamped
+    // at 2590 and read at tick 10 is not minus 2,580 ticks of lunch.
+    const stayed = Math.max(0, clock.dayTick - actor.venueEnteredTick);
+    if (stayed < lunchDwellFor(record)) return { moved: false };
+  }
+
+  // The slot goes back BEFORE the route is asked for, which is the order the
+  // reference uses — a worker who is leaving must stop occupying the venue even
+  // if the trip home cannot be resolved, or a broken lift silently fills every
+  // restaurant in the tower with people who are not there.
+  releaseVenueSlot(record, actor, clock, { skipDwellGate: true });
+  actor.venueObjectId = null;
+
+  const result = ctx.resolveRoute(tower, actor, actor.anchorFloor ?? object.floor, object.floor, clock, {
+    passengerRoute: true,
+    emitDistanceFeedback: emitsDistanceFeedback(state),
+    onDelay: (delay) => ctx.onDelay?.(delay, actor),
+  });
+  const code = result.code ?? result;
+
+  if (code === -1) {
+    actor.state = OFFICE_STATE.strandedFailed;
+    return { moved: false, code };
+  }
+  if (code === 3) {
+    actor.state = nextStateAfterLunch(actor);
+    return { moved: true, code };
+  }
+  actor.state = enterTransit(state);
+  return { moved: true, code };
+}
+
+/** The venue this worker is at or heading for, or `null`. Never `-1`. */
+const lunchVenue = (tower, actor) =>
+  (actor.venueObjectId == null ? null : tower.objects.get(actor.venueObjectId) ?? null);
+
+/**
+ * Where a worker goes after lunch. `specs/facility/OFFICE.md` § Dispatch Table,
+ * `0x22`/`0x23`: *"occupant_index == 1 -> 0x00, else -> 0x05"*.
+ */
+export const nextStateAfterLunch = (actor) =>
+  (actor.occupantIndex === 1 ? OFFICE_STATE.commuteIn : OFFICE_STATE.commuteOut);
+
+/**
+ * Where a worker goes after the rental route lands. Same source, the `0x20`
+ * row: *"occupant 0 -> 0x00; occupant != 0 -> 0x01 or 0x02"*.
+ *
+ * **This is the door into the lunch wave**, and it used to be shut: every
+ * arriving worker was written `0x21`, which only ever leads to `0x05`, so no
+ * worker in a lift-served tower could reach `0x01` at all. `0x21` is still
+ * reached — from `0x00`'s own arrival — it is just not where the rental path
+ * ends any more.
+ *
+ * TODO(parity): the spec says "`0x01` or `0x02`" without saying which. `0x01`
+ * is the row that picks a venue and `0x02` the row that continues to one
+ * already chosen, so a worker with no venue yet can only mean `0x01`. (The
+ * reference implementation confirms it: `0x02` is a star-3 medical-trip
+ * variant, and there is no medical family here.) `spec/DEVIATIONS.md` A21.
+ */
+export const nextStateAfterArrival = (actor) =>
+  (actor.occupantIndex === 0 ? OFFICE_STATE.commuteIn : OFFICE_STATE.lunchOut);
 
 /**
  * `emit_distance_feedback` is read from the **base** state, which is what makes
@@ -375,7 +606,19 @@ export function officeFamilyHandler(ctx) {
     const verdict = officeGate(actor, object, tower.clock, tower.rng);
     if (verdict === 'hold') return;
     if (verdict === 'dispatch') return void officeDispatch(tower, actor, object, tower.clock, ctx);
-    actor.state = verdict;          // a gate that rewrites state without dispatching
+
+    // A gate that rewrites state without dispatching — and the one case where
+    // that is not the whole story. The evening forces a worker out of `0x23`
+    // straight into `0x27`, and it may be holding a venue slot: without the
+    // release the venue counts a diner who has gone home, for the rest of the
+    // day. The reference releases from this same handler before the park
+    // transition. (The daily rebuild zeroes occupancy anyway, so the leak would
+    // heal overnight — which is exactly what would make it hard to see.)
+    if (actor.venueObjectId != null) {
+      releaseVenueSlot(venueOf(lunchVenue(tower, actor)), actor, tower.clock, { skipDwellGate: true });
+      actor.venueObjectId = null;
+    }
+    actor.state = verdict;
   };
 }
 
@@ -396,11 +639,26 @@ export function officeArrival(actor, floor) {
   const state = baseState(actor.state);
   actor.anchorFloor = floor;
   switch (state) {
-    case OFFICE_STATE.seekingWork:            // 0x60 -> arrived at work
+    case OFFICE_STATE.seekingWork:            // 0x60 -> the office is open, now live in it
+      actor.state = nextStateAfterArrival(actor); break;
     case OFFICE_STATE.commuteIn:              // 0x40 -> arrived at work
       actor.state = OFFICE_STATE.atWork; break;
     case OFFICE_STATE.atWork:                 // 0x61 -> heading home next
       actor.state = OFFICE_STATE.commuteOut; break;
+    /**
+     * `0x41` / `0x42` -> standing at the venue floor. Deliberately NOT resolved
+     * here: dropping the transit bit leaves the worker in `0x02`, whose next
+     * dispatch resolves a same-floor route, answers `3`, and runs the acquire
+     * branch that is already written once in `claimLunchSlot`. Claiming a slot
+     * from an arrival handler with no tower to hand would be a second copy of
+     * those four answers, and the second copy is the one that drifts.
+     */
+    case OFFICE_STATE.lunchOut:
+    case OFFICE_STATE.lunchTransit:
+      actor.state = OFFICE_STATE.lunchTransit; break;
+    case OFFICE_STATE.lunchReturn:            // 0x62 / 0x63 -> back at the office
+    case OFFICE_STATE.atLunch:
+      actor.state = nextStateAfterLunch(actor); break;
     case OFFICE_STATE.commuteOut:             // 0x45 -> home, park for the night
       actor.state = OFFICE_STATE.parked; break;
     default:
@@ -431,7 +689,15 @@ export function deactivateIfFailing(tower, object, occupants, ctx) {
   object.occupiedFlag = false;
   object.activationTickCount = 0;
   object.dirty = true;
-  for (const worker of occupants) worker.state = OFFICE_STATE.seekingWork;
+  for (const worker of occupants) {
+    // A worker sent back to the rental queue mid-lunch still holds a venue
+    // slot. Same rule as the evening park above: whoever leaves, releases.
+    if (worker.venueObjectId != null) {
+      releaseVenueSlot(venueOf(lunchVenue(tower, worker)), worker, tower.clock, { skipDwellGate: true });
+      worker.venueObjectId = null;
+    }
+    worker.state = OFFICE_STATE.seekingWork;
+  }
   ctx?.onVacate?.(tower, object);
   return true;
 }
