@@ -93,6 +93,50 @@ export const tests = {
     assert(objectStatusTag(office) === 'FOR RENT', 'and it says so again');
   },
 
+  '⚠️ every family says the right thing on its sign, or none at all'() {
+    // Three of these have been wrong in a row: the venue said FOR RENT and
+    // could never stop, and a condo said FOR RENT when a condo is SOLD. Both
+    // were invisible because neither was in `BUILDABLE` — nobody could place
+    // one, so nobody looked.
+    //
+    // A sign that says the wrong thing teaches a player that the signs mean
+    // nothing, and the one sign that has to be believed is FOR RENT on the
+    // office bank above the lift. So every family is pinned, including the ones
+    // that cannot be built yet.
+    const expected = {
+      office: 'FOR RENT',
+      condo: 'FOR SALE',
+      fastFood: '',      // open or closed, never vacant
+      retail: '',
+      restaurant: '',
+      lobby: '',         // infrastructure
+    };
+    const tower = createTower({ seed: 1 });
+    let left = 0;
+    for (const [name, tag] of Object.entries(expected)) {
+      const placed = placeObject(tower,
+        { family: FAMILY[name], floor: 5, left, right: left + 5 },
+        () => createSimTripRecord());
+      left += 8;
+      assert(placed.ok, name + ': ' + placed.reason);
+      assert(objectStatusTag(placed.object) === tag,
+        `an empty ${name} says ${JSON.stringify(objectStatusTag(placed.object))}, expected ${JSON.stringify(tag)}`);
+      // And whatever it said, taking it must clear it. A tag no action can
+      // remove is worse than no tag at all.
+      placed.object.occupiedFlag = true;
+      placed.object.unitStatus = 0;
+      assert(objectStatusTag(placed.object) === '',
+        `a taken ${name} still says ${JSON.stringify(objectStatusTag(placed.object))}`);
+    }
+
+    // And nothing in FAMILY is left unaccounted for, so the next one added has
+    // to be given a sign rather than inheriting somebody else's.
+    const unclassified = Object.keys(FAMILY).filter((k) => !(k in expected));
+    assert(unclassified.length === 0,
+      'these families have no agreed sign: ' + unclassified.join(', ')
+      + ' — decide what each says empty and add it here.');
+  },
+
   'the lobby is never For Rent'() {
     const tower = createTower({ seed: 1 });
     const { object } = placeObject(tower, { family: FAMILY.lobby, floor: GROUND_FLOOR, left: 48, right: 101 });
