@@ -22,6 +22,7 @@
  */
 import { FAMILY } from '../sim/state.js';
 import { officeArrival, officeFamilyHandler } from '../sim/office.js';
+import { commercialArrival, commercialFamilyHandler } from '../sim/commercial.js';
 import { officeCashflowHooks } from '../sim/ledger-adapter.js';
 import { resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
@@ -106,8 +107,23 @@ export function makeDriver(world) {
       // a cashflow day is paid once, not twice.
       onRent: cashflow.onRent,
     }),
+    /**
+     * The other half of the lunch trip. A fast food's 48 customers are demand
+     * generators in their own right: they ride the same lifts the office
+     * workers do, capped each day by the venue's capacity, and the venue is
+     * paid at closing for however many of them arrived.
+     *
+     * No `onRent` — a venue is not let. Its money is the daily closure payout
+     * in `sim/ledger-adapter.js`, keyed on the day's visitor count.
+     */
+    [FAMILY.fastFood]: commercialFamilyHandler({
+      resolveRoute: (t, actor, from, to, clock, options) =>
+        resolveRouteBetweenFloors(t, actor, from, to, clock, options),
+      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    }),
   }, {
     [FAMILY.office]: officeArrival,
+    [FAMILY.fastFood]: commercialArrival,
   }, applyRoutingDelay);
 
   return { scheduler, applyRoutingDelay, cashflow };
