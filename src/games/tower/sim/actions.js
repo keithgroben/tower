@@ -17,20 +17,43 @@
  * `check_construction_funds_available_for_floor_range`.
  */
 import {
-  FAMILY, GROUND_FLOOR, OBJECT_TYPE, floorExists, isUnitLet, placeObject, spanBlocked,
+  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, floorExists, isUnitLet,
+  placeObject, spanBlocked,
 } from './state.js';
 import {
-  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier,
-  resizeCarrierServedRange,
+  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier, resizeCarrierSlots,
 } from './elevators.js';
 import { CONSTRUCTION_COST, chargeConstruction, placementCost } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
 import { createSimTripRecord } from './stress.js';
+import { FAST_FOOD_WIDTH, finalizeCommercialVenue } from './commercial.js';
 
-/** What each buildable maps to. The palette is built from this, so it cannot drift. */
+/**
+ * What each buildable maps to. The palette is built from this, so it cannot
+ * drift.
+ *
+ * `finalize` is the family-specific placement finalizer `specs/FACILITIES.md`
+ * § Placement Finalizer describes — the step that gives a commercial venue its
+ * linked record. Only the families that have one carry it.
+ */
 export const BUILDABLE = {
   lobby: { family: FAMILY.lobby, type: OBJECT_TYPE.lobby, cost: 'lobby', width: 1, label: 'Lobby' },
   office: { family: FAMILY.office, type: OBJECT_TYPE.office, cost: 'office', width: 6, label: 'Office' },
+  /**
+   * The lunch destination. `cost: 'fastFood'` is `$100,000` in
+   * `economy.js`'s table, keyed by type `0x0c` — which is why `OBJECT_TYPE`
+   * had to stop calling `6` fast food: at `6` this would have been charged
+   * `$200,000` as a Restaurant, and priced from the wrong row for ever.
+   */
+  fastFood: {
+    family: FAMILY.fastFood,
+    type: OBJECT_TYPE.fastFood,
+    cost: 'fastFood',
+    width: FAST_FOOD_WIDTH,
+    label: 'Fast Food',
+    finalize: finalizeCommercialVenue,
+  },
+
   /**
    * A condo is bought outright, not rented — and the money comes back out if
    * its residents cannot get about. `sim/condo.js` has the whole account.
@@ -178,7 +201,8 @@ const ACTIONS = {
 
     const placed = placeObject(tower,
       { family: spec.family, type: spec.type, floor, left, right },
-      () => createSimTripRecord());
+      () => createSimTripRecord(),
+      spec.finalize);
     if (!placed.ok) {
       ledger.cash += paid.cost;                       // nothing was built; refund
       return placed;
@@ -274,11 +298,11 @@ const ACTIONS = {
       if (blocked) return refuse(blocked);
     }
 
-    // NOT two field writes. The carrier's five per-floor tables are indexed off
-    // `bottomFloor` and have to move with it — `sim/elevators.js` owns that
-    // list, and writing the two fields here left the new floors with no queue
-    // at all while `carrierStopsAtFloor` reported they were served.
-    resizeCarrierServedRange(carrier, newBottom, newTop);
+    // ⚠️ Through `resizeCarrierSlots`, never by writing the two bounds. Eight
+    // arrays are indexed off `bottomFloor`, and moving the bounds without them
+    // gave the new floors no queue rings — a crash the moment a car stopped on
+    // one — and renumbered every existing slot when the bottom dropped.
+    resizeCarrierSlots(carrier, newBottom, newTop);
     tower.routeTablesDirty = true;
     return { ok: true, cost: 0, bottom: newBottom, top: newTop };
   },
@@ -309,11 +333,7 @@ const ACTIONS = {
   demolish({ tower }, { objectId }) {
     const object = tower.objects.get(objectId);
     if (!object) return refuse('nothing there');
-    // `isUnitLet`, not `isRented`: a sold condo sits at `0x10` overnight, which
-    // is outside the OFFICE's let band — so the office reading would let a
-    // player bulldoze a condo they had been paid $150,000 for, and keep the
-    // money.
-    if (isUnitLet(object)) return refuse('that unit is let — you cannot evict a tenant');
+    if (hasTenant(object)) return refuse('that unit is let — you cannot evict a tenant');
 
     tower.objects.delete(objectId);
     tower.actors = tower.actors.filter((a) => a.objectId !== objectId);
@@ -343,6 +363,33 @@ const ACTIONS = {
 
 const nextCarrierId = (tower) =>
   tower.carriers.reduce((max, c) => Math.max(max, c.id), 0) + 1;
+
+/**
+ * Does demolishing this put somebody out of a home or a job?
+ *
+ * ⚠️ Not simply `isRented(unitStatus)`, on two counts. `initialUnitStatus`
+ * places every non-office, non-condo family in the open band — so a fast food
+ * read as *let* from the instant it was built and could never be demolished,
+ * which is a shop you are stuck with for the life of the tower. And a **sold
+ * condo sits at the sync sentinel `0x10` overnight**, which is outside the
+ * OFFICE's let band, so the office reading would let a player bulldoze a condo
+ * they had been paid $150,000 for and keep the money — every night, between
+ * dusk and the next morning's dispatch. {@link isUnitLet} is the per-family
+ * band; it is the office's for every family that is not a condo.
+ *
+ * `specs/facility/COMMERCIAL.md` § Retail Income Timing draws the line: *"the
+ * binary does **not** use the retail placed-object `unit_status` byte to drive
+ * that visible open/closed distinction"*. A venue has customers, not tenants,
+ * and there is nobody to evict — its diners simply find the venue gone, which
+ * is the *"invalid or demolished ... immediate retry"* case § Venue Selection
+ * already describes.
+ *
+ * Exported so `ui/build.js`'s ghost asks this rather than restating it. The
+ * ghost and the seam agreeing is pinned by a matrix in `test/build.test.js`,
+ * which is what makes one definition mandatory rather than tidy.
+ */
+export const hasTenant = (object) =>
+  !COMMERCIAL_FAMILY_CODES.has(object.family) && isUnitLet(object);
 
 /**
  * The seam. `world` is `{ tower, ledger }` — both, because building costs

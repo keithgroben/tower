@@ -85,14 +85,28 @@ function worldWithBuiltCondo({ floor = 3, left = 20 } = {}) {
  * money moved on **that one tick** — stepping a day lumps the sale in with a
  * tower's worth of office rent, and then any number looks plausible.
  */
+/** Everything in the income ledger that is not the condo's own bucket. */
+const otherIncome = (tower) => Object.entries(tower.incomeLedger ?? {})
+  .reduce((n, [bucket, amount]) => (bucket === 'condo' ? n : n + amount), 0);
+
 function runUntilBandFlips(world, driver, object, limit = 2600 * 8) {
   const start = isCondoSold(object.unitStatus);
   for (let i = 0; i < limit; i++) {
     const before = world.tower.cash;
+    const others = otherIncome(world.tower);
     const tick = world.tower.clock.dayTick;
     driver.scheduler.tick(world.tower);
     if (isCondoSold(object.unitStatus) !== start) {
-      return { flipped: true, before, after: world.tower.cash, tick, ticks: i };
+      return {
+        flipped: true, before, after: world.tower.cash, tick, ticks: i,
+        // ⚠️ The sale tick is not the condo's alone. Once fast food landed, a
+        // venue closure could pay on the very same tick — the raw delta came
+        // out at $160,000 for a $150,000 sale. Netting the other buckets off
+        // keeps the assertion EXACT instead of loosening it to `>=`, which
+        // would pass for a sale that paid nothing while something else paid
+        // $150,000.
+        othersDelta: otherIncome(world.tower) - others,
+      };
     }
   }
   return { flipped: false };
@@ -469,8 +483,12 @@ export const tests = {
     const { world, driver, object } = worldWithBuiltCondo();
     const flip = runUntilBandFlips(world, driver, object);
     assert(flip.flipped, 'the condo never sold in eight days on a lift that reaches it');
-    assert(flip.after - flip.before === SALE_PRICE,
-      'the sale tick moved cash by ' + (flip.after - flip.before) + ', not ' + SALE_PRICE);
+    assert(flip.after - flip.before - flip.othersDelta === SALE_PRICE,
+      'the sale tick moved cash by ' + (flip.after - flip.before) + ', of which '
+      + flip.othersDelta + ' was other families — leaving '
+      + (flip.after - flip.before - flip.othersDelta) + ' for the condo, not ' + SALE_PRICE);
+    assert(world.tower.incomeLedger.condo === SALE_PRICE,
+      'and the condo income bucket says ' + world.tower.incomeLedger.condo + ' rather than ' + SALE_PRICE);
     assert(world.ledger.cash === world.tower.cash, 'and the ledger the seed handed out is that same number');
     assert(world.tower.populationLedger.condo === 3, 'three people joined the ledger the stars are read from');
   },

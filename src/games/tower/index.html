@@ -119,6 +119,13 @@
   @media (prefers-reduced-motion: reduce) {
     #leases.bump { animation: none; }
   }
+  /* The goal. `CLAUDE.md`'s no-sidebar rule holds: one glyph and one clause,
+     on the bar with everything else. The stars are the state, the clause is the
+     only part a player can act on, so the clause gets the readable colour and
+     the stars stay quiet. */
+  #stars { color: var(--warn); letter-spacing: -1px; flex-shrink: 0; }
+  #goal { color: #9fb3c8; }
+
   #waiting { color: var(--info); }
   #cash { color: var(--good); font-weight: 700; }
 
@@ -220,6 +227,8 @@
       <span id="day">day 0</span>
       <span id="daypart">—</span>
       <span id="tick">t0000</span>
+      <span id="stars" title="tower activity">☆☆☆☆☆</span>
+      <span id="goal"></span>
       <span id="leases">0/0 let</span>
       <span id="stress">no trips yet</span>
       <span id="waiting">0 waiting</span>

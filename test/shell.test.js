@@ -37,8 +37,14 @@ export const tests = {
     const floorCount = LAYOUT.officeFloors.length + LAYOUT.unreachableFloors.length;
     assert(offices.length === floorCount * LAYOUT.officeTiles.length,
       'every office in the layout was placed, got ' + offices.length);
-    assert(tower.actors.length === offices.length * OCCUPANTS[FAMILY.office],
-      'six workers an office, from placement — got ' + tower.actors.length);
+    // Offices bring six workers each; the lunch venue brings its own customers,
+    // who are demand generators in their own right and ride the same lifts.
+    // Asserted as "every office's workers are there" rather than as a total, so
+    // adding a family to the seed does not need this number re-derived.
+    const workers = tower.actors.filter((a) => a.family === FAMILY.office).length;
+    assert(workers === offices.length * OCCUPANTS[FAMILY.office],
+      'six workers an office, from placement — got ' + workers);
+    assert(tower.actors.length > workers, 'the lunch venue brings its own people too');
     assert(tower.actors.every((a) => a.state === STATE_UNPLACED_OCCUPANT),
       'every worker starts parked in 0x20, waiting to be routed');
     assert(population(tower) === 0, 'and nobody LIVES here yet: population counts tenants');

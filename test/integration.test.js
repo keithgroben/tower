@@ -37,34 +37,9 @@ import {
   recordNoRouteFailure, stampRouteStart,
 } from '../src/games/tower/sim/stress.js';
 import { seedDemoWorld } from '../src/games/tower/ui/seed.js';
-import { makeTowerScheduler } from '../src/games/tower/ui/tick.js';
+import { makeDriver } from '../src/games/tower/ui/driver.js';
 
 const assert = (c, m) => { if (!c) throw new Error(m); };
-
-/** The real delay pricing, mirroring `ui/main.js`. No stubs. */
-function priceDelay(tower, delay, actor) {
-  if (!actor) return;
-  switch (delay.kind) {
-    case 'no-route': return void recordNoRouteFailure(actor);
-    case 'local-transit': return void applyLocalSegmentDelay(actor, delay.modeAndSpan);
-    case 'queue-full': return void applyQueueFullDelay(actor);
-    case 'distance': return void applyDistancePenalty(actor, {
-      heightMetricDelta: delay.heightMetricDelta,
-      emitDistanceFeedback: true,
-      carrierMode: delay.carrierMode,
-    });
-    case 'boarding': {
-      accumulateElapsedDelayIntoCurrentSim(actor, tower.clock.dayTick, {
-        sourceFloor: delay.sourceFloor,
-        lobbyHeight: tower.lobbyHeight,
-        carrierMode: delay.carrierMode,
-      });
-      if (delay.carrierMode !== CARRIER_SERVICE) stampRouteStart(actor, tower.clock.dayTick);
-      return;
-    }
-    default: return;
-  }
-}
 
 /**
  * A real seeded tower with the real family machine, running the real router.
@@ -77,32 +52,26 @@ function liveTower({ days = 2, onDay = null } = {}) {
   const world = seedDemoWorld({ seed: 1 });
   const { tower } = world;
   const seen = { delays: new Map(), codes: new Map(), cashByDay: [] };
-  // The rent seam. `sim/office.js` calls this the instant a route resolves;
-  // without it an office rents and no money ever arrives.
-  const cashflow = officeCashflowHooks(tower);
 
-  const scheduler = makeTowerScheduler(
-    tower,
-    {
-      [FAMILY.office]: officeFamilyHandler({
-        resolveRoute: (...args) => {
-          const result = resolveRouteBetweenFloors(...args);
-          seen.codes.set(result.code, (seen.codes.get(result.code) ?? 0) + 1);
-          return result;
-        },
-        onDelay: (delay, actor) => {
-          seen.delays.set(delay.kind, (seen.delays.get(delay.kind) ?? 0) + 1);
-          priceDelay(tower, delay, actor);
-        },
-        onRent: cashflow.onRent,
-      }),
+  // ⚠️ `makeDriver`, not a restatement of it.
+  //
+  // This helper used to build its own scheduler so it could slip counters into
+  // the route and delay callbacks. It drifted, exactly as its own comment
+  // warned: when fast food and the office lunch trips landed, the family list
+  // here did not grow, so every test using this fixture was running a tower
+  // where nobody goes to lunch — and reporting on it confidently.
+  //
+  // It was caught by a test asserting its own fixture reached the state it was
+  // about to check ("only 246 activity — the fixture never crossed the
+  // threshold, so a star that failed to arrive would prove nothing"). Without
+  // that line the suite would have stayed green over a fixture measuring a
+  // different game.
+  const { scheduler } = makeDriver(world, {
+    observe: {
+      route: (r) => seen.codes.set(r.code, (seen.codes.get(r.code) ?? 0) + 1),
+      delay: (kind) => seen.delays.set(kind, (seen.delays.get(kind) ?? 0) + 1),
     },
-    { [FAMILY.office]: officeArrival },
-    (delay, actor) => {
-      seen.delays.set(delay.kind, (seen.delays.get(delay.kind) ?? 0) + 1);
-      priceDelay(tower, delay, actor);
-    },
-  );
+  });
 
   // No daily sweep here any more. `makeTowerScheduler` wires checkpoint 2533,
   // so the operational recompute, the closures and the ledger all run inside
@@ -321,13 +290,22 @@ export const tests = {
   'build past the threshold and the second star arrives'() {
     const built = [];
     const { tower } = liveTower({
-      days: 4,
+      // Six days, not four. Lunch traffic slowed the fill: 78 offices on one
+      // three-car lift reached 246 activity in four days where they used to
+      // reach 432, because every worker now makes a midday round trip as well
+      // as a commute. Not a capacity ceiling — by day six the tower is at 378
+      // and climbing. The tower fills more slowly because it is busier, which
+      // is the loop, and the fixture should take as long as the game does.
+      days: 6,
       onDay: (day, t, world) => {
         if (day !== 0) return;
         // 36 more offices either side of the seeded banks, all served by the
         // existing lift. 78 offices is 468 activity if they all let.
         for (const floor of [1, 2, 3, 4, 5, 6]) {
-          for (const left of [30, 36, 42, 94, 100, 106]) {
+          // 112/118/124 rather than 94/100/106: the seed now puts its lunch
+          // venue at 94..109 on F3, and the fixture only needs 36 free office
+          // slots — which tiles they are is not what it is testing.
+          for (const left of [30, 36, 42, 112, 118, 124]) {
             built.push(applyAction(world, { type: 'build', what: 'office', floor, left }).ok);
           }
         }
@@ -488,18 +466,9 @@ export const tests = {
     tower.carriers = [];
     tower.segments = [];
 
-    const scheduler = makeTowerScheduler(
-      tower,
-      {
-        [FAMILY.office]: officeFamilyHandler({
-          resolveRoute: resolveRouteBetweenFloors,
-          onDelay: (delay, actor) => priceDelay(tower, delay, actor),
-          onRent: () => {},
-        }),
-      },
-      { [FAMILY.office]: officeArrival },
-      (delay, actor) => priceDelay(tower, delay, actor),
-    );
+    // The shipped composition, on a tower with its transport removed — the
+    // negative has to be the same game as the positive or it proves nothing.
+    const { scheduler } = makeDriver({ tower, ledger: ledgerFor(tower) });
     // The daily recompute rides inside checkpoint 2533 now, so a bare tick loop
     // gets it — this used to keep its own copy of the sweep.
     for (let i = 0; i < 2600 * 2; i++) scheduler.tick(tower);

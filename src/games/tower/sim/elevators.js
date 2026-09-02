@@ -171,6 +171,67 @@ export function carrierSlotIndex(carrier, floor) {
 }
 
 /**
+ * ⚠️ **Move a carrier's served range, and take its per-slot tables with it.**
+ *
+ * Eight arrays are indexed by `carrierSlotIndex`, which for a standard shaft is
+ * `floor - bottomFloor`. `sim/actions.js`'s `extend_shaft` moved the two floor
+ * bounds and left every one of them at its old length, so:
+ *
+ * - raising the top left the new floors with **no queue rings at all**, and a
+ *   car that stopped on one read `carrier.queues[slot]` as `undefined` and
+ *   threw inside `drainFloorQueue`;
+ * - lowering the bottom silently **renumbered every existing slot**, so a
+ *   rider queued on F3 became a rider queued three floors down.
+ *
+ * The first is a crash and the second is worse, because it is quiet. Found by
+ * running `npm run playtest -- 24 1 --play`: the greedy builder extends the
+ * seed's lift to reach the stranded F7 bank on day zero, and the run died on
+ * day 5. It predates the lunch wave — a direct `extend_shaft` on the seed
+ * leaves `queues.length` at 9 for a 12-floor shaft — and only surfaced because
+ * every RNG draw moved and a car finally stopped up there with somebody
+ * waiting.
+ *
+ * This lives here rather than in `extend_shaft` because *which* arrays are
+ * per-slot is this module's business, and a caller that has to remember the
+ * list is a caller that will forget the next one added.
+ *
+ * Express carriers are exempt: their slots are the fixed sky-lobby stops, not
+ * floor offsets, so the range moving does not renumber anything.
+ */
+export function resizeCarrierSlots(carrier, bottomFloor, topFloor) {
+  if (carrier.mode === CARRIER_MODE.EXPRESS) {
+    carrier.bottomFloor = bottomFloor;
+    carrier.topFloor = topFloor;
+    return carrier;
+  }
+  // How far the OLD slot 0 has moved. Lowering the bottom by three pushes every
+  // existing entry three places up the array; raising the top moves nothing.
+  const shift = carrier.bottomFloor - bottomFloor;
+  const slotCount = topFloor - bottomFloor + 1;
+
+  const regrow = (previous, fill) => {
+    const next = new Array(slotCount).fill(null).map((_, index) => {
+      const old = index - shift;
+      return old >= 0 && old < previous.length ? previous[old] : fill();
+    });
+    return next;
+  };
+
+  carrier.queues = regrow(carrier.queues, () => ({ up: createRing(), down: createRing() }));
+  carrier.stopEnabled = regrow(carrier.stopEnabled, () => 1);
+  carrier.upAssignedCar = regrow(carrier.upAssignedCar, () => 0);
+  carrier.downAssignedCar = regrow(carrier.downAssignedCar, () => 0);
+  for (const car of carrier.cars) {
+    car.destinationCountBySlot = regrow(car.destinationCountBySlot, () => 0);
+  }
+
+  carrier.slotCount = slotCount;
+  carrier.bottomFloor = bottomFloor;
+  carrier.topFloor = topFloor;
+  return carrier;
+}
+
+/**
  * Pure geometry: is the floor inside `[bottomFloor, topFloor]`? NOT a
  * substitute for `carrierStopsAtFloor` — an express shaft spans every floor
  * between its ends but stops at almost none of them.
@@ -336,6 +397,7 @@ export function createCarrier({
     liveRequests: new Set(),
   };
 }
+
 
 /**
  * Add a car. `specs/ELEVATORS.md` § Home Floor: the first car homes where the

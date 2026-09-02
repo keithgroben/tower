@@ -49,6 +49,7 @@
 import { CARRIER_MODE } from './elevators.js';
 import { FAMILY, isUnitLet } from './state.js';
 import { deactivateIfFailing, offices, recomputeOfficeOperationalStatus } from './office.js';
+import { closeCommercialVenues, rebuildCommercialVenues } from './commercial.js';
 import { condos, recomputeCondoOperationalStatus, revertCondoToUnsold } from './condo.js';
 import { resetFacilitySimTripCounters } from './stress.js';
 import {
@@ -100,14 +101,23 @@ export function ledgerFor(tower) {
  * {@link cashflowUnitFor} on one yields a unit whose `family` is `undefined`,
  * which `payout()` answers with `0` — the safe direction.
  *
- * `state.js` maps `fastFood` to family 6; `specs/ECONOMY.md` § Construction
- * Costs makes 6 the Restaurant and `0x0c` Fast Food. Neither has a payout row
- * yet, so nothing turns on it today — but it will the day commercial lands, and
- * it is not this file's to fix.
+ * Fast food and restaurants are absent on purpose rather than by omission:
+ * `specs/facility/COMMERCIAL.md` § Priced Family Row says only retail uses the
+ * priced row, and *"restaurant (6) and fast-food (12) cashflow still depend on
+ * the venue-performance subsystem"* — which is {@link runCommercialClosure}
+ * below, paid daily from the visitor count. Adding them here would pay them
+ * twice, once for existing and once for being visited.
  */
 export const PAYOUT_FAMILY = {
   [FAMILY.office]: 'office',
   [FAMILY.condo]: 'condo',
+  [FAMILY.retail]: 'retail',
+};
+
+/** Family code → the income/population bucket name. Built from the type table. */
+const BUCKET_BY_FAMILY = {
+  [FAMILY.fastFood]: 'fastFood',
+  [FAMILY.restaurant]: 'restaurant',
   [FAMILY.retail]: 'retail',
 };
 
@@ -303,6 +313,51 @@ export function condoCashflowHooks(tower) {
       reverseCashflowOnDeactivation(ledger, unit);
     },
   };
+}
+
+// ------------------------------------------------- the commercial day
+
+/**
+ * The daily capacity rebuild, wired to a ledger. `specs/facility/COMMERCIAL.md`
+ * § Capacity, step 7: *"add the previous day's visit count into the population
+ * ledger"*.
+ *
+ * ⚠️ **Assigned, not accumulated.** `rebuildCommercialVenues` hands back the
+ * whole of yesterday for each family and the bucket is replaced with it, which
+ * is the reference's clear-then-re-add. Adding instead would make a shop's
+ * population climb every day it opened and never fall — a number that only ever
+ * goes up, feeding the star thresholds.
+ *
+ * The `fastFood` and `restaurant` population buckets are seeded here rather
+ * than in `economy.js`'s `POPULATION_BY_FAMILY`, because that table is *"live
+ * population contributed by one active unit"* and a venue's is not a per-unit
+ * constant — it is however many people came today.
+ */
+export function runCommercialRebuild(tower) {
+  const ledger = ledgerFor(tower);
+  const { rebuilt, visitors } = rebuildCommercialVenues(tower);
+  for (const [family, count] of Object.entries(visitors)) {
+    const bucket = BUCKET_BY_FAMILY[family];
+    if (!bucket) continue;
+    // Retail's bucket is its `+10`-per-shop lease population and is NOT the
+    // visitor count; overwriting it here would replace a lease figure with a
+    // footfall one. Only the venue-performance families report footfall.
+    if (bucket === 'retail') continue;
+    ledger.population[bucket] = count;
+  }
+  return rebuilt;
+}
+
+/**
+ * The off-hours closure sweep, wired to a ledger. § Income: *"daily closure
+ * accrues income for non-retail commercial types"*, and the lowest band is a
+ * real loss — `addIncome` takes the negative and the cash goes down.
+ */
+export function runCommercialClosure(tower) {
+  const ledger = ledgerFor(tower);
+  return closeCommercialVenues(tower, {
+    onIncome: (object, dollars) => addIncome(ledger, BUCKET_BY_FAMILY[object.family], dollars),
+  });
 }
 
 // ------------------------------------------------------- checkpoint 2533

@@ -10,7 +10,7 @@
  * a gate was dropped is worse than one that stops and says what is missing.
  */
 import { EVENING_DAYPART } from '../src/games/tower/sim/clock.js';
-import { TYPE_CODES } from '../src/games/tower/sim/economy.js';
+import { CONSTRUCTION_COST, TYPE_CODES } from '../src/games/tower/sim/economy.js';
 import { FAMILY, createTower, placeObject } from '../src/games/tower/sim/state.js';
 import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
 import {
@@ -44,6 +44,66 @@ const ALL_GATES = {
 };
 
 export const tests = {
+  /**
+   * ⚠️ **The `kind` on a blocker is a promise the HUD relies on.**
+   *
+   * The bar has to tell "go and build this" apart from "this cannot be built in
+   * this version yet", and most of the ladder above 2 stars is the second. The
+   * UI decides that with `BUILDABLE[kind]`, so a `kind` that names nothing real
+   * — a typo, or a key renamed in `economy.js` — makes every requirement read as
+   * unbuildable and the ladder look broken rather than unfinished.
+   *
+   * Matching the prose instead would put the rule in the reader, which is the
+   * `payout(7, …)` lesson: a name where a code was expected, answered with a
+   * quiet zero.
+   */
+  'every blocker that names a thing names a thing that exists'() {
+    const seen = new Set();
+    for (let star = 1; star <= 4; star++) {
+      const tower = createTower({ seed: 1 });
+      tower.starCount = star;
+      const { blockers, blockerDetails } = starGateStatus(tower);
+
+      assert(blockerDetails.length === blockers.length,
+        'star ' + star + ' reports ' + blockers.length + ' blockers but '
+        + blockerDetails.length + ' details — the two lists have to be the same list');
+      for (let i = 0; i < blockers.length; i++) {
+        assert(blockerDetails[i].text === blockers[i],
+          'blocker ' + i + ' at star ' + star + ' is "' + blockers[i] + '" in one list and "'
+          + blockerDetails[i].text + '" in the other');
+      }
+      for (const detail of blockerDetails) {
+        if (detail.kind === null) continue;
+        seen.add(detail.kind);
+        assert(detail.kind in CONSTRUCTION_COST,
+          'the blocker "' + detail.text + '" claims kind "' + detail.kind
+          + '", which `economy.js` has never heard of — the HUD would call it unbuildable');
+      }
+    }
+    // Bounded: if the loop above found no kinds at all it would pass while
+    // proving nothing, which is the shape of guard this repo keeps a list of.
+    assert(seen.size >= 3,
+      'only ' + seen.size + ' named requirement(s) across the whole ladder — the check ran over '
+      + 'almost nothing and would not notice a bad kind');
+  },
+
+  /**
+   * And the negative: a window is not a thing. "The evening" must never carry a
+   * kind, or the HUD offers to build one.
+   */
+  'a blocker that names a window carries no kind'() {
+    const tower = createTower({ seed: 1 });
+    tower.starCount = 3;
+    tower.clock.daypart = 0;                 // before the evening
+    const windows = starGateStatus(tower).blockerDetails
+      .filter((d) => /evening|calendar phase|day to start|evaluation/.test(d.text));
+    assert(windows.length > 0, 'the fixture produced no window blockers to check');
+    for (const w of windows) {
+      assert(w.kind === null, '"' + w.text + '" carries kind "' + w.kind
+        + '" — the palette would offer to build a time of day');
+    }
+  },
+
   // ---------------------------------------------------------- the activity
 
   'the tier table is the reference’s, compared with >='() {

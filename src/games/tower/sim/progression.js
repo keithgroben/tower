@@ -199,17 +199,17 @@ export const activityForStar = (star) => STAR_THRESHOLDS[star - 1] ?? Infinity;
  */
 const QUALITATIVE_GATES = {
   1: [],
-  2: [{ flag: 'securityPlaced', missing: 'a security office' }],
+  2: [{ flag: 'securityPlaced', missing: 'a security office', kind: 'security' }],
   3: [
-    { flag: 'officePlaced', missing: 'an office' },
-    { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower' },
-    { flag: 'officeServiceOk', missing: 'a passed office-service evaluation' },
-    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars' },
+    { flag: 'officePlaced', missing: 'an office', kind: 'office' },
+    { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower', kind: 'recyclingCenter' },
+    { flag: 'officeServiceOk', missing: 'a passed office-service evaluation', kind: null },
+    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null },
   ],
   4: [
-    { flag: 'metroPlaced', missing: 'a metro station' },
-    { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower' },
-    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars' },
+    { flag: 'metroPlaced', missing: 'a metro station', kind: 'metroStation' },
+    { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower', kind: 'recyclingCenter' },
+    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null },
   ],
 };
 
@@ -224,37 +224,53 @@ const TIME_GATED_TIERS = new Set([3, 4]);
  * no point telling someone to build a metro station when they are 4,000 tenants
  * short of even being asked.
  *
+ * ## `blockerDetails`, and why the prose is not enough
+ *
+ * `blockers` is prose, for printing. `blockerDetails` is the same list with a
+ * `kind` beside each entry: the `CONSTRUCTION_COST` / `BUILDABLE` key when the
+ * blocker names a *thing*, and `null` when it names a window — the evening, a
+ * day off the calendar phase, an evaluation that has to pass on its own.
+ *
+ * It exists because the HUD has to tell "go and build this" apart from "this
+ * cannot be built in this version yet", and most of the ladder above 2 stars is
+ * currently the second. Deciding that by matching the prose would put the rule
+ * in the reader — which is how `payout(7, …)` silently returned 0 for every
+ * office in the tower. The translation belongs at the seam, once.
+ *
  * @returns {{star:number, activity:number, nextStar:number|null, activityNeeded:number,
- *   activityReady:boolean, blockers:string[], ready:boolean}}
+ *   activityReady:boolean, blockers:string[],
+ *   blockerDetails:{text:string, kind:string|null}[], ready:boolean}}
  */
 export function starGateStatus(tower) {
   const star = tower.starCount;
   const activity = towerActivity(tower);
   const gates = starGatesOf(tower);
-  const blockers = [];
-
+  const details = [];
+  const block = (text, kind = null) => details.push({ text, kind });
 
   if (star >= MAX_STAR) {
+    const text = 'nothing — beyond 5 stars is the cathedral’s path, not this one';
     return {
       star, activity, nextStar: null, activityNeeded: 0, activityReady: true,
-      blockers: ['nothing — beyond 5 stars is the cathedral’s path, not this one'],
+      blockers: [text], blockerDetails: [{ text, kind: null }],
       ready: false,
     };
   }
 
   const needed = activityForStar(star);
   const activityReady = starCountForActivity(activity) > star;
-  if (!activityReady) blockers.push((needed - activity) + ' more tower activity');
+  // Activity has no `kind`: it is not a thing to build, it is every thing.
+  if (!activityReady) block((needed - activity) + ' more tower activity');
 
   for (const gate of QUALITATIVE_GATES[star] ?? []) {
-    if (!gates[gate.flag]) blockers.push(gate.missing);
+    if (!gates[gate.flag]) block(gate.missing, gate.kind);
   }
 
   if (TIME_GATED_TIERS.has(star)) {
     // `daypart_index >= 4` and `calendar_phase_flag == 0`. Both are windows
     // rather than tasks, so they are phrased as waiting rather than as building.
-    if (tower.clock.daypart < EVENING_DAYPART) blockers.push('the evening');
-    if (tower.clock.calendarPhase) blockers.push('a day off the calendar phase');
+    if (tower.clock.daypart < EVENING_DAYPART) block('the evening');
+    if (tower.clock.calendarPhase) block('a day off the calendar phase');
   }
 
   return {
@@ -263,8 +279,9 @@ export function starGateStatus(tower) {
     nextStar: star + 1,
     activityNeeded: activityReady ? 0 : needed - activity,
     activityReady,
-    blockers,
-    ready: blockers.length === 0,
+    blockers: details.map((d) => d.text),
+    blockerDetails: details,
+    ready: details.length === 0,
   };
 }
 
