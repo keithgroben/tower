@@ -22,7 +22,7 @@ import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { starGateStatus } from '../sim/progression.js';
 import { BUILDABLE } from '../sim/actions.js';
 import { evictionNotice, starClause, starGlyph, stressReadout } from './readout.js';
-import { STRESS_COLORS, makeRenderer, officeIsLet } from '../render/canvas.js';
+import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
 import { applyAction } from '../sim/actions.js';
 import { TOOLS, preview } from './build.js';
@@ -336,8 +336,10 @@ function updateHover(px, py) {
   const stress = occupants.map((a) => computeRuntimeTileStressAverage(a));
   const worst = stress.length ? Math.max(...stress) : 0;
   $('hover').textContent = occupants.length
-    ? `${officeIsLet(object) ? 'let' : 'FOR RENT'} · ${occupants.length} occupants · worst stress ${worst} (${stressBand(worst)})`
-    : `${officeIsLet(object) ? 'let' : 'FOR RENT'}`;
+    // `objectStatusTag` is the one place that knows a condo is sold rather than
+    // let, so the panel asks it instead of keeping a second copy of the word.
+    ? `${officeIsLet(object) ? 'let' : objectStatusTag(object)} · ${occupants.length} occupants · worst stress ${worst} (${stressBand(worst)})`
+    : `${officeIsLet(object) ? 'let' : objectStatusTag(object)}`;
 }
 
 // --------------------------------------------------------------------- HUD

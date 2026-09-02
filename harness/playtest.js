@@ -15,11 +15,13 @@
  * restates the composition measures a copy, and reports confidently on a game
  * nobody is playing the day the two drift. So the composition moved instead.
  */
-import { isRented, population } from '../src/games/tower/sim/state.js';
+import { FAMILY, isUnitLet, population } from '../src/games/tower/sim/state.js';
+import { isCondoSold } from '../src/games/tower/sim/condo.js';
+import { CONSTRUCTION_COST, RENT_TIERS } from '../src/games/tower/sim/economy.js';
 import { seedDemoWorld } from '../src/games/tower/ui/seed.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../src/games/tower/sim/stress.js';
-import { applyAction } from '../src/games/tower/sim/actions.js';
+import { BUILDABLE, applyAction } from '../src/games/tower/sim/actions.js';
 import { starGateStatus, towerActivity } from '../src/games/tower/sim/progression.js';
 
 const TICKS_PER_DAY = 2600;
@@ -31,7 +33,8 @@ export function readout(world) {
   for (const o of tower.objects.values()) {
     if (o.occupants.length === 0) continue;
     leasable++;
-    if (o.occupiedFlag && isRented(o.unitStatus)) let_++;
+    // Per family: an office is let to `0x0f`, a condo is sold to `0x17`.
+    if (o.occupiedFlag && isUnitLet(o)) let_++;
   }
   // Excludes people with no trips: they score 0, the BEST value, so counting
   // them makes a tower that cannot move anybody read as a perfect one.
@@ -58,6 +61,46 @@ export function readout(world) {
 }
 
 /**
+ * **The condo ledger, watched rather than inferred.**
+ *
+ * A condo's money is two events of the same size in opposite directions, and
+ * neither survives to be read afterwards: the income bucket is cleared every
+ * third day by the rollover, and the cash balance has a tower's worth of rent
+ * and expenses mixed into it. Sampling `tower.cash` once a day answers "is the
+ * player up or down" and not "what did the condos cost them", which is the
+ * question.
+ *
+ * So the transitions are counted as they happen. `unit_status` crossing the
+ * `0x17` boundary IS the event — `finalizeCondoSale` and `revertCondoToUnsold`
+ * are the only two things in the sim that cross it — so a per-tick band watch
+ * cannot miss a sale that is refunded before the next daily sample, which a
+ * daily one silently would.
+ */
+export function condoWatch(tower) {
+  const seen = new Map();               // object id -> was it sold last tick
+  const totals = { sales: 0, refunds: 0, earned: 0, given: 0 };
+
+  return {
+    totals,
+    sample() {
+      for (const object of tower.objects.values()) {
+        if (object.family !== FAMILY.condo) continue;
+        const sold = isCondoSold(object.unitStatus);
+        const before = seen.get(object.id);
+        seen.set(object.id, sold);
+        if (before === undefined || before === sold) continue;
+        // The price is read at the moment of the event, from the same table the
+        // sim pays out of — a re-tiered condo would otherwise be counted at a
+        // price it was never sold for.
+        const price = RENT_TIERS.condo[object.rentLevel] ?? 0;
+        if (sold) { totals.sales++; totals.earned += price; }
+        else { totals.refunds++; totals.given += price; }
+      }
+    },
+  };
+}
+
+/**
  * A player, roughly.
  *
  * Not an optimiser — an impatient person with money. They extend the lift to
@@ -70,7 +113,7 @@ export function readout(world) {
  * If it never costs them, the game has no bottom, and "build more" is a button
  * that only ever prints money.
  */
-export function greedyBuilder(world) {
+export function greedyBuilder(world, { condos = true } = {}) {
   const { tower } = world;
   return function act() {
     const lift = tower.carriers[0];
@@ -85,7 +128,24 @@ export function greedyBuilder(world) {
       if (r.ok) return 'extended the lift to F' + highest;
     }
 
-    // 2. Otherwise stack another office on a floor the lift already serves.
+    // 2. A condo is the shiny expensive thing, so it is what an impatient
+    //    person with money reaches for first. $80,000 out, $150,000 back the
+    //    moment somebody moves in — which reads as free money until the lift
+    //    stops coping and the sale is taken back off you.
+    //
+    //    Sixteen tiles, so these are the two clear runs either side of the
+    //    seeded office banks: 0..47 on the left, 94..141 on the right.
+    if (condos) {
+      for (let floor = 1; floor <= lift.topFloor; floor++) {
+        for (const left of [0, 16, 32, 94, 110, 126]) {
+          const r = applyAction(world, { type: 'build', what: 'condo', floor, left });
+          if (r.ok) return 'built a condo on F' + floor;
+          if (/afford/.test(r.reason ?? '')) return null;
+        }
+      }
+    }
+
+    // 3. Otherwise stack another office on a floor the lift already serves.
     for (let floor = lift.bottomFloor + 1; floor <= lift.topFloor; floor++) {
       for (const left of [10, 16, 22, 46, 52, 58]) {
         const r = applyAction(world, { type: 'build', what: 'office', floor, left });
@@ -102,9 +162,13 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   const days = Number(process.argv[2] ?? 14);
   const seed = Number(process.argv[3] ?? 1);
   const plays = process.argv.includes('--play');
+  // `--offices-only` reproduces the plan this harness had before condos
+  // existed, so the two runs are comparable line for line.
+  const condos = !process.argv.includes('--offices-only');
   const world = seedDemoWorld({ seed });
   const { scheduler } = makeDriver(world);
-  const act = plays ? greedyBuilder(world) : () => null;
+  const act = plays ? greedyBuilder(world, { condos }) : () => null;
+  const condoLedger = condoWatch(world.tower);
 
   const money = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
   const pad = (s, n) => String(s).padStart(n);
@@ -128,7 +192,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     // game failing to move anybody, and it is exactly the shape of reading
     // that gets mistaken for a bug and then "fixed".
     const step = d === 0 ? TICKS_PER_DAY / 2 : TICKS_PER_DAY;
-    for (let t = 0; t < step; t++) scheduler.tick(world.tower);
+    for (let t = 0; t < step; t++) { scheduler.tick(world.tower); condoLedger.sample(); }
     // The player acts once a day, at the start, the way somebody who checks in
     // each morning would. Several builds a day, because one office a day is a
     // pace no person keeps.
@@ -156,4 +220,20 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
         ? 'the tower LOST ' + (peakLet - r.let) + ' tenants it had won, which is the loop biting'
         : 'nothing was ever lost: building more never cost anything'));
   }
+
+  // The condo line runs whether or not anybody was playing, because the seed
+  // could grow condos later and a silent zero is a worse answer than a stated
+  // one.
+  const c = condoLedger.totals;
+  let built = 0, sold = 0;
+  for (const o of world.tower.objects.values()) {
+    if (o.family !== FAMILY.condo) continue;
+    built++;
+    if (isCondoSold(o.unitStatus)) sold++;
+  }
+  const spent = built * (CONSTRUCTION_COST.condo + BUILDABLE.condo.width * CONSTRUCTION_COST.floorTile);
+  const net = c.earned - c.given - spent;
+  console.log('\ncondos  ' + sold + '/' + built + ' sold · ' + c.sales + ' sale(s) '
+    + money(c.earned) + ' · ' + c.refunds + ' refund(s) ' + money(-c.given)
+    + ' · construction ' + money(-spent) + '  =  ' + money(net));
 }

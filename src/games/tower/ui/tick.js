@@ -49,8 +49,16 @@ import { CLOSURE_TICK, REBUILD_TICK } from '../sim/commercial.js';
  *                 the router and the carriers emit the same event shapes, and
  *                 one consumer must handle both or the two halves of a journey
  *                 get priced by different rules.
+ * @param extraCheckpoints `{ [dayTick]: (tower) => void }` — checkpoint bodies
+ *                 a family owns rather than the composition. Family 9's nightly
+ *                 sweep is the first: `specs/TIME.md` § 2500 normalises condo
+ *                 sim state and object bands, and only the condo module knows
+ *                 what those are. Passed in for the same reason `families` is —
+ *                 so this file goes on knowing nothing about any one family.
+ *                 The two checkpoints below are the composition's own and
+ *                 cannot be overridden from here.
  */
-export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay = null) {
+export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay = null, extraCheckpoints = {}) {
   /** An actor by id. The carrier queues hold ids, not references. */
   const actorById = (ref) => tower.actors.find((a) => a && a.id === ref) ?? null;
 
@@ -112,6 +120,7 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
 
   return createScheduler({
     checkpoints: {
+      ...extraCheckpoints,
       // § Daily Checkpoints, tick 0: "rebuild the reachability/path tables".
       // Nothing else calls it, and a stale table is a route that silently fails.
       //

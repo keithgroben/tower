@@ -107,6 +107,12 @@ export const tests = {
       ['an office above the world', 'office', () => at(MAX_FLOOR + 5, 20)],
       ['an office at the right edge', 'office', () => at(EMPTY_FLOOR, TILES_PER_FLOOR - 2)],
       ['a lobby on empty air', 'lobby', () => at(EMPTY_FLOOR, 30)],
+      ['a condo on empty air', 'condo', () => at(EMPTY_FLOOR, 20)],
+      // The above-grade rule is the seam's, and a rule the ghost does not have
+      // is a green preview over a click that will be refused.
+      ['a condo in the basement', 'condo', () => at(-1, 20)],
+      ['a condo on the ground floor', 'condo', () => at(GROUND_FLOOR, 20)],
+      ['a condo across the seeded office bank', 'condo', () => at(LAYOUT.officeFloors[0], LAYOUT.officeTiles[0])],
       ['a shaft to a high floor', 'shaft-standard', () => at(20, CLEAR)],
       // ⚠️ This case is the one that was missing, and its absence is why the
       // ghost went on saying "passes through 12 rooms" for a whole commit after

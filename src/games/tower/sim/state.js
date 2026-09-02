@@ -175,6 +175,50 @@ export const enterTransit = (state) => state | IN_TRANSIT_FLAG;
 export const UNIT_STATUS = { activeMax: 0x0f, syncMarker: 0x10 };
 export const isRented = (unitStatus) => unitStatus <= UNIT_STATUS.activeMax;
 
+/**
+ * ⚠️ **A condo's "let" band is wider than an office's, and `isRented` is the
+ * office's.**
+ *
+ * `specs/facility/CONDO.md` § Placement And Stored State, in its own words:
+ * *"The selected-object status panel treats `unit_status > 0x17` as the unsold
+ * / for-sale status and `unit_status <= 0x17` as sold/open."* The sold band is
+ * `0x00..0x17` — the two base values `0x00`/`0x08`, **plus the in-cycle sold
+ * countdown states below `0x18`, and `0x10` itself**, which is the sync
+ * sentinel every sold condo is clamped to overnight.
+ *
+ * So `isRented(0x10)` is `false` and a sold condo sits at `0x10` every night.
+ * Read the office band for a condo and the unit reads FOR SALE between dusk and
+ * the next morning's dispatch: its three residents leave the population count,
+ * the ledger stops treating it as operational, and `demolish` stops refusing.
+ * That is `CLAUDE.md`'s "two modules name one concept twice" trap with a
+ * nightly period.
+ *
+ * {@link isUnitLet} is the translation, and it takes the **object** rather than
+ * the byte precisely so a caller cannot forget which family it is holding.
+ */
+export const CONDO_UNIT_STATUS = {
+  /** `0x00` before daypart 4, `0x08` after. `specs/TIME.md` § Tick Model. */
+  soldEarly: 0x00,
+  soldLate: 0x08,
+  /** The overnight clamp target, and the countdown's terminus. */
+  syncMarker: 0x10,
+  /** Everything at or below this is sold. */
+  soldMax: 0x17,
+  /** Refund lands here: `0x18` before daypart 4, `0x20` after. */
+  unsoldEarly: 0x18,
+  unsoldLate: 0x20,
+  /** `>= 0x28` is extended vacancy / expiry, which nothing reaches yet. */
+  expiryMin: 0x28,
+};
+
+/** The highest `unit_status` that still counts as let, by family. */
+export const letBandMax = (family) =>
+  (family === FAMILY.condo ? CONDO_UNIT_STATUS.soldMax : UNIT_STATUS.activeMax);
+
+/** Is this placed unit let (an office rented, a condo sold)? */
+export const isUnitLet = (object) =>
+  Boolean(object) && object.unitStatus <= letBandMax(object.family);
+
 /** `eval_level` before anything has been scored. The reference's own sentinel. */
 export const EVAL_UNSET = 0xff;
 
@@ -196,7 +240,9 @@ export const EVAL_UNSET = 0xff;
  */
 export function initialUnitStatus(family, daypart = 0) {
   if (family === FAMILY.office) return 0x10;
-  if (family === FAMILY.condo) return daypart < 4 ? 0x18 : 0x20;
+  if (family === FAMILY.condo) {
+    return daypart < 4 ? CONDO_UNIT_STATUS.unsoldEarly : CONDO_UNIT_STATUS.unsoldLate;
+  }
   return 0;
 }
 
@@ -382,7 +428,13 @@ export function population(tower) {
     // set on a VACANT office before anyone has reached it — so counting on it
     // returned 252 people in a tower where 216 had a lease, six offices' worth
     // of staff for offices nobody could get to.
-    if (!isRented(o.unitStatus)) continue;
+    // ⚠️ `isUnitLet(o)`, not `isRented(o.unitStatus)`. A sold condo sits at the
+    // sync sentinel `0x10` every night, which is OUTSIDE the office's let band —
+    // so reading the office band here drops three people per condo between dusk
+    // and dawn. A population that breathes once a day, and star thresholds that
+    // read it. `isUnitLet` is the office band for every other family, so this
+    // costs nothing anywhere else.
+    if (!isUnitLet(o)) continue;
     if (!contributesPopulation(o)) continue;
     total += POPULATION_CONTRIBUTION[o.family] ?? OCCUPANTS[o.family] ?? 0;
   }
