@@ -174,6 +174,22 @@ skimming it.
   real data; here, a real value collided with the absence of one.
 - **Art existed and nothing drew it, six times.** A catalogued sheet with no
   reached call site now fails a test. Preloading does not count.
+- ⚠️ **Two branches under one test is the shape that hides.**
+  `specs/PEOPLE.md` § Refresh handler flow splits on the **route token**, not
+  on the state: a rider holding a *carrier* token is waiting for a car and must
+  be left alone; one holding a *segment* token walks and goes to family
+  dispatch. Both branches sit under the same `state >= 0x40` test, so reading
+  the state and stopping there looks complete.
+
+  The cost of missing it: re-asking the router while queued does not merely
+  waste a call — **every re-resolution re-stamps the route start**, so the wait
+  being accrued is discarded. Measured average stress read **7 where the honest
+  figure was 81**, and a rider ended up occupying two slots in the same car.
+
+  Note the direction. It failed **flatteringly** — a tower that looks perfect
+  however bad its lifts are. Most of this list fails loudly; this one hands you
+  a compliment. When a change makes the numbers *better*, check what stopped
+  being counted.
 - **A rule written in four places drifts.** The stairs column rule lived in the
   sim twice, the advisor once and the renderer once; three of them only
   predicted what the fourth would do. Write it once.
