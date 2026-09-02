@@ -115,8 +115,10 @@ tuning was open season. It is not, any more. We are matching something first.
 
 ## What the old repo caught that playing would not have
 
-Kept because each is a class of mistake. All of these were paid for once already
-in `keithgroben/lift`.
+Kept because each is a class of mistake, not a war story. Most were paid for in
+`keithgroben/lift` — but the sentinel one has already recurred **here**, on the
+first day of this repo, which is the argument for reading the list rather than
+skimming it.
 
 - **In-transit riders were deleted at midnight.** `trips` stopped equalling
   `delivered + abandoned`, and a tower failing 90% of its trips reported a
@@ -124,9 +126,25 @@ in `keithgroben/lift`.
 - **Stranded riders were logged as zero wait.** A tower with no elevator posted
   the shortest queues in the sweep.
 - **`null >= 0` is TRUE in JavaScript**, and so is `null?.k !== 'x'`. Both read
-  as guards and are not. A sentinel that collides with a real value — `-1` for
-  "no floor", when `-1` is now the first basement — is the same bug wearing a
-  hat.
+  as guards and are not.
+- ⚠️ **A sentinel that collides with a real value.** Three instances now, two in
+  `lift` and **one here, in this repo, on day one** — so treat it as the default
+  hazard rather than a war story.
+
+  The reference returns `-1` for "there isn't one" from `select_next_target_floor`
+  and `choose_transfer_floor_from_carrier_reachability`. It can afford to: its
+  floors are EXE-indexed `0..119` and never negative. **Ours are logical, so
+  `-1` is B1** — a real, common, reachable floor. Ported literally, it produced
+  two live failures: idle cars accepted "no target" as a destination and drove
+  to the first basement to park, and **a rider bound for B1 could never board a
+  lift**, because `if (alight < 0)` matched their legitimate destination.
+
+  The fix is `null`, not a different negative number. A value no comparison can
+  mistake for a floor — because the next person to write `< 0` will be right
+  about the arithmetic and wrong about the tower.
+
+  **Every constant quoted from the reference is in EXE floors.** Translate with
+  `logical = exe − 10`, and re-check any sentinel that comes with it.
 - **Art existed and nothing drew it, six times.** A catalogued sheet with no
   reached call site now fails a test. Preloading does not count.
 - **A rule written in four places drifts.** The stairs column rule lived in the
