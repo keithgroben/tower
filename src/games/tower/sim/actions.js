@@ -23,6 +23,7 @@ import {
   CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier,
 } from './elevators.js';
 import { CONSTRUCTION_COST, chargeConstruction, placementCost } from './economy.js';
+import { lockReason, notePlacement } from './progression.js';
 import { createSimTripRecord } from './stress.js';
 
 /** What each buildable maps to. The palette is built from this, so it cannot drift. */
@@ -122,6 +123,12 @@ const ACTIONS = {
     if (!spec) return refuse('there is nothing called "' + what + '" to build');
     if (!floorExists(floor)) return refuse('that floor is outside the tower');
 
+    // A lock is not a price, and it is checked before the price so the player
+    // reads the true reason. "You cannot afford it" about something no amount
+    // of money will buy sends someone away to earn money for nothing.
+    const locked = lockReason(tower, spec.cost, spec.label);
+    if (locked) return refuse(locked);
+
     const right = left + spec.width - 1;
     if (spanBlocked(tower, floor, left, right)) return refuse('something is already built there');
 
@@ -141,6 +148,9 @@ const ACTIONS = {
       ledger.cash += paid.cost;                       // nothing was built; refund
       return placed;
     }
+    // Latch any star gate this placement satisfies, now rather than at the next
+    // start of day — the reference sets these at placement.
+    notePlacement(tower, spec.family);
     return { ok: true, cost, object: placed.object };
   },
 
@@ -152,6 +162,10 @@ const ACTIONS = {
   build_shaft({ tower, ledger }, { kind = 'standard', bottom, top, column }) {
     const spec = SHAFT_KIND[kind];
     if (!spec) return refuse('there is no "' + kind + '" shaft');
+    // Express needs 3 stars and service needs 2, so this bites the moment the
+    // palette grows past the standard shaft. Before the price, as above.
+    const locked = lockReason(tower, spec.cost, spec.label);
+    if (locked) return refuse(locked);
     if (!floorExists(bottom) || !floorExists(top)) return refuse('that shaft leaves the tower');
     if (top <= bottom) return refuse('a shaft has to serve more than one floor');
     if (top - bottom + 1 > MAX_SERVED_SPAN) {

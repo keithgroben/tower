@@ -50,11 +50,12 @@ export function strideIndices(dayTick, actorCount) {
  *   Keyed by `family_code`. Called once per serviced actor.
  * @property {(tower:object) => void} [news]  per-tick hook, runs FIRST
  * @property {(tower:object) => void} [vip]   per-tick hook, runs after news
- * @property {(tower:object) => void} [carriers] runs last, after entity refresh
+ * @property {(tower:object) => void} [carriers] runs after entity refresh
+ * @property {(tower:object) => void} [progression] runs LAST, every tick
  */
 
 export function createScheduler(hooks = {}) {
-  const { checkpoints = {}, families = {}, news, vip, carriers } = hooks;
+  const { checkpoints = {}, families = {}, news, vip, carriers, progression } = hooks;
 
   /**
    * Advance the tower exactly one tick.
@@ -102,9 +103,17 @@ export function createScheduler(hooks = {}) {
       }
     }
 
-    // 8. Carriers move last, once everyone who wanted a ride has asked.
+    // 8. Carriers move, once everyone who wanted a ride has asked.
     // No carrier step consumes RNG, so this position is safe for replay.
     if (carriers) carriers(tower);
+
+    // 9. Star advancement. Not in `specs/TIME.md`'s eight-step list — the
+    // reference runs it from the per-tick scheduler body rather than from a
+    // checkpoint, and the position matters: two of its gates are time windows
+    // (evening, and off the calendar phase), so a tower advances the moment it
+    // becomes eligible rather than at the next checkpoint after. Last, so it
+    // reads the tick everything else has already finished with.
+    if (progression) progression(tower);
 
     return { tick: dayTick, daypart, dayAdvanced: moved.dayAdvanced, wrapped: moved.wrapped, serviced };
   }

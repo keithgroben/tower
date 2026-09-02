@@ -32,6 +32,7 @@ import { advanceSimTripCounters, rebaseSimElapsedFromClock } from '../sim/stress
 import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
 import { LEDGER_CHECKPOINT_TICK } from '../sim/economy.js';
 import { runTowerLedgerCheckpoint } from '../sim/ledger-adapter.js';
+import { refreshStartOfDayGates, tryAdvanceStar } from '../sim/progression.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -110,7 +111,12 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
     checkpoints: {
       // § Daily Checkpoints, tick 0: "rebuild the reachability/path tables".
       // Nothing else calls it, and a stale table is a route that silently fails.
-      0: (t) => rebuildRouteTables(t),
+      //
+      // The progression refresh rides with it because that is where the
+      // reference puts it: `specs/GAME-STATE.md` § Gate Meanings has
+      // `rebuild_path_seed_bucket_table()` setting `route_viable` — this same
+      // start-of-day rebuild — which is why that gate latches a day late.
+      0: (t) => { rebuildRouteTables(t); refreshStartOfDayGates(t); },
       // § 2533: ledger rollover, cashflow activation, periodic expenses — plus
       // the daily operational recompute that runs inside its object sweep.
       //
@@ -124,5 +130,8 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
     },
     families,
     carriers: (t) => tickCarriers(t.carriers, t.clock, carrierContext),
+    // The only thing in the game that says you are winning. Every tick, because
+    // two of its gates are time windows — see `sim/scheduler.js` step 9.
+    progression: (t) => tryAdvanceStar(t),
   });
 }
