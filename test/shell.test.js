@@ -33,13 +33,49 @@ export const tests = {
 
     assert(lobbies.length === 1, 'one ground lobby, got ' + lobbies.length);
     assert(lobbies[0].floor === GROUND_FLOOR, 'and it is on the ground floor');
-    assert(offices.length === LAYOUT.officeFloors.length * LAYOUT.officeTiles.length,
+    const floorCount = LAYOUT.officeFloors.length + LAYOUT.unreachableFloors.length;
+    assert(offices.length === floorCount * LAYOUT.officeTiles.length,
       'every office in the layout was placed, got ' + offices.length);
     assert(tower.actors.length === offices.length * OCCUPANTS[FAMILY.office],
       'six workers an office, from placement — got ' + tower.actors.length);
     assert(tower.actors.every((a) => a.state === STATE_UNPLACED_OCCUPANT),
       'every worker starts parked in 0x20, waiting to be routed');
     assert(population(tower) === 0, 'and nobody LIVES here yet: population counts tenants');
+  },
+
+  /**
+   * ⚠️ The opening tower has to show the loop SUCCEEDING and FAILING at once,
+   * and the failure has to have a cause you can point at.
+   *
+   * The bank on `unreachableFloors` sits above the top of the shaft, so no
+   * worker in it can ever route to the lobby and not one of those offices can
+   * ever rent. That is the lesson, and it is drawn rather than written: the
+   * shaft visibly stops, and the floor above it is the only one still amber.
+   *
+   * Raise `carrierTop` past the bank — or lower the bank under it — and the
+   * seed silently stops teaching anything. Nothing else would notice: the tower
+   * would simply be a tower that works, which is exactly the outcome that looks
+   * like success.
+   */
+  'the seed keeps a bank of offices above the lift, and it cannot be reached'() {
+    const tower = seedDemoTower();
+    assert(LAYOUT.unreachableFloors.length > 0, 'the seed has to carry a visible failure');
+    for (const floor of LAYOUT.unreachableFloors) {
+      assert(floor > LAYOUT.carrierTop,
+        `F${floor} is meant to be unreachable but the lift tops out at F${LAYOUT.carrierTop}`);
+    }
+    for (const floor of LAYOUT.officeFloors) {
+      assert(floor <= LAYOUT.carrierTop && floor >= LAYOUT.carrierBottom,
+        `F${floor} is meant to be served but the lift does not reach it`);
+    }
+    // And the sim has to agree, not just the arithmetic.
+    const carrier = tower.carriers[0];
+    for (const o of objects(tower).filter((x) => x.family === FAMILY.office)) {
+      const served = o.floor >= carrier.bottomFloor && o.floor <= carrier.topFloor;
+      const meantToBeServed = LAYOUT.officeFloors.includes(o.floor);
+      assert(served === meantToBeServed,
+        `F${o.floor}: the carrier ${served ? 'serves' : 'does not serve'} it, layout says otherwise`);
+    }
   },
 
   'the seed digs, because a tower that never goes below zero hides a bug class'() {
