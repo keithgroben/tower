@@ -248,15 +248,57 @@ number means higher rent**, and higher rent raises dissatisfaction pressure.
 | Daily rent | cashflow every third day |
 | Linear `tod` → 24h | 2600 ticks, 7 dayparts, a piecewise clock |
 
-## 9. Open questions before step one
+## 9. Decisions — Keith, 2026-09-02
 
-1. **Tick rate.** The reference defines the tick *count* per day (2600) but our
-   wall-clock pacing is ours — Lift ran a day in 45 s. Pacing is presentation,
-   not parity, so it is free; but it decides how a 2600-tick day feels.
-2. **Do we keep the 1/16 stride?** It is load-bearing for RNG order and replay,
-   and it is also why a person's reaction time is ~16 ticks. Faithful says keep
-   it. It does mean our sim steps actors in a rota rather than all at once.
-3. **Floor indexing.** The reference's lobby is EXE floor 10 / logical floor 0,
-   and the tower has 7 fifteen-floor zone bands
-   (`bucket = max(0, (floor - 9) / 15)`). Lift's basements made floor 0 the
-   ground with negatives below. Worth settling before anything is written down.
+### Pacing: the reference's own, and adjustable
+
+Wall-clock pacing is presentation, so it is free — the reference's `OVERVIEW.md`
+grants it explicitly. **Not a deviation.**
+
+Keith: *"I don't know. I want it to be fun and not rushed."* That is a question
+about feel, and per `CLAUDE.md` it cannot be answered from a chart. So the
+default goes to the original's measured pace and the number stays live.
+
+`spec/simtower.md` §8 recorded the original at **~3–4 real minutes per day**.
+Lift ran 45 s, chosen to compress the loop for prototyping, and that is the
+"rushed" Keith is reacting to.
+
+**Default: 12 ticks per second.**
+
+| | at 12 ticks/s |
+|---|---|
+| One day (2600 ticks) | **3 min 37 s** — mid-band of the original |
+| One actor's beat (16-tick stride) | 1.33 s — you watch a person decide |
+| The morning (daypart 0, 400 ticks) | 33 s |
+| A cashflow cycle (3 days) | 10 min 50 s |
+| Lift, for comparison | 45 s/day, 0.28 s actor beat |
+
+Speed controls stay — the original had them, so they are faithful as well as
+merciful. Nobody should ever be made to wait.
+
+**The pacing constant does not live in `sim/`.** The sim never sees wall time;
+it takes ticks. Ticks-per-second belongs to the loop that drives it, alongside
+the speed multiplier. Keeping that boundary is what lets the harness run a
+thousand days in a second.
+
+First thing to check in the first playtest, and a one-line change when it is
+wrong.
+
+### The 1/16 stride: keep it
+
+Faithful, and load-bearing beyond fidelity — it fixes RNG consumption order, so
+replay depends on it. Also sets a person's reaction time at 16 ticks, which is
+1.33 s of felt time at the pacing above. Actors step in a rota, not all at once.
+
+### Floor indexing: theirs — which turns out to be ours
+
+`specs/ROUTING.md` §Floor Numbering: `logical = exe_index - 10`, so **logical 0
+is the ground lobby, −1 is B1, −10 is B10**. That is already exactly what Lift
+does, so the camera, the renderer and every `lowestFloor` helper carry over
+untouched.
+
+The one translation to remember: formulas quoted from the binary use **EXE**
+indices. The zone-band bucket is `max(0, (exe - 9) / 15)`, which in logical
+floors is `max(0, (floor + 1) / 15)`. Sky lobbies sit where
+`logical % 15 == 14` — logical 14, 29, 44, 59, 74, 89, or the 15th, 30th and
+45th storeys as a human counts them.
