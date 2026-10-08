@@ -1,0 +1,21 @@
+{
+  "frameW": 64,
+  "frameH": 64,
+  "animations": {
+    "burst-red": {
+      "col": 0,
+      "frames": 6,
+      "speed": "idle"
+    },
+    "burst-gold": {
+      "col": 6,
+      "frames": 6,
+      "speed": "idle"
+    },
+    "burst-blue": {
+      "col": 12,
+      "frames": 6,
+      "speed": "idle"
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "s1": {
+      "col": 0,
+      "frames": 1
+    },
+    "s2": {
+      "col": 1,
+      "frames": 1
+    },
+    "s3": {
+      "col": 2,
+      "frames": 1
+    },
+    "s4": {
+      "col": 3,
+      "frames": 1
+    },
+    "s5": {
+      "col": 4,
+      "frames": 1
+    },
+    "s1-wedding": {
+      "col": 5,
+      "frames": 1
+    },
+    "s2-wedding": {
+      "col": 6,
+      "frames": 1
+    },
+    "s3-wedding": {
+      "col": 7,
+      "frames": 1
+    },
+    "s4-wedding": {
+      "col": 8,
+      "frames": 1
+    },
+    "s5-wedding": {
+      "col": 9,
+      "frames": 1
+    },
+    "s1-crowned": {
+      "col": 10,
+      "frames": 1
+    },
+    "s2-crowned": {
+      "col": 11,
+      "frames": 1
+    },
+    "s3-crowned": {
+      "col": 12,
+      "frames": 1
+    },
+    "s4-crowned": {
+      "col": 13,
+      "frames": 1
+    },
+    "s5-crowned": {
+      "col": 14,
+      "frames": 1
+    }
+  }
+}

@@ -218,7 +218,34 @@
     font: 600 11px var(--mono);
     color: #9fb3c8;
   }
-  #liftpanel[hidden], #theaterpanel[hidden], #eventdialog[hidden] { display: none; }
+  #liftpanel[hidden], #theaterpanel[hidden], #eventdialog[hidden], #finale[hidden] { display: none; }
+
+  /* ----------------------------------------- the Tower rank (issue #17) */
+
+  #finale {
+    position: absolute;
+    left: 50%; top: 14%;
+    transform: translateX(-50%);
+    width: 420px; max-width: calc(100% - 24px);
+    padding: 16px 18px;
+    text-align: center;
+    background: rgba(18, 24, 32, 0.96);
+    border: 2px solid #ffcf40;
+    border-radius: 4px;
+    font: 600 12px var(--mono);
+    color: #c3d0de;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6), 0 0 28px rgba(255, 207, 64, 0.25);
+  }
+  #finale .fin-rank { color: #ffcf40; font-size: 26px; letter-spacing: 0.4em; margin-bottom: 6px; }
+  #finale .fin-title { color: var(--ink); font-size: 15px; }
+  #finale .fin-line { margin-top: 4px; color: var(--ink); }
+  #finale .fin-facts { margin-top: 12px; color: #9fb3c8; }
+  #finale .fin-note { margin-top: 6px; color: #7d8b9c; }
+  #finale .fin-btn {
+    margin-top: 14px; font: inherit; color: var(--ink); cursor: pointer;
+    background: #1b2430; border: 1px solid #ffcf40; border-radius: 3px; padding: 8px 18px;
+  }
+  #finale .fin-btn:hover { background: #26303e; }
 
   /* ---------------------------------------------- the tower asks (issue #16) */
 
@@ -361,6 +388,10 @@
   <!-- The question a bomb or a fire asks (issue #16). Filled by ui/event-dialog.js while the
        sim has one open; the game does not run until it is answered. -->
   <div id="eventdialog" hidden></div>
+
+  <!-- The Tower rank (issue #17). Filled by ui/finale.js when the rank is earned while the page
+       is open; the game keeps running behind it. -->
+  <div id="finale" hidden></div>
 
   <div id="foot">
     <span id="answer"></span>
