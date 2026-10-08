@@ -86,7 +86,7 @@ export const tests = {
 
     assert(m.rent.tiers.map((t) => t.amount).join() === '15000,10000,5000,2000', 'the four rents');
     assert(m.rent.tiers.map((t) => t.perception).join() === 'dear,fair,cheap,bargain' && m.rent.tier === 1 && m.rent.canChange, 'tier 1 of 4');
-    assert(m.people.length === 6 && m.people[0].word === 'stressed' || m.people[0].word === 'calm', 'six occupants');
+    assert(m.people.length === 6 && m.people.every((p) => p.word === 'stressed'), 'six occupants, each at stress 100: ' + JSON.stringify(m.people[0]));
   },
 
   'the rent tier changes through set_rent and the window follows; the seam owns the verdict'() {

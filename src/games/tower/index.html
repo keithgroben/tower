@@ -286,8 +286,8 @@
     user-select: text; -webkit-user-select: text;
   }
 
-  /* The map bar: Edit / Eval / Pricing / Hotel / Finance, under the HUD at the right, clear of the minimap. */
-  #mapbar { position: absolute; top: 92px; right: 12px; display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; max-width: 52%; }
+  /* The map bar: Edit / Eval / Pricing / Hotel / Finance, under the HUD at the right, left of the minimap strip (which is 40px wide plus its margin). */
+  #mapbar { position: absolute; top: 92px; right: 68px; display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; max-width: 52%; }
   #mapbar button {
     font: 700 11px var(--mono); color: #7d8b9c; background: rgba(27, 36, 48, 0.92);
     border: 1px solid #2c3948; border-radius: 3px; padding: 4px 9px; cursor: pointer;
@@ -297,7 +297,7 @@
   #mapbar button.on { color: var(--bg); background: var(--info); border-color: var(--info); }
   /* What the colours mean, while a view is on. */
   #viewkey {
-    position: absolute; top: 126px; right: 12px; display: flex; flex-direction: column; gap: 3px;
+    position: absolute; top: 126px; right: 68px; display: flex; flex-direction: column; gap: 3px;
     padding: 8px 10px; background: rgba(18, 24, 32, 0.94); border: 1px solid #2c3948; border-radius: 4px;
     font: 600 11px var(--mono); color: #9fb3c8; pointer-events: none;
   }
