@@ -248,6 +248,12 @@ export const tests = {
     assert(!aside.ok, 'a ramp beside the column, not under a ramp: ' + aside.reason);
     // ...and it is a real width: one tile.
     assert(top.object.right - top.object.left === 0, 'a ramp is one tile wide');
+    // A ramp that is not under the lobby serves nothing even if it got there some other
+    // way (a save, a test): the walk asks `rampConnected`, not the placement rule.
+    const stray = placeObject(w.tower, { family: FAMILY.parkingRamp, type: OBJECT_TYPE.parkingRamp, floor: -1, left: 10, right: 10 }, trips).object;
+    const strayBay = placeObject(w.tower, { family: FAMILY.parkingSpace, type: OBJECT_TYPE.parkingSpace, floor: -1, left: 11, right: 14 }, trips, finalizeParkingSpace).object;
+    rebuildParkingCoverage(w.tower);
+    assert(!rampConnected(w.tower, stray) && strayBay.coverageFlag === 0, 'a ramp with no lobby above it serves no one');
   },
 
   'cutting the top of a ramp column cuts everything under it off, and the spaces go dark'() {
@@ -587,8 +593,16 @@ export const tests = {
     assert(tower.gates.recyclingAdequate === false && demandsOf(tower).active.recyclingLift && !demandsOf(tower).active.recycling,
       'a center no service lift stops at does not count - and says so');
 
+    // A guest lift down to the same floors is not the stop the center needs: it is the
+    // SERVICE elevator that has to stop there.
+    assert(applyAction(w, { type: 'build_shaft', kind: 'standard', bottom: -3, top: 2, column: 70 }).ok, 'a standard lift');
+    assert(!recyclingServed(tower, recyclingCenters(tower)[0]), 'a standard lift does not serve a recycling center');
     assert(applyAction(w, { type: 'build_shaft', kind: 'service', bottom: -3, top: 2, column: 120 }).ok, 'a service lift');
     assert(recyclingServed(tower, recyclingCenters(tower)[0]) && workingRecyclingCenters(tower).length === 1, 'now it is served');
+    const service = tower.carriers.find((c) => c.mode === 2);
+    service.stopEnabled.fill(0);
+    assert(!recyclingServed(tower, recyclingCenters(tower)[0]), 'a stop switched off in the lift\'s panel is no stop');
+    service.stopEnabled.fill(1);
     updateRecyclingState(tower, 0);
     assert(tower.gates.recyclingAdequate === false, 'tick 1600 (tier 0) always clears adequacy while a center exists');
     updateRecyclingState(tower, 2);
