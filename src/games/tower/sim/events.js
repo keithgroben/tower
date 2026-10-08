@@ -60,8 +60,8 @@ import { hotelNoiseNear, isHotelInfested, isHotelVacant } from './hotel.js';
 import { evalLevelFor } from './office.js';
 import { starGatesOf } from './progression.js';
 import {
-  advanceSimTripCounters, computeRuntimeTileStressAverage, createSimTripRecord, rebaseSimElapsedFromClock,
-  resetSimTripCounters,
+  ELAPSED_CLAMP, advanceSimTripCounters, computeRuntimeTileStressAverage, createSimTripRecord,
+  rebaseSimElapsedFromClock, resetSimTripCounters,
 } from './stress.js';
 import { emitsDistanceFeedback, shouldWaitForQueuedCarrier } from './routing.js';
 
@@ -981,8 +981,19 @@ function finishVip(tower, verdict, why) {
   events.vip = null;
 }
 
-/** The verdict of a visit that went wrong in the lifts: whatever the trips scored, it is not a pleased VIP. */
-const failed = (verdict) => ({ ...verdict, comfortable: false });
+/**
+ * The verdict of a visit that ran out of time in the lifts. **A VIP still waiting has had no trip
+ * counted** - `computeRuntimeTileStressAverage` scores a person with no trips 0, the *best* value, and
+ * reading it here would call the longest wait in the tower a perfect stay (the shape `CLAUDE.md` keeps
+ * a list of). So the stress is the clamp every trip is capped at, `ELAPSED_CLAMP` (300): he waited
+ * at least that long, and the stay is poor whatever else is true of it.
+ */
+function failed(tower, actor, suite) {
+  const verdict = vipVerdict(tower, actor, suite);
+  const stress = Math.max(verdict.stress, ELAPSED_CLAMP);
+  const score = stress + (verdict.noise ? 60 : 0);
+  return { ...verdict, stress, score, level: evalLevelFor(score, tower.starCount), comfortable: false };
+}
 
 function tickVip(tower) {
   const events = tower.events;
@@ -1009,7 +1020,7 @@ function tickVip(tower) {
     case 'arriving':
       // The day counter turns at 2300: a VIP not yet in the suite by then never got there.
       if (dayCounter > vip.bookedDay) {
-        finishVip(tower, failed(vipVerdict(tower, vipActor(tower), suite)), 'never reached the suite');
+        finishVip(tower, failed(tower, vipActor(tower), suite), 'never reached the suite');
       }
       return;
     case 'staying':
@@ -1021,7 +1032,7 @@ function tickVip(tower) {
     case 'leaving':
       if (dayCounter > vip.bookedDay + 1
         || (dayCounter === vip.bookedDay + 1 && dayTick >= VIP_CHECKOUT_DEADLINE_TICK && dayTick < 2300)) {
-        finishVip(tower, failed(vipVerdict(tower, vipActor(tower), suite)), 'could not get out');
+        finishVip(tower, failed(tower, vipActor(tower), suite), 'could not get out');
       }
       return;
     default:
