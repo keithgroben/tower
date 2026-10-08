@@ -223,8 +223,9 @@
   /* ----------------------------------------- the Tower rank (issue #17) */
 
   #finale {
+    /* Low on the screen, so the fireworks over the cathedral's roof are not behind it. */
     position: absolute;
-    left: 50%; top: 14%;
+    left: 50%; bottom: 64px;
     transform: translateX(-50%);
     width: 420px; max-width: calc(100% - 24px);
     padding: 16px 18px;
