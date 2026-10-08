@@ -98,10 +98,13 @@ const recyclingHalves = (tower) => [...tower.objects.values()].filter((o) => o.f
  *
  * TODO(parity): `COMMANDS.md` and `RECYCLING.md` say *"overlap an existing live
  * `0x14`/`0x15` recycling-center object within the floor search band from
- * `anchor - 2` through `anchor + 1`"* without saying what overlaps what. Read as: an
- * existing half on a floor in that band whose columns overlap **or touch** the new
- * span - which is a stack directly below, or a neighbour on the same two floors.
- * The issue says *"adjacent centers allowed"*. `spec/DEVIATIONS.md` A53.
+ * `anchor - 2` through `anchor + 1`"* without saying what overlaps what, or which
+ * floor the anchor is. Read as: the anchor is the **upper** floor (`0x14` is the
+ * upper half, and it makes the band symmetric - a stack directly below has its top at
+ * `anchor - 2`, one directly above has its bottom at `anchor + 1`, and the two
+ * floors between are the neighbours on the same rows); and an existing half in that
+ * band whose columns overlap **or touch** the new span counts. The issue says
+ * *"adjacent centers allowed"*. `spec/DEVIATIONS.md` A53.
  */
 export function recyclingObstruction(tower, floor, left) {
   const right = left + RECYCLING_WIDTH - 1;
@@ -111,8 +114,9 @@ export function recyclingObstruction(tower, floor, left) {
   }
   const halves = recyclingHalves(tower);
   if (halves.length === 0) return null;                  // *"the first placed center is accepted"*
+  const anchor = floor + 1;
   const adjacent = halves.some((h) =>
-    h.floor >= floor - 2 && h.floor <= floor + 1 && h.left <= right + 1 && h.right >= left - 1);
+    h.floor >= anchor - 2 && h.floor <= anchor + 1 && h.left <= right + 1 && h.right >= left - 1);
   return adjacent ? null : 'recycling centers have to be placed next to one another';
 }
 
