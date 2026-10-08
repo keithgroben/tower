@@ -133,8 +133,7 @@ export function shaftObstruction(tower, spec, ignoreCarrierId = null) {
     // useful shaft. `specs/COMMANDS.md`: "elevator families and lobby spans are
     // exempt from the dispatcher-wide floor-0 rejection precheck".
     if (object.family === FAMILY.lobby) continue;
-    return 'that column is not clear — a lift would pass through '
-      + describeObstruction(tower, box) + ' on the way up';
+    return 'that column is not clear — ' + describeObstruction(tower, box);
   }
 
   for (const carrier of tower.carriers) {
@@ -157,13 +156,28 @@ export function shaftObstruction(tower, spec, ignoreCarrierId = null) {
   return null;
 }
 
+/**
+ * Say *what* is in the way and *where*. The old wording, "a lift would pass
+ * through 1 room on the way up", read as if the room sat in the middle of the
+ * shaft; the usual real cause is a single tile of the room's edge inside the
+ * lift's footprint (or its machine room, one floor above the top), which looks
+ * like open ground beside the ghost.
+ */
 const describeObstruction = (tower, box) => {
-  let n = 0;
+  const names = Object.fromEntries(Object.entries(FAMILY).map(([name, code]) => [code, name]));
+  let first = null, n = 0;
   for (const o of tower.objects.values()) {
     if (o.family === FAMILY.lobby) continue;
-    if (o.floor >= box.bottom && o.floor <= box.top && o.left <= box.right && o.right >= box.left) n++;
+    if (o.floor >= box.bottom && o.floor <= box.top && o.left <= box.right && o.right >= box.left) {
+      n++;
+      if (!first || o.floor < first.floor) first = o;
+    }
   }
-  return n === 1 ? '1 room' : n + ' rooms';
+  const kind = (names[first.family] ?? 'room').replace(/([A-Z])/g, ' $1').toLowerCase();
+  const floor = first.floor < 0 ? 'B' + (-first.floor) : String(first.floor);
+  const more = n > 1 ? ' (and ' + (n - 1) + ' more)' : '';
+  return 'the lift needs tiles ' + box.left + '–' + box.right + ' from floor ' + box.bottom
+    + ' to ' + box.top + ', and a ' + kind + ' on floor ' + floor + ' is in them' + more;
 };
 
 

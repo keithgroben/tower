@@ -21,7 +21,7 @@ occupancy, occupancy makes traffic, traffic tests transport — is the whole gam
 
 ```bash
 npm install
-npm run dev      # http://localhost:5174
+npm run dev      # http://localhost:5174  (redirects to the game)
 npm test         # zero-dep, no install needed
 ```
 

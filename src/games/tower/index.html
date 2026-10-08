@@ -71,9 +71,14 @@
     gap: 14px;
     flex: 1 1 auto;
     min-width: 0;
-    overflow: hidden;
+    /* Wrap, don't clip. The old `overflow: hidden` + ellipsis cut the goal and
+       the let count to "300 mo…" and "0 …" at ~960px, hiding the very thing
+       the player is steering by. A readout moves to a second row instead; the
+       controls still never shrink. */
+    flex-wrap: wrap;
+    row-gap: 2px;
   }
-  #readouts > * { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #readouts > * { flex: 0 0 auto; }
   #clock { flex-shrink: 0; }
   #cash, #pace, #speeds, #saved, #restart { flex: 0 0 auto; }
 

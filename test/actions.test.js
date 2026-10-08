@@ -11,7 +11,7 @@
 import {
   SHAFT_SEPARATION, applyAction, shaftClearance, shaftObstruction,
 } from '../src/games/tower/sim/actions.js';
-import { createTower, isRented } from '../src/games/tower/sim/state.js';
+import { FAMILY, createTower, isRented } from '../src/games/tower/sim/state.js';
 import {
   CARRIER_MODE, MAX_SERVED_SPAN, carrierSlotIndex, resizeCarrierSlots,
 } from '../src/games/tower/sim/elevators.js';
@@ -183,6 +183,21 @@ export const tests = {
     assert(after.up.marker === 'the F3 queue',
       'the F3 queue is now at slot ' + lift.queues.findIndex((q) => q.up.marker) + ' and floor 3 reads '
       + 'somebody else’s — every waiting rider moved three floors down');
+  },
+
+  '⚠️ the refusal names the room, the floor and the tiles, not "passes through 1 room"'() {
+    // Found by playing: a shaft whose 4-tile footprint overlapped ONE tile of an
+    // office's edge was refused as "would pass through 1 room on the way up",
+    // which sounds like a room in the middle of the shaft. Say what and where.
+    const w = seedDemoWorld({ seed: 1 });
+    const office = [...w.tower.objects.values()].find((o) => o.family === FAMILY.office);
+    assert(office, 'fixture: the demo tower has an office');
+    const column = office.left - 3;              // footprint = column..column+3, overlapping the office's first tile
+    const reason = shaftObstruction(w.tower, { mode: 1, bottom: office.floor, top: office.floor + 1, column });
+    assert(typeof reason === 'string' && reason.includes('office'), 'it names the office: ' + reason);
+    assert(reason.includes('floor ' + office.floor), 'it names the floor: ' + reason);
+    assert(reason.includes(column + '–' + (column + 3)), 'it names the tiles the lift needs: ' + reason);
+    assert(!reason.includes('pass through'), 'and the misleading wording is gone: ' + reason);
   },
 
   /**
