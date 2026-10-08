@@ -657,6 +657,37 @@
       }
     ]
   },
+  "metro": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "top",
+        "frames": 1
+      },
+      {
+        "name": "top-train",
+        "frames": 1
+      },
+      {
+        "name": "middle",
+        "frames": 1
+      },
+      {
+        "name": "middle-train",
+        "frames": 1
+      },
+      {
+        "name": "bottom",
+        "frames": 1
+      },
+      {
+        "name": "bottom-train",
+        "frames": 1
+      }
+    ]
+  },
   "security": {
     "frameW": 48,
     "frameH": 32,

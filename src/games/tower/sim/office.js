@@ -55,6 +55,7 @@ import {
 import {
   officeWorkerDrives, parkWorker, spaceOfWorker, unparkWorker,
 } from './parking.js';
+import { gatewayFloor, officeWorkerCommutes } from './metro.js';
 
 /** The lobby. Logical floor 0 — the reference's EXE floor 10. */
 export const LOBBY_FLOOR = 0;
@@ -359,8 +360,15 @@ export function officeDispatch(tower, actor, object, clock, ctx) {
     space = parkWorker(tower, actor);
     if (!space) actor.parkRefusedDay = clock.dayCounter;
   }
-  const from = inbound ? (space ? space.floor : LOBBY_FLOOR) : (actor.homeFrom ?? object.floor);
-  const to = inbound ? object.floor : (space ? space.floor : LOBBY_FLOOR);
+  // **The train** (issue #15, `sim/metro.js`). A commuter who is not driving starts the
+  // day at the metro platform and ends it there - the same shape as the car, and for the
+  // same reason only for an office that is already let: renting is the lobby route's
+  // business. Everybody else, and a commuter whose platform the lifts cannot reach
+  // today, uses the lobby.
+  const byMetro = !space && isRented(object.unitStatus) && officeWorkerCommutes(tower, actor, object);
+  const hub = gatewayFloor(tower, byMetro, actor, clock.dayCounter);
+  const from = inbound ? (space ? space.floor : hub) : (actor.homeFrom ?? object.floor);
+  const to = inbound ? object.floor : (space ? space.floor : hub);
 
   const result = ctx.resolveRoute(tower, actor, from, to, clock, {
     passengerRoute: true,
@@ -379,6 +387,17 @@ export function officeDispatch(tower, actor, object, clock, ctx) {
   if (code === -1 && space) {
     unparkWorker(tower, actor);
     actor.parkRefusedDay = clock.dayCounter;
+    actor.state = state;
+    actor.routeCarrier = null;
+    actor.spawnFloor = null;
+    return { moved: false, code };
+  }
+
+  // The platform is out of reach of every lift: it is given up for the day and the
+  // worker tries again from the lobby, a stride later - the car's rule, applied to the
+  // train. A station no lift reaches therefore brings nobody and strands nobody.
+  if (code === -1 && byMetro && hub !== LOBBY_FLOOR) {
+    actor.metroRefusedDay = clock.dayCounter;
     actor.state = state;
     actor.routeCarrier = null;
     actor.spawnFloor = null;
@@ -568,7 +587,12 @@ function lunchOutbound(tower, actor, object, clock, ctx, state) {
     // The stagger is per-worker and it reaches the venue choice, not just the
     // timing: each worker draws on its own stride tick, so six workers in one
     // office scatter across the bucket instead of arriving as a block.
-    const picked = selectVenue(tower, FAMILY.fastFood, object.floor);
+    // A metro commuter eats **only underground** (*"all their shopping and eating only at
+    // outlets on the underground level"*, the help file; `sim/metro.js`): the whole
+    // tower's underground fast food is the bucket, not the zone the desk is in. With none,
+    // they take the no-venue lunch below like anyone whose tower has nowhere to eat.
+    const picked = selectVenue(tower, FAMILY.fastFood, object.floor,
+      { undergroundOnly: officeWorkerCommutes(tower, actor, object) });
     actor.venueObjectId = picked ? picked.id : null;
   }
 

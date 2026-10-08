@@ -1,0 +1,30 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "top": {
+      "col": 0,
+      "frames": 1
+    },
+    "top-train": {
+      "col": 1,
+      "frames": 1
+    },
+    "middle": {
+      "col": 2,
+      "frames": 1
+    },
+    "middle-train": {
+      "col": 3,
+      "frames": 1
+    },
+    "bottom": {
+      "col": 4,
+      "frames": 1
+    },
+    "bottom-train": {
+      "col": 5,
+      "frames": 1
+    }
+  }
+}

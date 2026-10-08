@@ -131,6 +131,8 @@ export const tests = {
       parkingSpace: '',
       parkingRamp: '',
       recycling: '',
+      // The metro station (issue #15) is a service too: a platform, nobody's lease.
+      metro: '',
     };
     const tower = createTower({ seed: 1 });
     let left = 0;
