@@ -39,6 +39,7 @@ import { PHASE, placeEntertainment } from '../src/games/tower/sim/entertainment.
 import { SECURITY_WIDTH } from '../src/games/tower/sim/security.js';
 import { MEDICAL_WIDTH, finalizeMedicalCenter } from '../src/games/tower/sim/medical.js';
 import { placeRecycling } from '../src/games/tower/sim/recycling.js';
+import { PLATFORM, placeMetro } from '../src/games/tower/sim/metro.js';
 import {
   PARKING_RAMP_WIDTH, PARKING_SPACE_WIDTH, finalizeParkingSpace, rebuildParkingCoverage,
 } from '../src/games/tower/sim/parking.js';
@@ -171,6 +172,12 @@ function towerWithEverything() {
   clinic.object.medical.queue.push(9001, 9002);
   const plant = placeRecycling(tower, { floor: -4, left: 100 }, trips);
   assert(plant.ok, 'fixture: ' + plant.reason);
+  // The metro station (issue #15): three floors of the delivered `metro` sheet, an empty
+  // platform in the first frames and a train at it in the night frame below - so both
+  // variants of every floor are drawn. Under everything else, as the rules put it
+  // (*"nothing goes beneath it"*): its lowest floor is B5, the recycling plant's is B4.
+  const metro = placeMetro(tower, { floor: -5, left: 0 }, trips);
+  assert(metro.ok, 'fixture: ' + metro.reason);
   const garage = [];
   const bay = (left, width, make) => {
     const placed = placeObject(tower, { family: make.family, type: make.type, floor: -1, left, right: left + width - 1 },
@@ -337,7 +344,8 @@ async function recordDrawnSprites() {
     renderer.draw(tower, 100);
   }
 
-  // Night, for every sheet with a lit-window variant.
+  // Night, for every sheet with a lit-window variant - and a train in the station.
+  for (const o of tower.objects.values()) if (o.family === FAMILY.metro) o.platform = PLATFORM.train;
   tower.clock.dayTick = 2450;
   stockTheSky(renderer.sky, 1200);
   renderer.draw(tower, 100);
@@ -462,6 +470,9 @@ export const tests = {
       'a bay with one car': 'basement-parking/one-car',
       'a bay with two cars': 'basement-parking/two-cars',
       'the recycling plant': 'basement-utility/idle',
+      'the metro concourse': 'metro/top',
+      'the metro platform, empty': 'metro/bottom',
+      'a train at the metro platform': 'metro/bottom-train',
       'a restaurant by day': 'restaurant/day',
       'a restaurant at night': 'restaurant/night',
       'a shop that has not been rented': 'shop/closed-night',

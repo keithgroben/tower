@@ -60,6 +60,7 @@
  * counted where they work, so **the station adds no population** of its own.
  */
 import { FAMILY, GROUND_FLOOR, OBJECT_TYPE, floorExists, placeObject, spanBlocked } from './state.js';
+import { CARRIER_MODE, carrierStopsAtFloor } from './elevators.js';
 
 /** `METRO.md` § Tool / Cursor: *"The `0x1f` slot is hardcoded to 30"*. */
 export const METRO_WIDTH = 30;
@@ -274,6 +275,31 @@ export function venueCustomerCommutes(tower, actor, venue) {
   if (!hasMetro(tower)) return false;
   if (venue.floor >= GROUND_FLOOR) return false;
   return actor.occupantIndex % CUSTOMER_MODULUS === 0;
+}
+
+/**
+ * Does a passenger lift stop at the platform? Read live from the carriers, so a shaft
+ * extended down to it (or a stop switched off in the lift's panel) changes the answer
+ * on the next call. A station no lift reaches brings nobody: the commuters' route from
+ * the platform fails and they use the lobby (`gatewayFloor`). Service lifts are for
+ * staff, never for people (`CARRIER_MODE.SERVICE`).
+ */
+export function metroServed(tower) {
+  const platform = metroPlatformFloor(tower);
+  if (platform === null) return false;
+  return (tower.carriers ?? []).some((carrier) =>
+    carrier.mode !== CARRIER_MODE.SERVICE && carrierStopsAtFloor(carrier, platform));
+}
+
+/** How many of the tower's office workers are metro commuters. Read by the hover and the harness. */
+export function metroCommuterCount(tower) {
+  let n = 0;
+  for (const actor of tower.actors) {
+    if (!actor || actor.family !== FAMILY.office) continue;
+    const office = tower.objects.get(actor.objectId);
+    if (office && officeWorkerCommutes(tower, actor, office)) n++;
+  }
+  return n;
 }
 
 /**

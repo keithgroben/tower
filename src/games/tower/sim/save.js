@@ -110,8 +110,16 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * Tower rank) with four more star gates (`suitePlaced`, `vipStayFavorable`,
  * `cathedralPlaced`, `weddingGuestsArrived`). A v7 file at four stars would resume past a
  * VIP it never had, and one at five would resume at a rank the old ladder called the end.
+ *
+ * v9 (issue #15, the metro station) adds a seventh family: three placed objects sharing one
+ * `stackId`, each carrying a `platform` display flag (`0` / `2`, the train), and worker and
+ * customer fields (`metroRefusedDay`) for the commute. It also changes where people START:
+ * a quarter of the office workers and half of an underground outlet's customers come in at
+ * the platform, and a commuter eats only underground. A v8 file has no station, so it would
+ * load - but a v9 file resumed by v8 would hold a family the old build draws as a grey box
+ * and cannot demolish-guard, which is the case the version exists for.
  */
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 9;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

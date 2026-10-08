@@ -498,10 +498,11 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
  *    ~250 (1,500 people) and the point here is the gates, not the head-count. It is
  *    counted exactly like any other bucket - recycling sizes itself to it - so the centers
  *    the script builds are real and the trial still fails if there are too few.
- *  - **`metroPlaced`** (issue #15), **`vipStayFavorable`** (issue #16), **`officeServiceOk`**,
- *    **`cathedralPlaced`** and the wedding's **`weddingGuestsArrived`** (issue #17): set by
- *    the script the morning after the rung they belong to opens, on the first weekend
- *    morning for the wedding. Each is the exact flag its issue will write.
+ *  - **`vipStayFavorable`** (issue #16), **`officeServiceOk`**, **`cathedralPlaced`** and the
+ *    wedding's **`weddingGuestsArrived`** (issue #17): set by the script the morning after
+ *    the rung they belong to opens, on the first weekend morning for the wedding. Each is
+ *    the exact flag its issue will write. (**`metroPlaced`** was one until issue #15: the
+ *    script now BUILDS the station, on the bottom floor, and the sim latches the gate.)
  *
  * Returns the numbers; the CLI prints them and `test/ladder.test.js` asserts on the same
  * function, so the harness and the test cannot disagree about what was run.
@@ -540,6 +541,7 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
   const count = (family) => [...tower.objects.values()].filter((o) => o.family === family).length;
   let serviceLift = false;
   let spaces = 0;
+  let metroPlacedDay = null;
   const flagsSetOn = {};
 
   /** The permanent population the buildings themselves put on the ledger (not the crowd). */
@@ -569,6 +571,13 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
     // player answers the notice as well - "Medical Center demanded near Lobby".
     if ((isDemanded(tower, 'medical') || status.blockerDetails.some((d) => d.kind === 'medical')) && count(FAMILY.medical) === 0) {
       tryBuild({ type: 'build', what: 'medical', floor: floors + 1, left: 120 }, 'medical');
+    }
+    // The metro station (issue #15), once the ladder names it: on the bottom floor, under
+    // everything else ("nothing goes beneath"), in the tiles clear of the four lifts.
+    if (status.blockerDetails.some((d) => d.kind === 'metroStation') && count(FAMILY.metro) === 0) {
+      if (tryBuild({ type: 'build', what: 'metroStation', floor: -10, left: 100 }, 'metro station')) {
+        metroPlacedDay ??= tower.clock.dayCounter;
+      }
     }
     if (star >= 3) {
       // Recycling: a service lift to the basement, then enough centers for the activity
@@ -600,7 +609,6 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
       flagsSetOn[flag] = tower.clock.dayCounter;
     };
     if (star === 3 && gates.suitePlaced) { set('vipStayFavorable'); set('officeServiceOk'); }
-    if (star === 4) set('metroPlaced');
     if (star === 5) set('cathedralPlaced');
   };
 
@@ -631,7 +639,7 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
     });
   }
   const last = perDay[perDay.length - 1];
-  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, hud: last.hud };
+  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, metroPlacedDay, hud: last.hud };
 }
 
 // ---------------------------------------------------------------------------
