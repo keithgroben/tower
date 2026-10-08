@@ -23,7 +23,7 @@ import {
 import {
   CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier, resizeCarrierSlots,
 } from './elevators.js';
-import { CONSTRUCTION_COST, chargeConstruction, placementCost } from './economy.js';
+import { CONSTRUCTION_COST, carCostForMode, chargeConstruction, placementCost } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
 import { createSimTripRecord } from './stress.js';
 import { FAST_FOOD_WIDTH, finalizeCommercialVenue } from './commercial.js';
@@ -311,7 +311,7 @@ const ACTIONS = {
   add_car({ tower, ledger }, { carrierId }) {
     const carrier = tower.carriers.find((c) => c.id === carrierId);
     if (!carrier) return refuse('no such shaft');
-    const cost = CONSTRUCTION_COST.elevatorStandard ?? 0;
+    const cost = carCostForMode(carrier.mode);
     const paid = chargeConstruction(ledger, cost);
     if (!paid.charged) {
       return refuse('a car costs $' + cost.toLocaleString('en-US')

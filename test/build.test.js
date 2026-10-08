@@ -206,7 +206,7 @@ export const tests = {
     const target = at(GROUND_FLOOR, carrier.column, { carrier });
     const guess = preview(w, tool('add_car'), target);
     assert(guess.ok, 'should be affordable: ' + guess.reason);
-    assert(guess.cost === CONSTRUCTION_COST.elevatorStandard, 'a car is priced as a car');
+    assert(guess.cost === 80_000 && guess.cost !== CONSTRUCTION_COST.elevatorStandard, 'a standard car is $80,000, not the $200,000 shaft price; got ' + guess.cost);
     const real = applyAction(w, commandFor(w.tower, tool('add_car'), target));
     assert(real.ok && carrier.cars.length === before + 1, 'the car was not added');
   },

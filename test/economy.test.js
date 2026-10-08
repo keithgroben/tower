@@ -16,12 +16,12 @@
  */
 import { TICKS_PER_DAY, advanceClock, createClock } from '../src/games/tower/sim/clock.js';
 import {
-  ACTIVATION_TICK_CAP, CASH_CAP, CASH_UNIT, CONSTRUCTION_COST, DEACTIVATED_EARLY,
+  ACTIVATION_TICK_CAP, CASH_CAP, CAR_COST, CASH_UNIT, CONSTRUCTION_COST, DEACTIVATED_EARLY,
   DEACTIVATED_LATE, DEFAULT_RENT_TIER, EXPENSE_BUCKETS, FIRST_CASHFLOW_DAY,
   INCOME_BUCKETS, LEDGER_CHECKPOINT_TICK, LOBBY_PREMIUM_FLOOR_RATE, RENT_TIERS,
   STARTING_CASH, TYPE_CODES,
   activateFamilyCashflowIfOperational, addExpense, addIncome,
-  applyPeriodicOperatingExpenses, chargeConstruction, createLedger,
+  applyPeriodicOperatingExpenses, carCostForMode, chargeConstruction, createLedger,
   deactivateFamilyCashflowIfUnpaired, floorConstructionCost, isCashflowDay,
   linkExpense, parkingExpense, payout, placementCost, rollLedgers,
   runLedgerCheckpoint,
@@ -58,6 +58,28 @@ function checkpointDays(days) {
 }
 
 export const tests = {
+  // Every price below is the **original game's own build-menu text**
+  // (`SIMTOWER.EXE` string list 32518/1009), which is what a player sees and is
+  // charged. They disagree with the decompilation's notes in four places, and in
+  // each the game wins (DEVIATIONS A6, A7, F2).
+  'prices match the original build menu, including the cost of a car'() {
+    const menu = {
+      elevatorStandard: 200000, hotelSingle: 20000, hotelTwin: 50000, hotelSuite: 100000,
+      restaurant: 200000, office: 40000, condo: 80000, retail: 100000, parkingSpace: 3000,
+      fastFood: 100000, medical: 500000, security: 100000, housekeeping: 50000,
+      secom: 100000, movieTheater: 500000, recyclingCenter: 500000, stairs: 5000, lobby: 5000,
+      escalator: 20000, partyHall: 100000, metroStation: 1000000, cathedral: 3000000,
+      elevatorExpress: 400000, elevatorService: 100000, parkingRamp: 50000,
+    };
+    for (const [k, v] of Object.entries(menu)) {
+      assert(CONSTRUCTION_COST[k] === v, k + ' should be $' + v + ', is $' + CONSTRUCTION_COST[k]);
+    }
+    assert(CAR_COST.standard === 80000 && CAR_COST.express === 150000 && CAR_COST.service === 50000,
+      'a car is $80,000 / $150,000 / $50,000 (standard / express / service), not the shaft price');
+    assert(carCostForMode(1) === 80000 && carCostForMode(0) === 150000 && carCostForMode(2) === 50000,
+      'by CARRIER_MODE number: 0 express, 1 standard, 2 service');
+  },
+
   // -------------------------------------------------- construction costs
 
   'the construction table is the reference’s, to the dollar'() {
