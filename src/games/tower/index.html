@@ -188,6 +188,41 @@
   }
   #palette button.on b { color: rgba(11, 15, 20, 0.55); }
 
+  /* ------------------------------------------------------ lift control panel */
+
+  #liftpanel {
+    position: absolute;
+    left: 140px; top: 92px;
+    width: 410px;
+    max-height: calc(100% - 92px - 56px);
+    overflow-y: auto;
+    padding: 10px 12px;
+    background: rgba(18, 24, 32, 0.96);
+    border: 1px solid #2c3948;
+    border-radius: 4px;
+    font: 600 11px var(--mono);
+    color: #9fb3c8;
+  }
+  #liftpanel[hidden] { display: none; }
+  #liftpanel button {
+    font: inherit; color: inherit; cursor: pointer;
+    background: #1b2430; border: 1px solid #2c3948; border-radius: 3px; padding: 3px 6px;
+  }
+  #liftpanel button:hover:not(:disabled) { color: var(--ink); border-color: #3d4d60; }
+  #liftpanel button:disabled { opacity: 0.45; cursor: default; }
+  .lp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--ink); }
+  .lp-grid { display: grid; grid-template-columns: 52px repeat(7, 1fr); gap: 3px; align-items: center; }
+  .lp-col { font-size: 9px; color: #56687d; text-align: center; }
+  .lp-row { font-size: 10px; color: #7d8b9c; }
+  .lp-cell.m1 { color: var(--bg); background: var(--info); border-color: var(--info); }
+  .lp-cell.m2 { color: var(--bg); background: var(--warn); border-color: var(--warn); }
+  .lp-cell small { opacity: 0.7; }
+  .lp-line, .lp-cars { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .lp-label { margin: 10px 0 4px; font-size: 10px; color: #56687d; }
+  .lp-stops { display: flex; flex-wrap: wrap; gap: 3px; }
+  .lp-stop.off { text-decoration: line-through; color: #56687d; }
+  .lp-status { margin-top: 8px; color: var(--bad); }
+
   /* -------------------------------------------------------------- footer */
 
   #foot {
@@ -262,6 +297,10 @@
        SHAFT_KIND, so this stays empty in the markup on purpose: a hand-written
        list here would be a second place to remember. -->
   <div id="palette"></div>
+
+  <!-- The elevator control panel. Filled by ui/lift-panel.js when a shaft is
+       clicked with no tool in hand. -->
+  <div id="liftpanel" hidden></div>
 
   <div id="foot">
     <span id="answer"></span>
