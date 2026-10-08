@@ -26,7 +26,7 @@ import { activeDemands, demandsOf, noticesAfter } from '../sim/demands.js';
 import { COMMERCIAL_FAMILY_CODES, FAMILY, isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
 import {
   demandsReadout, entertainmentReadout, evictionNotice, hotelHealthReadout, infestationNotice, noticeToSay,
-  serviceReadout, starClause, starGlyph, starTitle, stressReadout, venueReadout,
+  eventsReadout, serviceReadout, starClause, starGlyph, starTitle, stressReadout, venueReadout,
 } from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -408,10 +408,10 @@ function updateHover(px, py) {
   // Staff have no lease and no stress; "6 occupants · worst stress 0" would read
   // as a tenant who is doing perfectly.
   if (isStaffFamily(object.family)) {
-    // Guards say what they are for: the bomb and fire work is issue #16's, but the
-    // gate they open is the one thing a player needs to be told when pointing.
+    // Guards say what they are for: they fight fires and search for bombs (issue #16), by the
+    // outside stairs only, and the nearer the office the sooner they get there.
     $('hover').textContent = object.family === FAMILY.security
-      ? `security · ${occupants.length} guards · outside stairs only · cannot be bulldozed`
+      ? `security · ${occupants.length} guards · fight fires, find bombs · outside stairs only · cannot be bulldozed`
       : `housekeeping · ${occupants.length} staff · cannot be bulldozed`;
     return;
   }
@@ -529,6 +529,9 @@ function drawHud() {
 
   // What the tower is asking for (issue #13), until something answers it - and each
   // new notice said once on the line under the tower, in the sim's own words.
+  const live = eventsReadout(tower);
+  $('events').hidden = !live;
+  $('events').textContent = live;
   const demanded = demandsReadout(activeDemands(tower));
   $('demands').hidden = !demanded;
   $('demands').textContent = demanded;

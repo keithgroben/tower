@@ -43,7 +43,7 @@ import { demandsOf, noticesAfter } from '../src/games/tower/sim/demands.js';
 import { rebuildRouteTables } from '../src/games/tower/sim/routing.js';
 import { SAVE_VERSION, restore, snapshot } from '../src/games/tower/sim/save.js';
 import { eventDialogBlocking, eventDialogModel } from '../src/games/tower/ui/event-dialog.js';
-import { noticeToSay } from '../src/games/tower/ui/readout.js';
+import { eventsReadout, noticeToSay } from '../src/games/tower/ui/readout.js';
 import { newTowerWorld } from '../src/games/tower/ui/seed.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import {
@@ -960,6 +960,29 @@ export const tests = {
     const rise = noticeToSay([...fresh, { id: 4, text: 'The tower has reached 3 stars', good: true }]);
     assert(rise.rise === true && rise.text === 'The tower has reached 3 stars', 'a star rise still outranks everything');
     assert(noticeToSay([{ id: 1, text: 'plain' }]).ms === null, 'a plain notice keeps the short life');
+  },
+
+  'the bar names what is live: a hidden bomb and who is looking, a fire and its guards, the VIP and where he is'() {
+    const quiet = bare();
+    assert(eventsReadout(quiet) === '', 'nothing live, nothing said');
+    const t = bare();
+    building(t, 6);
+    tryStartBomb(t);
+    assert(eventsReadout(t) === 'BOMB threat - ransom or search', eventsReadout(t));
+    answerEvent(t, 'search');
+    assert(eventsReadout(t) === 'BOMB hidden - nobody is looking, it goes off at 1 PM', eventsReadout(t));
+    securityAt(t, -1);
+    assert(eventsReadout(t) === 'BOMB hidden - security is searching, it goes off at 1 PM', eventsReadout(t));
+    const f = bare({ day: 83 });
+    building(f, 6);
+    securityAt(f, -5);
+    tryStartFire(f);
+    assert(/^FIRE on floor \d+ - 1 guard team \(1 on the stairs\)$/.test(eventsReadout(f)), eventsReadout(f));
+    const v = bare({ day: 5, tick: VIP_BOOK_TICK });
+    const suite = put(v, FAMILY.hotelSuite, 4, 0, 9);
+    suite.occupiedFlag = true;
+    tryBookVip(v);
+    assert(eventsReadout(v) === 'VIP booked: suite on floor 4', eventsReadout(v));
   },
 
   'the shape: one tower field, one family, one action, one save version'() {

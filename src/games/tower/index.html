@@ -286,6 +286,7 @@
   /* What just happened, or why it did not. A refusal is an answer and it has
      to be readable at a glance, so it takes the same red as everything else
      that means "no". */
+  #events { color: var(--bad); font-weight: 700; }
   #answer { color: var(--good); font-weight: 700; min-width: 20ch; }
   #answer.bad { color: var(--bad); }
   #keys { font-size: 11px; }
@@ -326,6 +327,7 @@
       <span id="stress">no trips yet</span>
       <span id="waiting">0 waiting</span>
       <span id="hotels" hidden title="hotel rooms waiting to be cleaned, and rooms lost to cockroaches"></span>
+      <span id="events" hidden title="a bomb, a fire or a VIP in the tower right now"></span>
       <span id="demands" hidden title="what the tower is asking for - build it and the notice goes away"></span>
       <span id="people">—</span>
     </span>

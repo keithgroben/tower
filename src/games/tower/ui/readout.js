@@ -14,6 +14,9 @@
  * HUD from a broken game, and the first thing they distrust is the game.
  */
 import { stressBand } from '../sim/stress.js';
+import { formatClock } from '../sim/clock.js';
+import { BOMB_DEADLINE_TICK } from '../sim/events.js';
+import { securityOffices } from '../sim/security.js';
 import { MAX_STAR, TOWER_RANK } from '../sim/progression.js';
 import { VENUE, VISITOR_BANDS, closurePayout, venueOf } from '../sim/commercial.js';
 import { RENT_TIERS } from '../sim/economy.js';
@@ -158,6 +161,49 @@ export function serviceReadout(object, tower) {
 
 /** The tower's live demands as the bar says them, or `''` when it asks for nothing. */
 export const demandsReadout = (demands) => demands.map((d) => d.text).join(' · ');
+
+// ------------------------------------------------------------------ events
+
+/**
+ * What is going on in the tower right now, in one clause (issue #16), or `''`.
+ *
+ * A bomb is the one event with nothing to see - *hidden* is the whole point - so the bar is
+ * where a player learns it is there, who is looking and when it goes off; a fire is drawn in
+ * the world and the bar only counts the guards on it; a VIP's progress is the one thing the
+ * 3 -> 4 gate waits on and is otherwise invisible while he sleeps. Pure, and read from the
+ * sim's own `tower.events`, so it cannot say what the sim does not hold.
+ */
+export function eventsReadout(tower) {
+  const e = tower?.events;
+  if (!e) return '';
+  const parts = [];
+  if (e.bomb) {
+    const b = e.bomb;
+    const at = formatClock(BOMB_DEADLINE_TICK).replace(':00', '');
+    parts.push(b.phase === 'prompt' ? 'BOMB threat - ransom or search'
+      : b.phase === 'armed' ? (securityOffices(tower).length > 0
+        ? 'BOMB hidden - security is searching, it goes off at ' + at
+        : 'BOMB hidden - nobody is looking, it goes off at ' + at)
+        : b.phase === 'found' ? 'BOMB found on floor ' + b.floor
+          : 'BOMB exploded on floor ' + b.floor);
+  }
+  if (e.fire) {
+    const f = e.fire;
+    const climbing = f.guards.filter((g) => g.status === 'climb').length;
+    parts.push('FIRE on floor ' + f.current
+      + (f.guards.length ? ' - ' + f.guards.length + ' guard team' + (f.guards.length === 1 ? '' : 's')
+        + (climbing ? ' (' + climbing + ' on the stairs)' : '') : ' - nobody to fight it')
+      + (f.helicopter !== null ? ' - helicopter' : ''));
+  }
+  if (e.vip) {
+    const v = e.vip;
+    parts.push(v.phase === 'booked' ? 'VIP booked: suite on floor ' + v.floor
+      : v.phase === 'arriving' ? 'VIP on the way to floor ' + v.floor
+        : v.phase === 'staying' ? 'VIP asleep on floor ' + v.floor
+          : 'VIP checking out');
+  }
+  return parts.join(' · ');
+}
 
 // ------------------------------------------------------------------- stars
 
