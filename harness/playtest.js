@@ -34,6 +34,7 @@ import { SECURITY_OFFICES_FOR_THREE_STARS } from '../src/games/tower/sim/securit
 import { metroCommuterCount, metroPlatformFloor, metroServed, officeWorkerCommutes } from '../src/games/tower/sim/metro.js';
 import { starClause } from '../src/games/tower/ui/readout.js';
 import { financeStatement } from '../src/games/tower/sim/finance.js';
+import { QUICK, climbTrial, describeClimb } from './climb.js';
 import { overlayModel } from '../src/games/tower/ui/overlays.js';
 import { facilityWindowModel } from '../src/games/tower/ui/facility-window.js';
 import { unhappinessReasons } from '../src/games/tower/sim/facility.js';
@@ -1721,6 +1722,51 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     console.log('\nTREASURE - ' + t.digs + ' basement floors dug over 40 towers: ' + t.strikes.length + ' strikes ('
       + (100 * t.strikes.length / t.digs).toFixed(1) + '% against 12.5% expected); amounts '
       + [...new Set(t.strikes.map((x) => x.amount))].sort((a, b) => a - b).map(dollars).join(', '));
+    process.exit(0);
+  }
+  if (process.argv.includes('--climb')) {
+    // `node harness/playtest.js --climb [days] [--quick] [--compare] [--lifts zoned|cars|single] [--seed N]
+    //  [--crowd] [--crowd-from N] [--cash N]` - the issue #19 proof. See `harness/climb.js`.
+    const argv = process.argv.slice(2);
+    const opt = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
+    const quick = argv.includes('--quick') || argv.includes('--compare');
+    const base = quick ? QUICK : { days: 130, crowd: false, crowdFrom: 3 };
+    const explicitDays = argv.find((a) => /^\d+$/.test(a));
+    const options = {
+      ...base,
+      days: Number(explicitDays ?? base.days),
+      seed: Number(opt('--seed', 1)),
+      lifts: opt('--lifts', 'zoned'),
+      ...(argv.includes('--crowd') ? { crowd: true } : {}),
+      ...(opt('--crowd-from', null) ? { crowd: true, crowdFrom: Number(opt('--crowd-from')) } : {}),
+      ...(opt('--cash', null) ? { cash: Number(opt('--cash')) } : {}),
+    };
+    if (argv.includes('--compare')) {
+      // The standing invariant, same seed, same stand-ins: knowing the bottleneck beats ignoring it.
+      console.log('climb --compare: five players, one seed, the same capital, the same crowd, the same rooms. They differ in what they do about the lifts.\n');
+      console.log('  capital $' + options.cash.toLocaleString('en-US') + ', crowd from ' + options.crowdFrom + ' stars, ' + options.maxOffices
+        + ' offices, ' + options.days + ' days, seed ' + options.seed + '\n');
+      console.log('policy                          stars reached (day)                               final     offices   let   lifts  cars');
+      console.log('-'.repeat(118));
+      for (const [lifts, label, extra] of [
+        ['zoned', 'zoned: express, sky lobbies, service', {}],
+        ['cars', 'cars: standard lifts only', {}],
+        ['cars', 'cars + a service lift', { serviceLift: true }],
+        ['single', 'single: one lift, never touched', {}],
+        ['single', 'single + a service lift', { serviceLift: true }],
+      ]) {
+        const r = climbTrial({ ...options, lifts, ...extra });
+        const last = r.perDay.at(-1);
+        console.log(label.padEnd(32) + Object.entries(r.starDay).map(([s, d]) => (s >= 6 ? 'T' : s) + '@' + d).join(' ').padEnd(50)
+          + (r.finalStar >= 6 ? 'Tower' : r.finalStar + ' stars').padEnd(10) + String(last.offices).padStart(7) + String(last.let).padStart(7)
+          + String(last.carriers).padStart(8) + String(last.cars).padStart(6));
+      }
+      console.log('\nThe gates a lift decides: the service lift (recycling, 3 -> 4) and the express to the 100th floor (the wedding, 5 -> Tower).');
+      console.log('"let" is the tenants the lifts kept at the end of the run: the single lift loses almost all of them.');
+      process.exit(0);
+    }
+    const r = climbTrial(options);
+    for (const line of describeClimb(r, { every: Number(opt('--every', quick ? 1 : 5)) })) console.log(line);
     process.exit(0);
   }
   if (process.argv.includes('--ladder')) {

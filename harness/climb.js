@@ -29,7 +29,7 @@ import { newTowerWorld } from '../src/games/tower/ui/seed.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import { BUILDABLE } from '../src/games/tower/sim/actions.js';
 import { WEDDING_GUESTS, starGateStatus, starPopulation } from '../src/games/tower/sim/progression.js';
-import { noticesAfter } from '../src/games/tower/sim/demands.js';
+import { activeDemands, noticesAfter } from '../src/games/tower/sim/demands.js';
 import { financeStatement } from '../src/games/tower/sim/finance.js';
 import { starClause } from '../src/games/tower/ui/readout.js';
 import { countFamily, makeClimber } from '../src/games/tower/policy/climb.js';
@@ -87,6 +87,14 @@ export function climbTrial({
 
   for (let d = 0; d < days; d++) {
     for (let t = 0; t < TICKS_PER_DAY; t++) {
+      // What the tower looked like the tick BEFORE: a rise resets the office-service flag and the
+      // wedding count, so the evidence that a star came through its gate has to be taken first.
+      const starBefore = tower.starCount;
+      const before = {
+        gates: { ...tower.gates }, ledger: { ...tower.populationLedger }, dayTick: tower.clock.dayTick,
+        daypart: tower.clock.daypart, calendarPhase: tower.clock.calendarPhase,
+        demands: starBefore === 4 ? activeDemands(tower).length : 0,
+      };
       scheduler.tick(tower);
       const { dayTick } = tower.clock;
       if (dayTick === MORNING_TICK) climber.morning();
@@ -105,6 +113,17 @@ export function climbTrial({
           rises.push({
             star: tower.starCount, day: n.day, tick: n.tick, text: n.text,
             population: starPopulation(tower), real, crowd: tower.populationLedger.crowd ?? 0,
+            // ...and the tick before it, for the test that no star came without its gate.
+            // The head-count is read at the rise, by the rung's own rules (hotel guests stop counting at 3
+            // stars, so it is the count FOR the star being left): it cannot fall in the tick that raises it.
+            activity: starPopulation(tower, starBefore),
+            before: { ...before, starBefore },
+            // ...and as the rise left it: a flag the same tick wrote (recycling at 2000, the fortieth
+            // guest) is on this side, and the clock the gate read is this one.
+            after: {
+              gates: { ...tower.gates }, dayTick: tower.clock.dayTick, daypart: tower.clock.daypart,
+              calendarPhase: tower.clock.calendarPhase, demands: activeDemands(tower).length,
+            },
           });
         }
       }
@@ -138,7 +157,7 @@ export function climbTrial({
   const starDay = {};
   for (const r of rises) starDay[r.star] = r.day;
   return {
-    days: perDay.length, seed, lifts, skip, crowd, cash,
+    days: perDay.length, seed, lifts, skip, crowd, crowdFrom, cash, maxOffices,
     finalStar: last.star, starDay, rises, perDay, quarters, worstDiscrepancy,
     built: climber.built, refused: climber.refused, gatesOn, weddingTick,
     peakReal, peakPopulation: Math.max(...perDay.map((r) => r.population)),
@@ -153,3 +172,67 @@ export function climbTrial({
 const ledgerCash = (world) => world.ledger.cash;
 const countLet = (tower) => { let n = 0; for (const o of tower.objects.values()) if (o.family === FAMILY.office && isUnitLet(o)) n++; return n; };
 
+
+// ---------------------------------------------------------------------------
+// The two ways to run it, and how a run is told.
+
+/**
+ * **The short run** - the CI horizon, the `?demo=climb` page, `--climb --quick`. Three things are
+ * granted, and the report says each one out loud: capital ($40,000,000, because a real tower earns
+ * the cost of the cathedral over months), the crowd (the population the sim cannot host), and an
+ * ambition of 200 offices (so the run is a minute of play and not an hour).
+ */
+export const QUICK = Object.freeze({ cash: 40_000_000, maxOffices: 200, crowd: true, crowdFrom: 3, days: 24 });
+
+const money = (n) => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
+
+/** What a run is standing in for, in the words the report opens with. */
+export function standInsOf(r) {
+  const lines = [];
+  lines.push(r.cash === STARTING_CASH
+    ? 'capital: the game\'s own ' + money(STARTING_CASH) + ' - NOT a stand-in'
+    : 'STAND-IN capital: ' + money(r.cash) + ' instead of ' + money(STARTING_CASH));
+  lines.push(r.crowd
+    ? 'STAND-IN crowd: the population above the real tenants, from ' + r.crowdFrom + ' stars, up to each rung\'s threshold'
+    : 'no crowd: every person counted is a real tenant');
+  if (Number.isFinite(r.maxOffices)) lines.push('ambition: stops at ' + r.maxOffices + ' offices');
+  return lines;
+}
+
+/**
+ * The run as lines of text: the stand-ins first, a row per day (or every `every`th), then each star
+ * with how much of its population was real, then the books.
+ */
+export function describeClimb(r, { every = 1 } = {}) {
+  const out = [];
+  out.push('climb: a scripted player reads the bar and builds only through applyAction. lifts policy: ' + r.lifts
+    + ', seed ' + r.seed + ', ' + r.days + ' days.');
+  for (const line of standInsOf(r)) out.push('  ' + line);
+  out.push('  no gate flag is written by the script (the sim opened: ' + JSON.stringify(r.gatesOn) + ')');
+  out.push('');
+  out.push('day  star  population  (real)  offices   let  cars/lifts          cash  the bar says');
+  for (const row of r.perDay) {
+    if (row.day % every !== 0 && row !== r.perDay.at(-1)) continue;
+    out.push(String(row.day).padStart(3) + String(row.star).padStart(6) + String(row.population).padStart(12)
+      + String(row.real).padStart(8) + String(row.offices).padStart(9) + String(row.let).padStart(6)
+      + (row.cars + '/' + row.carriers).padStart(10) + money(row.cash).padStart(14) + '  ' + row.hud.slice(0, 110));
+  }
+  out.push('');
+  out.push('STARS');
+  for (const x of r.rises) {
+    out.push('  ' + (x.star >= 6 ? 'Tower rank' : x.star + ' stars').padEnd(11) + ' day ' + String(x.day).padStart(3) + ' tick ' + String(x.tick).padStart(4)
+      + '   population ' + String(x.population).padStart(6) + ' = ' + String(x.real).padStart(6) + ' real + ' + String(x.crowd).padStart(6) + ' crowd'
+      + (x.crowd > 0 ? '   <- stand-in' : '   <- all real tenants'));
+  }
+  out.push('  final: ' + (r.finalStar >= 6 ? 'the Tower rank' : r.finalStar + ' stars') + ' after ' + r.days + ' days; left to do: '
+    + (starGateStatus(r.world.tower).blockers.join('; ') || 'nothing'));
+  out.push('  peak REAL population (tenants, no crowd): ' + r.peakReal + ' of the 15,000 the Tower rank asks for');
+  out.push('');
+  out.push('BOOKS  ' + r.quarters.length + ' quarters closed; the largest difference between the change in cash and the statement\'s lines: '
+    + money(r.worstDiscrepancy));
+  const built = {};
+  for (const b of r.built) built[b.what] = (built[b.what] ?? 0) + 1;
+  out.push('BUILT  ' + Object.entries(built).map(([k, n]) => n + ' ' + k).join(', '));
+  out.push('FINGERPRINT ' + r.fingerprint + '  (run it twice: it is the same)');
+  return out;
+}
