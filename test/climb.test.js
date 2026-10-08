@@ -208,7 +208,8 @@ export const tests = {
     for (const rel of ['../src/games/tower/policy/climb.js', '../harness/climb.js']) {
       const code = read(rel).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
       const writes = [...code.matchAll(/\b(?:tower|world|ledger|gates)\??\.[\w.[\]'"?]*\s*(?:=(?!=)|\+=|-=|\+\+|--)/g)].map((m) => m[0].replace(/\s+/g, ' '));
-      const allowed = writes.filter((w) => /populationLedger\.crowd\s*=$/.test(w));
+      // The crowd, and the one line `ui/main.js` runs after every build click: clear the route-tables-dirty flag it just rebuilt for.
+      const allowed = writes.filter((w) => /populationLedger\.crowd\s*=$/.test(w) || /tower\.routeTablesDirty\s*=$/.test(w));
       assert(allowed.length === writes.length, rel + ' writes into the tower: ' + writes.filter((w) => !allowed.includes(w)).join(', '));
       assert(!/\bgates\b[^\n]*=[^=]/.test(code.replace(/tower\.gates\?\.\[flag\]|\{ \.\.\.tower\.gates \}|tower\.gates\.weddingGuestsArrived|tower\.gates\?\.weddingGuestsArrived/g, '')),
         rel + ' touches a gate');

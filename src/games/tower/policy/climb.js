@@ -141,7 +141,7 @@ export function plannedLiftSites(lifts = 'zoned') {
  * @param {boolean} [options.serviceLift] a `cars` or `single` player who has also met the service elevator (diagnostics)
  */
 export function makeClimber(world, {
-  lifts = 'zoned', skip = [], crowd = false, crowdFrom = 3, carRatio = 5, expressRatio = 8, maxOffices = Infinity,
+  lifts = 'zoned', skip = [], crowd = false, crowdFrom = 3, carRatio = 7, expressRatio = 8, maxOffices = Infinity,
   serviceLift = false,
 } = {}) {
   const { tower, ledger } = world;

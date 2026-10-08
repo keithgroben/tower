@@ -154,6 +154,7 @@ document.addEventListener('visibilitychange', () => {
 const gate = makePauseGate({ initial: 1, onChange: (state) => showSpeed(state) });
 /** The demo runs the ticks this many times faster than the buttons say (1 in the ordinary game). */
 const boost = demo ? demo.boost : 1;
+let demoStar = 1;
 let speed = 1;
 let lastFrameMs = 0;
 let hudDueMs = 0;
@@ -795,6 +796,8 @@ function frame(nowMs) {
     // Open (or close) the question the moment the tick that raised (or answered) it is done,
     // not up to a tenth of a second later when the HUD next refreshes.
     eventDialog.refresh();
+    // A watched climb steps the camera back as the tower rises, so the building stays in the frame.
+    if (demo && tower.starCount !== demoStar) { demoStar = tower.starCount; renderer.zoomBy(-1); }
     // Render dt, not sim dt: the sky and the sprite clock run at wall speed so
     // a paused tower still has weather.
     renderer.draw(tower, dtMs);

@@ -62,7 +62,7 @@ export function fingerprint(value) {
  */
 export function climbTrial({
   days = 40, seed = 1, cash = STARTING_CASH, lifts = 'zoned', skip = [], crowd = false, crowdFrom = 3, stopAtStar = null,
-  carRatio = 5, maxOffices = Infinity, serviceLift = false, onDay = null,
+  carRatio = 7, maxOffices = Infinity, serviceLift = false, onDay = null,
 } = {}) {
   const world = newTowerWorld({ seed, cash });
   const { tower } = world;
