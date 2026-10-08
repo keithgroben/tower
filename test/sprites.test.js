@@ -34,6 +34,7 @@ import { FAMILY, createTower, placeObject } from '../src/games/tower/sim/state.j
 import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
 import { FLYERS } from '../src/games/tower/render/sky.js';
 import { SHEET_READY } from '../src/games/tower/render/sprites.js';
+import { RESTAURANT_WIDTH, RETAIL_WIDTH, finalizeCommercialVenue } from '../src/games/tower/sim/commercial.js';
 import {
   PRELOAD_SHEETS, SPRITE_NOT_YET_DRAWN, SPRITE_UNUSED_ANIMATIONS, SPRITE_USES,
   makeRenderer,
@@ -139,6 +140,20 @@ function towerWithEverything() {
   mopping.state = 2;                             // HK_STATE.rest: in the room, tidying
   mopping.targetRoomId = dirtyRoom.id;
   mopping.targetFloor = HOTEL_FLOOR;
+
+  // The commercial venues (issue #10), each with its linked record so the money
+  // sign over them draws too: a restaurant (its own sheet, day and by night) and a
+  // shop left unrented (a shuttered front by day, which is the dormant ordinal).
+  // On F12, above the housekeeping station on F11.
+  const RESTAURANT_FLOOR = 12;
+  const restaurant = placeObject(tower,
+    { family: FAMILY.restaurant, floor: RESTAURANT_FLOOR, left: 54, right: 54 + RESTAURANT_WIDTH - 1 },
+    trips, finalizeCommercialVenue);
+  assert(restaurant.ok, 'fixture: ' + restaurant.reason);
+  const unrented = placeObject(tower,
+    { family: FAMILY.retail, floor: RESTAURANT_FLOOR, left: 80, right: 80 + RETAIL_WIDTH - 1 },
+    trips, finalizeCommercialVenue);
+  assert(unrented.ok, 'fixture: ' + unrented.reason);
 
   // An express shaft beside the standard one. Nothing places one in the game
   // yet, but the sheets are delivered and the carrier model supports it.
@@ -376,6 +391,9 @@ export const tests = {
       'an empty, ready hotel room': 'room-empty/hotel',
       'a guest with a suitcase': 'person-guest/luggage',
       'the housekeeping facility': 'housekeeping/day',
+      'a restaurant by day': 'restaurant/day',
+      'a restaurant at night': 'restaurant/night',
+      'a shop that has not been rented': 'shop/closed-night',
       'a room left dirty': 'room-status/dirty',
       'a room the cockroaches have taken': 'room-status/infested',
       'a housekeeper at a room': 'person-staff/clean',

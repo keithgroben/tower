@@ -28,7 +28,9 @@ import { CONSTRUCTION_COST, carCostForMode, chargeConstruction, placementCost } 
 import { lockReason, notePlacement } from './progression.js';
 import { MAX_SEGMENTS, createSegment, segmentTopFloor } from './routing.js';
 import { createSimTripRecord } from './stress.js';
-import { FAST_FOOD_WIDTH, finalizeCommercialVenue } from './commercial.js';
+import {
+  FAST_FOOD_WIDTH, RESTAURANT_WIDTH, RETAIL_WIDTH, finalizeCommercialVenue, venueOf,
+} from './commercial.js';
 import { HOTEL_WIDTH } from './hotel.js';
 import { HOUSEKEEPING_WIDTH } from './housekeeping.js';
 
@@ -55,6 +57,39 @@ export const BUILDABLE = {
     cost: 'fastFood',
     width: FAST_FOOD_WIDTH,
     label: 'Fast Food',
+    finalize: finalizeCommercialVenue,
+  },
+
+  /**
+   * **The evening venue** (issue #10): 3 stars, $200,000 (`economy.js`, keyed by
+   * type `6`). It fills at dinner — `commercialGate`'s late window — and is
+   * rebuilt at 1600 and closed at 2200, a clock of its own (`TIME.md` § 1600,
+   * § 2200). Its closure payout is `-$6k / $4k / $6k / $10k` by the evening's
+   * diners, so **a quiet restaurant loses money**.
+   *
+   * Width 24 is the reference implementation's unscaled `TILE_WIDTHS` (A36).
+   */
+  restaurant: {
+    family: FAMILY.restaurant,
+    type: OBJECT_TYPE.restaurant,
+    cost: 'restaurant',
+    width: RESTAURANT_WIDTH,
+    label: 'Restaurant',
+    finalize: finalizeCommercialVenue,
+  },
+
+  /**
+   * **The retail shop** (issue #10): 3 stars, $100,000. Rented by its first
+   * customer, it pays the priced row ($20k / $15k / $10k / $4k a quarter by rent
+   * tier) and counts `+10` population while open; it earns nothing per visit.
+   * Placed unrented — see `sim/commercial.js` `openRetailShop`. Width 12: A36.
+   */
+  retail: {
+    family: FAMILY.retail,
+    type: OBJECT_TYPE.retail,
+    cost: 'retail',
+    width: RETAIL_WIDTH,
+    label: 'Retail Shop',
     finalize: finalizeCommercialVenue,
   },
 
@@ -663,6 +698,14 @@ const ACTIONS = {
     if (!object) return refuse('nothing there');
     const refusal = demolishRefusal(object);
     if (refusal) return refuse(refusal);
+
+    // An open shop is `+10` on the population ledger, taken back out with it.
+    // Nothing else would: the 3-day sweep walks the shops that still stand, so a
+    // demolished one's ten people would sit in the star thresholds for ever.
+    // The recurring rent just stops; nothing is refunded for a stream that ended.
+    if (object.family === FAMILY.retail && venueOf(object)?.availability !== 0xff && tower.populationLedger) {
+      tower.populationLedger.retail = Math.max(0, (tower.populationLedger.retail ?? 0) - 10);
+    }
 
     tower.objects.delete(objectId);
     tower.actors = tower.actors.filter((a) => a.objectId !== objectId);
