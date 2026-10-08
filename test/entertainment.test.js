@@ -16,7 +16,7 @@ import {
   AGE_CAP, ENT_STATE, ENTERTAINMENT_FAMILIES, FILMS, FILM_PRICE, GATE_CHANCE, MAX_ENTERTAINMENT_VENUES, PARTY_HALL_BUDGET,
   PARTY_HALL_MIN_HOTEL_ROOMS, PARTY_HALL_WIDTH, PARTY_PAYOUT, PHASE, SPILLOVER_FLOORS, THEATER_BUDGET, THEATER_TIERS,
   THEATER_WIDTH, activateLowerHalves, activateUpperHalves, advanceLowerHalves, advancePartyHalls, advanceUpperHalves,
-  ageTierOf, changeFilm, entertainmentGate, entertainmentNightReset, entertainmentPaysToday, entertainmentSignal,
+  ageTierOf, changeFilm, entertainmentDispatch, entertainmentGate, entertainmentNightReset, entertainmentPaysToday, entertainmentSignal,
   entertainmentVenues, eventIsLive, filmTitle, hotelRoomCount, isBombOrFireDay, isNewRelease, middayEntertainment,
   nextSelector, partyHallHasGuests, partyHallPayout, placeEntertainment, rebuildEntertainment, spilloverVenue,
   theaterBudget, theaterPayout,
@@ -431,6 +431,42 @@ export const tests = {
     assert(t.record.phase === PHASE.ready, '2 -> 3 at 1200');
   },
 
+  'a visitor spends a unit of its half budget to go; a failed first route gives it back, a failed retry parks; a spent budget leaves it idle'() {
+    const { tower, record } = bareTower('theater');
+    const stub = (code) => ({ resolveRoute: () => ({ code }), onDelay: () => {} });
+    rebuildEntertainment(tower); activateUpperHalves(tower);
+    const upper = tower.objects.get(record.upperId);
+    const [a, b] = tower.actors.filter((x) => x.objectId === record.upperId);
+    const before = record.upperBudget;
+    entertainmentDispatch(tower, a, upper, record, tower.clock, stub(-1));
+    assert(record.upperBudget === before && a.state === ENT_STATE.going, 'a failed first route refunds the unit and tries again');
+    entertainmentDispatch(tower, a, upper, record, tower.clock, stub(2));
+    assert(record.upperBudget === before - 1 && a.state === (ENT_STATE.going | 0x40), 'a queued route has spent it and is in transit');
+    entertainmentDispatch(tower, a, upper, record, tower.clock, stub(-1));
+    assert(a.state === ENT_STATE.parked && record.upperBudget === before - 1, 'a failed RETRY parks, and the unit stays spent');
+    record.upperBudget = 0;
+    entertainmentDispatch(tower, b, upper, record, tower.clock, stub(3));
+    assert(b.state === ENT_STATE.going && record.attendance === 0, 'with the budget spent the visitor stays idle - and is not counted');
+  },
+
+  'attendance is counted on ARRIVAL, once; a visitor who gets there after its half has closed is not counted and goes home'() {
+    const { tower, record } = bareTower('theater');
+    const stub = { resolveRoute: () => ({ code: 3 }), onDelay: () => {} };
+    rebuildEntertainment(tower); activateUpperHalves(tower);
+    const upper = tower.objects.get(record.upperId);
+    const [a, b] = tower.actors.filter((x) => x.objectId === record.upperId);
+    entertainmentDispatch(tower, a, upper, record, tower.clock, stub);
+    assert(a.state === ENT_STATE.watching && record.attendance === 1 && record.active === 1, 'arrived: counted, watching');
+    assert(record.phase === PHASE.attending, 'the first arrival promotes the phase 1 -> 2');
+    assert(a.anchorFloor === upper.floor, 'standing on the venue floor');
+    record.upperOpen = false;                       // the 1500 pass has shut the half
+    entertainmentDispatch(tower, b, upper, record, tower.clock, stub);
+    assert(b.state === ENT_STATE.parked, 'a visitor who has not set out yet is simply parked');
+    b.state = ENT_STATE.going | 0x40;               // one already on its way, arriving late
+    entertainmentDispatch(tower, b, upper, record, tower.clock, stub);
+    assert(b.state === ENT_STATE.home && record.attendance === 1 && record.active === 1, 'late: not counted, sent home');
+  },
+
   'the night (2500) sends everyone home and shuts the venue'() {
     const { tower, record } = bareTower('theater');
     rebuildEntertainment(tower); activateUpperHalves(tower);
@@ -522,11 +558,16 @@ export const tests = {
     const retail = build(world, 'retail', { floor: 3, left: 100 });
     assert(SPILLOVER_FLOORS === 5, 'five floors');
     const { scheduler } = makeDriver(world);
-    const seen = { near: new Set(), far: new Set(), retail: new Set() };
+    const seen = { near: new Set(), far: new Set(), retail: new Set(), held: new Set() };
     const watch = () => {
       for (const a of tower.actors) {
         if (a.family !== FAMILY.theater || (a.state & 0x3f) !== ENT_STATE.dwelling) continue;
-        if (a.venueObjectId === near.id) seen.near.add(a.id);
+        if (a.venueObjectId === near.id) {
+          seen.near.add(a.id);
+          // Arriving TAKES A SLOT (`acquireVenueSlot` stamps the dwell start): that, and
+          // not merely standing on the floor, is what makes it a visit.
+          if (a.venueEnteredTick != null) seen.held.add(a.id);
+        }
         if (a.venueObjectId === far.id) seen.far.add(a.id);
         if (a.venueObjectId === retail.id) seen.retail.add(a.id);
       }
@@ -535,6 +576,7 @@ export const tests = {
     assert(theater.venue.lastAttendance > 0, 'there was an audience');
     assert(seen.near.size > 0, 'the fast food 3 floors away got theater customers: ' + seen.near.size);
     assert(seen.far.size === 0, 'the one 10 floors away got none: ' + seen.far.size);
+    assert(seen.held.size === seen.near.size, 'every one of them took a slot in the shop: ' + seen.held.size + ' of ' + seen.near.size);
     assert(Math.abs(near.floor - theater.floor) <= SPILLOVER_FLOORS + 1, 'in range of the upper half');
     // Taking a slot IS a visit: the venue's own counter has them in it.
     assert(venueOf(near).acquireCount > 0, 'the fast food counted visitors');
