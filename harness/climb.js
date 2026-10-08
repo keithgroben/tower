@@ -32,13 +32,10 @@ import { WEDDING_GUESTS, starGateStatus, starPopulation } from '../src/games/tow
 import { activeDemands, noticesAfter } from '../src/games/tower/sim/demands.js';
 import { financeStatement } from '../src/games/tower/sim/finance.js';
 import { starClause } from '../src/games/tower/ui/readout.js';
-import { countFamily, makeClimber } from '../src/games/tower/policy/climb.js';
+import { EVENING_TICK, MORNING_TICK, countFamily, makeClimber } from '../src/games/tower/policy/climb.js';
 
 export const TICKS_PER_DAY = 2600;
-/** The player's morning: just after the day's first checkpoints, as `ladderTrial` keeps it. */
-export const MORNING_TICK = 30;
-/** ...and evening, just after 5 PM (daypart 4 begins at 1600), when the windows of `3 -> 4` and `4 -> 5` open. */
-export const EVENING_TICK = 1700;
+export { EVENING_TICK, MORNING_TICK };
 
 /** djb2 over the JSON of a value: a fingerprint for "run it twice, get the same thing". */
 export function fingerprint(value) {

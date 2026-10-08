@@ -51,6 +51,7 @@ import {
   HOTEL_SUITES_FOR_FOUR_STARS, STAR_THRESHOLDS, starGateStatus, starPopulation, towerActivity,
 } from '../sim/progression.js';
 import { isDemanded } from '../sim/demands.js';
+import { rebuildRouteTables } from '../sim/routing.js';
 import { facilityReading } from '../sim/facility.js';
 import { CATHEDRAL_BASE_FLOOR, hasCathedral } from '../sim/cathedral.js';
 
@@ -58,6 +59,11 @@ import { CATHEDRAL_BASE_FLOOR, hasCathedral } from '../sim/cathedral.js';
 // The plan of the lot. Pure: no tower in it.
 
 /** Standard-lift columns. 12 apart because `SHAFT_SEPARATION` wants 8 clear tiles beside a 4-wide shaft. */
+/** The player's morning: just after the day's first checkpoints, as `ladderTrial` keeps it. */
+export const MORNING_TICK = 30;
+/** ...and evening, just after 5 PM (daypart 4 begins at 1600), when the windows of `3 -> 4` and `4 -> 5` open. */
+export const EVENING_TICK = 1700;
+
 export const SLOTS = [12, 24, 36, 48, 60, 72];
 /**
  * ⚠️ A84: nothing sets `actor.homeColumn`, so the router's distance penalty is measured from tile 0
@@ -195,6 +201,9 @@ export function makeClimber(world, {
   const act = (action, label) => {
     const result = applyAction(world, action);
     if (result.ok) {
+      // What the build click does in `ui/main.js`: a new lift or a demolition changes what can be reached,
+      // and the routing tables are only otherwise rebuilt at the next dawn.
+      if (tower.routeTablesDirty) { rebuildRouteTables(tower); tower.routeTablesDirty = false; }
       built.push({ day: day(), what: label });
       if (action.type === 'build') take(action.floor, action.left, BUILDABLE[action.what].width);
     } else {
