@@ -42,6 +42,9 @@ import { RENT_TIERS } from '../sim/economy.js';
 import { CARRIER_MODE } from '../sim/elevators.js';
 import { COMMERCIAL_FAMILIES, VENUE as VENUE_STATE, closurePayout, venueOf } from '../sim/commercial.js';
 import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
+import {
+  ENTERTAINMENT_FAMILIES, PHASE as SHOW_PHASE, entertainmentSignal, halfOf,
+} from '../sim/entertainment.js';
 import { HK_STATE } from '../sim/housekeeping.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, TILES_PER_FLOOR,
@@ -413,6 +416,18 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
   const family = object?.family;
   if (family === FAMILY.lobby) return { name: 'lobby', animation: night ? 'night' : 'day' };
   if (family === FAMILY.housekeeping) return { name: 'housekeeping', animation: night ? 'night' : 'day' };
+  // The two entertainment venues, a sheet each. The half is the placed type; the
+  // primary half (the one with the linked record) lights up while the venue's
+  // day is running - a theater's upper floor while a show is on, a party hall's
+  // lower floor while the party is.
+  if (family === FAMILY.theater) {
+    if (halfOf(object) === 'lower') return { name: 'theater', animation: 'lower' };
+    return { name: 'theater', animation: object.venue?.phase >= SHOW_PHASE.activated ? 'showing' : 'upper' };
+  }
+  if (family === FAMILY.partyHall) {
+    if (halfOf(object) === 'upper') return { name: 'party-hall', animation: 'upper' };
+    return { name: 'party-hall', animation: object.venue?.phase >= SHOW_PHASE.activated ? 'party' : 'lower' };
+  }
   if (HOTEL.has(family)) {
     // Vacant, dirty or merely waiting for tonight: the empty shell. The furnished
     // sheet's own `vacant` frame is not used, for the reason given for the office.
@@ -456,7 +471,9 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
  * rent for the quarter. Derived from the same `closurePayout` the sim pays out of,
  * so the sign cannot promise a figure the closing sweep will not pay.
  */
-export function venueSignal(object) {
+export function venueSignal(object, tower = null) {
+  // An entertainment venue's sign is its own: attendance and what the day pays.
+  if (ENTERTAINMENT_FAMILIES.has(object?.family)) return entertainmentSignal(object, tower);
   const record = venueOf(object);
   if (!record) return null;
   const money = (n) => (n < 0 ? '-' : '') + '$' + Math.round(Math.abs(n) / 1000) + 'k';
@@ -641,6 +658,8 @@ export const SPRITE_USES = {
   hotel: ['booked-day', 'booked-night', 'poor-review'],
   housekeeping: ['day', 'night'],
   restaurant: ['day', 'night'],
+  theater: ['upper', 'lower', 'showing'],
+  'party-hall': ['upper', 'lower', 'party'],
   'room-status': ['dirty', 'infested'],
   shop: ['open-grocery', 'open-cafe', 'open-awning', 'closed-night'],
   'room-empty': ['office', 'condo', 'hotel'],
@@ -1244,6 +1263,8 @@ export function makeRenderer(canvas, options = {}) {
     [FAMILY.fastFood]: '#ffb703',
     [FAMILY.restaurant]: '#e76f51',
     [FAMILY.retail]: '#ffb703',
+    [FAMILY.theater]: '#c77dff',
+    [FAMILY.partyHall]: '#ff70a6',
   };
 
   /** The worst band among a unit's occupants — what the room's own art shows. */
@@ -1275,7 +1296,7 @@ export function makeRenderer(canvas, options = {}) {
    * worth showing go in the world, not in a sidebar.
    */
   function drawUnitSignals(L, o, tower) {
-    if (VENUE.has(o.family)) return void drawVenueSignal(L, o);
+    if (VENUE.has(o.family) || ENTERTAINMENT_FAMILIES.has(o.family)) return void drawVenueSignal(L, o, tower);
     if (!TENANTED.has(o.family) && !HOTEL.has(o.family)) return;
     const x = L.tileX(o.left);
     const y = L.floorY(o.floor);
@@ -1322,13 +1343,13 @@ export function makeRenderer(canvas, options = {}) {
   }
 
   /** A venue's money sign: see {@link venueSignal}. */
-  function drawVenueSignal(L, o) {
+  function drawVenueSignal(L, o, tower) {
     const x = L.tileX(o.left);
     const y = L.floorY(o.floor);
     const w = (o.right - o.left + 1) * L.tw;
     if (x + w < 0 || x > W || y + L.fh < 0 || y > H) return;
     if (L.fh < 14) return;
-    const signal = venueSignal(o);
+    const signal = venueSignal(o, tower);
     if (!signal) return;
     ctx.fillStyle = 'rgba(11,15,20,0.72)';
     ctx.fillRect(x + 1, y + 2, w - 2, Math.min(11, L.fh * 0.4));
@@ -1410,9 +1431,12 @@ export function makeRenderer(canvas, options = {}) {
   /** Screen rectangle for a footprint, or null when it is off the world. */
   function ghostBox(L, f) {
     if (f.kind === 'room') {
+      // A two-floor facility reaches up: the box runs from the top of its upper
+      // floor to the bottom of its lower one.
+      const top = L.floorY(f.floor + (f.floors ?? 1) - 1);
       return {
-        x: L.tileX(f.left), y: L.floorY(f.floor),
-        w: (f.right - f.left + 1) * L.tw, h: L.fh - 2,
+        x: L.tileX(f.left), y: top,
+        w: (f.right - f.left + 1) * L.tw, h: L.floorY(f.floor) + L.fh - 2 - top,
       };
     }
     if (f.kind === 'link') {
@@ -1787,7 +1811,7 @@ export function makeRenderer(canvas, options = {}) {
         }
       }
       const sheet = actor.family === FAMILY.condo ? 'person-resident'
-        : HOTEL.has(actor.family) ? 'person-guest' : 'person-worker';
+        : HOTEL.has(actor.family) || ENTERTAINMENT_FAMILIES.has(actor.family) ? 'person-guest' : 'person-worker';
       // A calm guest on the way up to check in is carrying a suitcase — the one
       // frame the guest sheet has that the others do not. Stress still wins: a
       // guest near the red band is shown fed up, bags or no bags.
