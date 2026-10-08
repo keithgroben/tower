@@ -31,6 +31,7 @@ import {
   hotelMiddaySweep, hotelSaleCountReset,
 } from '../sim/hotel.js';
 import { housekeepingArrival, housekeepingFamilyHandler } from '../sim/housekeeping.js';
+import { securityNightReset } from '../sim/security.js';
 import {
   LOWER_ACTIVATION_TICK, LOWER_ADVANCE_TICK, UPPER_ACTIVATION_TICK, UPPER_ADVANCE_TICK,
   activateLowerHalves, activateUpperHalves, advanceLowerHalves, advancePartyHalls, advanceUpperHalves,
@@ -273,9 +274,13 @@ export function makeDriver(world, { observe } = {}) {
     // replacing the earlier.
     //
     // Entertainment's night is `TIME.md` § 2500 too (entertainment sims go to
-    // `0x27` with their aux fields cleared) and goes last: it touches only its
-    // own visitors.
-    [CONDO_RESET_TICK]: (t) => { condoDailyReset(t); hotelDailyReset(t); entertainmentNightReset(t); },
+    // `0x27` with their aux fields cleared) and goes next: it touches only its
+    // own visitors. Security's is the same row (*"14/33 ... -> `0x01`"*): the
+    // guards back on duty, which touches only them. Last, and chained into this
+    // ONE key - `extraCheckpoints` holds a single body per tick.
+    [CONDO_RESET_TICK]: (t) => {
+      condoDailyReset(t); hotelDailyReset(t); entertainmentNightReset(t); securityNightReset(t);
+    },
     // `specs/TIME.md` § 1600: the hotel pass, on the tick the check-in window
     // opens — spread the cockroaches, recompute each room and give a dirty one
     // its strike, then refresh the latches (`hotelMiddaySweep` runs all three, in

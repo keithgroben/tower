@@ -39,6 +39,7 @@ import {
 } from './entertainment.js';
 import { HOTEL_WIDTH } from './hotel.js';
 import { HOUSEKEEPING_WIDTH } from './housekeeping.js';
+import { GUARD_STATE, SECURITY_WIDTH, securityObstruction } from './security.js';
 
 /**
  * What each buildable maps to. The palette is built from this, so it cannot
@@ -194,6 +195,30 @@ export const BUILDABLE = {
 };
 
 /**
+ * **Security** (issue #12): six guards who fight fires and search for bombs, and
+ * the facility the `2 -> 3` star gate is waiting for. Two stars, $100,000 and
+ * $20,000 a pass (`specs/ECONOMY.md`), at most ten, and it **cannot be
+ * bulldozed** - see {@link demolishRefusal}. `sim/security.js` has the account of
+ * what the guards are and how they travel (the outside emergency stairs, never a
+ * lift).
+ *
+ * `belowGrade`: `specs/COMMANDS.md` § Family-specific floor and stack rules,
+ * verbatim - *"security office is basement-only"* (the original's own message for
+ * it is "Item unavailable above ground"). The width is the reference
+ * implementation's unscaled 16 (A47); `occupantState` is the guards' `0x01`
+ * (`specs/TIME.md` § 2500).
+ */
+BUILDABLE.security = {
+  family: FAMILY.security,
+  type: OBJECT_TYPE.security,
+  cost: 'security',
+  width: SECURITY_WIDTH,
+  label: 'Security Office',
+  belowGrade: true,
+  occupantState: GUARD_STATE.onDuty,
+};
+
+/**
  * **The movie theater and the party hall** (issue #11): 3 stars, $500,000 and
  * $100,000. Each is a two-floor facility - `floor` is the lower half, `floor + 1`
  * the upper - and `placeEntertainment` builds both halves and the record they
@@ -226,6 +251,23 @@ BUILDABLE.partyHall = {
 };
 
 /**
+ * Why this buildable cannot go on this floor, or null: the grade rule, for the
+ * seam and the ghost alike. `aboveGrade` is `specs/COMMANDS.md`'s "must be above
+ * grade (`floor > 0`)"; `belowGrade` is its "basement-only" (`floor < 0`). One
+ * definition, because the ghost used to restate the first and the matrix in
+ * `test/build.test.js` exists to catch the day they drift.
+ */
+export function gradeReason(spec, floor) {
+  if (spec.aboveGrade && floor <= GROUND_FLOOR) {
+    return 'a ' + spec.label.toLowerCase() + ' has to go above the ground floor';
+  }
+  if (spec.belowGrade && floor >= GROUND_FLOOR) {
+    return 'a ' + spec.label.toLowerCase() + ' has to go in the basement, below the ground floor';
+  }
+  return null;
+}
+
+/**
  * Why this buildable cannot stand here, or null: the one definition of "is the
  * ground free", for the seam and the ghost alike. A single-floor room needs its
  * span clear; an entertainment venue needs both floors clear and a free slot in
@@ -233,6 +275,11 @@ BUILDABLE.partyHall = {
  */
 export function placementObstruction(tower, spec, floor, left) {
   if (spec.entertainment) return entertainmentObstruction(tower, spec.entertainment, floor, left);
+  // The cap on security offices (`specs/COMMANDS.md`: 10 active placements).
+  if (spec.family === FAMILY.security) {
+    const full = securityObstruction(tower);
+    if (full) return full;
+  }
   return spanBlocked(tower, floor, left, left + spec.width - 1) ? 'something is already built there' : null;
 }
 
@@ -488,9 +535,8 @@ const ACTIONS = {
     const locked = lockReason(tower, spec.cost, spec.label);
     if (locked) return refuse(locked);
 
-    if (spec.aboveGrade && floor <= GROUND_FLOOR) {
-      return refuse('a ' + spec.label.toLowerCase() + ' has to go above the ground floor');
-    }
+    const wrongGrade = gradeReason(spec, floor);
+    if (wrongGrade) return refuse(wrongGrade);
 
     // The lobby goes on the ground and on the sky-lobby floors, nowhere else —
     // the original's own words: "Lobbys are only every 15 floors"
@@ -512,7 +558,7 @@ const ACTIONS = {
     const placed = spec.entertainment
       ? placeEntertainment(tower, { kind: spec.entertainment, floor, left }, () => createSimTripRecord())
       : placeObject(tower,
-        { family: spec.family, type: spec.type, floor, left, right },
+        { family: spec.family, type: spec.type, floor, left, right, occupantState: spec.occupantState },
         () => createSimTripRecord(),
         spec.finalize);
     if (!placed.ok) {
@@ -873,6 +919,11 @@ export const hasTenant = (object) =>
  *    as unremovable (`SimTower-gameplay-analysis.md`). It is not "let" — it has no
  *    tenant — so `hasTenant` would answer no and the wrong reason would be given;
  *    its staff are not tenants either, which is why `hasTenant` excludes them.
+ *  - **Security cannot be bulldozed either** - the same list, and the help file's
+ *    own sentence for it: *"Security offices cannot be removed once placed."*
+ *    The same shape of rule, so the same place: a placed office stays placed,
+ *    which is also what lets the `2 -> 3` gate be a latch rather than a count that
+ *    a demolish-to-fail loop could pull back down.
  *  - a let unit: you drop the rent or you fix the lifts, you do not evict.
  *
  * An infested hotel room is none of these, which is the point of it: *"the only
@@ -881,6 +932,7 @@ export const hasTenant = (object) =>
 export function demolishRefusal(object) {
   if (object.family === FAMILY.lobby) return 'lobbies cannot be removed';
   if (object.family === FAMILY.housekeeping) return 'housekeeping cannot be bulldozed';
+  if (object.family === FAMILY.security) return 'security offices cannot be bulldozed';
   if (hasTenant(object)) return 'that unit is let — you cannot evict a tenant';
   return null;
 }
