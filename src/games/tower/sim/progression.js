@@ -2,19 +2,31 @@
  * Stars — the only thing in the game that says you are winning.
  *
  * Spec: `specs/GAME-STATE.md` § Star Advancement, § Gate Meanings, § Office
- * Service Evaluation. Thresholds from the reference's
- * `compute_tower_tier_from_ledger` (`1148:041d`).
+ * Service Evaluation; `specs/facility/EVALUATION.md` § Award Check (the Tower
+ * rank). Thresholds from the reference's `compute_tower_tier_from_ledger`
+ * (`1148:041d`).
  *
  * Two independent checks, and **both** must pass, every tick:
  *
- *   1. **Activity.** The population ledger's running total crosses the next
- *      tier's threshold. That total is the same ledger the economy maintains —
- *      `+6` when an office rents, `-6` when it is vacated — so a tower's rank
- *      is a direct consequence of how many tenants its lifts can actually
- *      serve. Nothing else feeds it.
+ *   1. **Activity.** The population ledger crosses the next tier's threshold.
+ *      That ledger is the one the economy maintains — `+6` when an office
+ *      rents, `-6` when it is vacated, yesterday's visitors for every shop and
+ *      diner, the theaters' seats — so a tower's rank is a direct consequence of
+ *      how many people its lifts can actually serve. Nothing else feeds it. See
+ *      {@link starPopulation} for what counts at which star.
  *   2. **A qualitative checklist.** Facilities placed, recycling adequate, an
- *      office-service evaluation passed, and — for the top two rungs — a time
- *      window: evening, and not on a calendar-phase day.
+ *      office-service evaluation passed, a favorable VIP stay, and — for the top
+ *      two rungs — a time window: after 5 PM on a weekday.
+ *
+ * ## The whole ladder (issue #14)
+ *
+ *   1 -> 2   population 300
+ *   2 -> 3   1,000 + a security office                       (A49: one or two?)
+ *   3 -> 4   5,000 + hotel suites + recycling & medical demands met + an
+ *            office-service evaluation + a favorable VIP stay + a weekday after 5 PM
+ *   4 -> 5   10,000 + a metro station + every demand met + a weekday after 5 PM
+ *   5 -> Tower  15,000 + the cathedral on floor 100 + a weekend wedding with 40
+ *            guests there before tick 800 (`EVALUATION.md` § Award Check)
  *
  * ## Three things worth knowing before reading the gates
  *
@@ -30,20 +42,21 @@
  * needs 3 stars, and 3→4 needs recycling. Each rung buys the tool the next rung
  * demands, which is why the population thresholds alone never let you skip one.
  *
- * **Part of this checklist cannot be satisfied in this build.** Security (issue
- * #12) opens `2 -> 3`; recycling and medical (issue #13) are built and write their
- * flags; the metro station and the **office-service evaluation** are not - the latter
- * is the cathedral's guest arriving at an office (`specs/GAME-STATE.md` § Office
- * Service Evaluation), and the cathedral is not here yet, so `3 -> 4` still cannot
- * fire (`spec/DEVIATIONS.md` A57). The gates are implemented anyway and refuse by
- * *name*: `starGateStatus()` says "a passed office-service evaluation" rather than
- * silently failing. Dropping a gate to make the ladder
- * passable would be the worst available option — a tower that advances because a
- * requirement was skipped teaches the player something false, and `CLAUDE.md`
- * already keeps a list of metrics that improved while the thing they measured
- * got worse.
+ * **Some of the checklist is written by systems that are not in this build.**
+ * The gates are all implemented and tested, and each is a plain flag on
+ * `tower.gates` that its owner sets: the office-service evaluation and the
+ * wedding are the cathedral's (issue #17), the favorable VIP stay is the events'
+ * (issue #16), and the metro station is issue #15. Until they land the gate
+ * refuses by *name*, and {@link GATES_WITHOUT_A_WRITER} says why it cannot be
+ * satisfied yet, so the HUD tells the player the truth instead of sending them
+ * hunting a button. Dropping a gate to make the ladder passable would be the worst
+ * available option — a tower that advances because a requirement was skipped
+ * teaches the player something false, and `CLAUDE.md` already keeps a list of
+ * metrics that improved while the thing they measured got worse.
+ * `spec/DEVIATIONS.md` A57-A62.
  */
-import { EVENING_DAYPART } from './clock.js';
+import { EVENING_DAYPART, formatClock } from './clock.js';
+import { activeDemands, postNotice } from './demands.js';
 import { TYPE_CODES } from './economy.js';
 import { SECURITY_OFFICES_FOR_THREE_STARS } from './security.js';
 import { FAMILY } from './state.js';
@@ -52,15 +65,58 @@ import { FAMILY } from './state.js';
  * Activity totals that unlock each tier, from the reference's tier table
  * (binary `DS:e630..e63c`, plus a hardcoded `15000`). The comparison is `>=`.
  *
- * The last entry never gates a star: reaching tier 6 is the "Tower" rank, and
- * `specs/GAME-STATE.md` says that "uses a separate cathedral/evaluation path
- * rather than the normal star gate". It is kept because the table is the
- * reference's and a short table would be a quiet edit.
+ * The last entry is the Tower rank: the activity half of the cathedral path
+ * (`specs/GAME-STATE.md`: *"the Tower-grade promotion uses a separate
+ * cathedral/evaluation path rather than the normal star gate"*).
  */
 export const STAR_THRESHOLDS = [300, 1000, 5000, 10_000, 15_000];
 
-/** The normal ladder stops at 5. Rank 6 is the cathedral's, not this module's. */
+/** The normal ladder stops at 5. Rank 6 is the cathedral's award. */
 export const MAX_STAR = 5;
+
+/**
+ * `star_count == 6`: the Tower rank. A rank, not a sixth star - the bar shows five
+ * stars and says TOWER - but it is carried in `tower.starCount` exactly as the
+ * reference carries it (`award_star_rating_upgrade` writes 6), so every
+ * `starCount >= n` test in the sim keeps meaning what it meant.
+ */
+export const TOWER_RANK = 6;
+
+// ----------------------------------------------------- the three decisions
+
+/**
+ * **Hotel guests stop counting toward the star ladder from this star on.**
+ *
+ * The original's readme: *"On the higher star ratings SimTower only looks at your
+ * permanent population. That means that your hotel tenants are no longer counted as
+ * population towards the next Tower level."* Nothing in `specs/` says it - the
+ * reference *implementation* counts every ledger bucket at every star - and the
+ * readme does not say which ratings are "higher". **3 is a reading**: the rung
+ * where hotels become a tool at all (the twin and the suite unlock there, A27) is the
+ * first where the player is asked for a real population, and a threshold of 5,000
+ * is the first the guests could have helped with. One constant. `spec/DEVIATIONS.md` A58.
+ */
+export const HOTEL_STOPS_COUNTING_AT_STAR = 3;
+
+/** The population buckets that are hotel guests - the "temporary" tenants. */
+export const HOTEL_POPULATION_BUCKETS = ['hotelSingle', 'hotelTwin', 'hotelSuite'];
+
+/**
+ * **How many hotel suites open `3 -> 4`.** The original's help file: *"plus more
+ * than one Hotel Suite placed"*; its readme agrees (*"More than one suite room"*).
+ * `specs/GAME-STATE.md` lists no suite gate at all, and the reference implementation
+ * has none - so this one rule has exactly one source, and that source says two.
+ * (Contrast A49: there the spec states a rule - one office - and the manual is the
+ * looser party.) One constant. `spec/DEVIATIONS.md` A59.
+ */
+export const HOTEL_SUITES_FOR_FOUR_STARS = 2;
+
+/** `EVALUATION.md` § Runtime Sims: 5 slices x 8 visitors. */
+export const WEDDING_GUESTS = 40;
+/** `EVALUATION.md` § Award Check: arrival processing *"runs only when `g_day_tick < 800`"*. */
+export const WEDDING_DEADLINE_TICK = 800;
+/** The issue and the help file: *"A cathedral can only be placed on a 100-story tower"*. Issue #17 enforces it. */
+export const CATHEDRAL_FLOOR = 100;
 
 // ------------------------------------------------------------- gate flags
 
@@ -78,8 +134,12 @@ export function createStarGates() {
     securityPlaced: false,
     /** Latched when an office has ever been placed. Gates 3→4. */
     officePlaced: false,
-    /** Latched when a metro station has ever been placed. Gates 4→5. */
+    /** Latched when {@link HOTEL_SUITES_FOR_FOUR_STARS} suites have stood. Gates 3→4. */
+    suitePlaced: false,
+    /** Latched when a metro station has ever been placed (issue #15). Gates 4→5. */
     metroPlaced: false,
+    /** Latched when the cathedral has been placed (issue #17). Gates 5→Tower. */
+    cathedralPlaced: false,
     /**
      * Written by the recycling system (`sim/recycling.js`, issue #13): cleared at
      * 1600 and set again at 2000 / 2566 if the tower's activity per working center is
@@ -93,14 +153,49 @@ export function createStarGates() {
      * clinic (`sim/medical.js`). Gates 3→4 and 4→5. `spec/DEVIATIONS.md` A52.
      */
     medicalServiceOk: false,
-    /** Written by the office-service evaluation. Gates 3→4; reset on advance. */
+    /**
+     * Written by the office-service evaluation - the cathedral guest arriving at the
+     * office under test (issue #17). Gates 3→4; reset on advance.
+     */
     officeServiceOk: false,
+    /**
+     * **Written by the events (issue #16):** a VIP has stayed in a suite and rated the
+     * tower favorably (*"This person must be happy with your hotel suite and with your
+     * elevator system for you to get a favorable rating"* - the original's help file).
+     * Gates 3→4. Never cleared by the ladder: a favorable stay is a fact about the
+     * tower, and issue #16 decides whether a later bad one takes it back.
+     */
+    vipStayFavorable: false,
+    /**
+     * **Written by the cathedral (issue #17):** how many wedding guests have arrived at
+     * the cathedral, a count out of {@link WEDDING_GUESTS}. It counts arrivals on a
+     * weekend before tick {@link WEDDING_DEADLINE_TICK} only, and
+     * {@link refreshStartOfDayGates} zeroes it each morning (`EVALUATION.md` recounts
+     * the sweep fresh). Gates 5→Tower.
+     */
+    weddingGuestsArrived: 0,
     /** Set by the start-of-day rebuild once `star_count > 2`. See the header. */
     routesViable: false,
   };
 }
 
 export const starGatesOf = (tower) => (tower.gates ??= createStarGates());
+
+/**
+ * **Gates whose writer is not in this build**, and what to tell the player.
+ *
+ * A flag on this list is one nothing in `sim/` sets yet - it is set by the issue
+ * named, which deletes its line the day it lands. The reason is printed beside the
+ * blocker (`blockerDetails[].unavailable`), so a player is not told to "get a
+ * favorable VIP stay" in a game with no VIPs. It is deliberately a table and not a
+ * check on whether a writer exists: the day a writer lands, deleting the line is the
+ * one edit, and a test pins that every line here names a real gate.
+ */
+export const GATES_WITHOUT_A_WRITER = {
+  officeServiceOk: 'the cathedral guest who tests it is not in this build yet',
+  vipStayFavorable: 'VIP visits are not in this build yet',
+  weddingGuestsArrived: 'the cathedral wedding is not in this build yet',
+};
 
 /**
  * Placement gates, by the family that satisfies them.
@@ -121,12 +216,17 @@ const PLACEMENT_GATES = [
   // where they overlap - and `FAMILY.security === TYPE_CODES.security === 0x0e`
   // since issue #12, which a test pins.
   //
-  // `min` is how many standing objects of the family latch the flag. `1` for all
-  // three, as `specs/GAME-STATE.md` says (*"a security office must have been
-  // placed"*); security's is `SECURITY_OFFICES_FOR_THREE_STARS` because the
-  // original's help file says two (`spec/DEVIATIONS.md` A49).
+  // `min` is how many standing objects of the family latch the flag. `1` for most,
+  // as `specs/GAME-STATE.md` says (*"a security office must have been placed"*);
+  // security's is `SECURITY_OFFICES_FOR_THREE_STARS` because the original's help file
+  // says two (`spec/DEVIATIONS.md` A49), and the suites' is
+  // `HOTEL_SUITES_FOR_FOUR_STARS` (A59).
   { flag: 'securityPlaced', family: TYPE_CODES.security, min: SECURITY_OFFICES_FOR_THREE_STARS },
+  { flag: 'suitePlaced', family: FAMILY.hotelSuite, min: HOTEL_SUITES_FOR_FOUR_STARS },
   { flag: 'metroPlaced', family: TYPE_CODES.metroStation, min: 1 },
+  // Issue #17 gives the cathedral its family code; `0x24` is the reference's own
+  // (`EVALUATION.md` § Building) and the slices `0x25..0x28` are the same building.
+  { flag: 'cathedralPlaced', family: TYPE_CODES.cathedral, min: 1 },
 ];
 
 /** How many objects of a family stand in the tower. */
@@ -186,22 +286,55 @@ export function refreshStartOfDayGates(tower) {
     // day, provided the tower is at star >= 3"* - the day's failed trips then clear it.
     gates.medicalServiceOk = true;
   }
+  // `EVALUATION.md` § Award Check recounts the cathedral's arrivals fresh, and
+  // § Runtime Sims has every guest re-activated at day tick 0: yesterday's wedding
+  // is not today's. (Nothing writes the count until issue #17.)
+  gates.weddingGuestsArrived = 0;
   return gates;
 }
 
 // ------------------------------------------------------------- the ladder
 
 /**
- * Total tower activity: the population ledger's running total.
+ * The whole population ledger: every bucket, every star.
  *
  * `specs/ECONOMY.md` § Ledgers: the population ledger holds "live per-family
- * active-unit counts (drives star thresholds and recycling adequacy tier)".
- * Summed rather than kept as a second running total, because a running total
- * beside the buckets is one more thing that can disagree with them.
+ * active-unit counts (drives star thresholds and recycling adequacy tier)". Summed
+ * rather than kept as a second running total, because a running total beside the
+ * buckets is one more thing that can disagree with them.
+ *
+ * ⚠️ **This is not what the star ladder reads** - {@link starPopulation} is, because the
+ * ladder stops counting hotel guests at higher stars. The recycling centers' duty tier
+ * reads THIS (`TIME.md` § 2000: *"total population-ledger activity"*): a hotel guest
+ * still throws things away.
  */
 export function towerActivity(tower) {
   let total = 0;
   for (const value of Object.values(tower.populationLedger ?? {})) total += value;
+  return total;
+}
+
+/**
+ * **The population the star ladder counts** (issue #14).
+ *
+ * What is in the ledger, per the sources:
+ *   - **offices**: `+6` a rented office (`OFFICE.md`); **condos**: `+3` a sold unit;
+ *   - **shops**: `+10` a shop that is open (`COMMERCIAL.md` § Retail Income Timing)
+ *     *and* yesterday's customers of every shop, restaurant and fast food (§ Capacity
+ *     step 7: *"add the previous day's visit count into the population ledger"*);
+ *   - **theaters and party halls**: the day's seats (`TIME.md` § 240 step 2, A45);
+ *   - **hotel guests**: `+1` / `+2` / `+2` while they sleep there (`PEOPLE.md`).
+ *
+ * The last stops counting at {@link HOTEL_STOPS_COUNTING_AT_STAR} (A58). `star` defaults
+ * to the tower's own, which is the rung whose threshold is being asked about.
+ */
+export function starPopulation(tower, star = tower.starCount) {
+  if (star < HOTEL_STOPS_COUNTING_AT_STAR) return towerActivity(tower);
+  let total = 0;
+  const ledger = tower.populationLedger ?? {};
+  for (const bucket of Object.keys(ledger)) {
+    if (!HOTEL_POPULATION_BUCKETS.includes(bucket)) total += ledger[bucket];
+  }
   return total;
 }
 
@@ -223,11 +356,17 @@ export function starCountForActivity(total) {
 /** Activity still needed to earn the next tier, or 0 when it is already earned. */
 export const activityForStar = (star) => STAR_THRESHOLDS[star - 1] ?? Infinity;
 
+/** `a security office` / `2 security offices`: the count, said the way a player would. */
+const countedThing = (n, one, many) => (n === 1 ? one : n + ' ' + many);
+
 /**
  * The qualitative checklist, `specs/GAME-STATE.md` § Star Advancement, keyed by
  * the star you are leaving. Each entry names what is missing, in the words a
  * player would use, because a refusal that does not say what to build is not a
  * refusal — it is a stall.
+ *
+ * `met` is how the gate reads the flags; the default is the flag being truthy, and
+ * `weddingGuestsArrived` is the one count.
  *
  * TODO(parity): **the sources disagree about medical.** `specs/GAME-STATE.md` §
  * Star Advancement lists no medical gate; `specs/facility/MEDICAL.md` § Progression
@@ -239,26 +378,48 @@ export const activityForStar = (star) => STAR_THRESHOLDS[star - 1] ?? Infinity;
  * (`medicalServiceOk`), written by `sim/medical.js`. The reference implementation
  * additionally asks office-service of `4 -> 5`, which the spec does not - not added.
  * `spec/DEVIATIONS.md` A52.
+ *
+ * TODO(parity): **the issue's `3 -> 4` list and `GAME-STATE.md`'s differ.** The issue
+ * (and the help file) want suites and a favorable VIP stay, which the spec does not
+ * list; the spec wants an office-service evaluation, which the help file does not
+ * mention. Every item from every source is a gate - the union, because dropping one
+ * silently is the failure mode this file refuses. `spec/DEVIATIONS.md` A59-A60.
  */
 const QUALITATIVE_GATES = {
   1: [],
-  2: [{ flag: 'securityPlaced', missing: 'a security office', kind: 'security' }],
+  2: [{
+    flag: 'securityPlaced', kind: 'security',
+    missing: countedThing(SECURITY_OFFICES_FOR_THREE_STARS, 'a security office', 'security offices'),
+  }],
   3: [
     { flag: 'officePlaced', missing: 'an office', kind: 'office' },
+    {
+      flag: 'suitePlaced', kind: 'hotelSuite',
+      missing: countedThing(HOTEL_SUITES_FOR_FOUR_STARS, 'a hotel suite', 'hotel suites'),
+    },
     { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower', kind: 'recyclingCenter' },
     { flag: 'medicalServiceOk', missing: 'a medical center for the office workers', kind: 'medical' },
     { flag: 'officeServiceOk', missing: 'a passed office-service evaluation', kind: null },
-    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null },
+    { flag: 'vipStayFavorable', missing: 'a favorable VIP stay', kind: null },
+    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null, window: true },
   ],
   4: [
     { flag: 'metroPlaced', missing: 'a metro station', kind: 'metroStation' },
     { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower', kind: 'recyclingCenter' },
     { flag: 'medicalServiceOk', missing: 'a medical center for the office workers', kind: 'medical' },
-    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null },
+    { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null, window: true },
+  ],
+  5: [
+    { flag: 'cathedralPlaced', missing: 'a cathedral on floor ' + CATHEDRAL_FLOOR, kind: 'cathedral' },
+    {
+      flag: 'weddingGuestsArrived', kind: null,
+      missing: 'a wedding with ' + WEDDING_GUESTS + ' guests at the cathedral',
+      met: (gates) => (gates.weddingGuestsArrived ?? 0) >= WEDDING_GUESTS,
+    },
   ],
 };
 
-/** The two rungs that also demand an evening, and a day off the calendar phase. */
+/** The two rungs that also demand 5 PM or later, on a weekday. */
 const TIME_GATED_TIERS = new Set([3, 4]);
 
 /**
@@ -271,10 +432,15 @@ const TIME_GATED_TIERS = new Set([3, 4]);
  *
  * ## `blockerDetails`, and why the prose is not enough
  *
- * `blockers` is prose, for printing. `blockerDetails` is the same list with a
- * `kind` beside each entry: the `CONSTRUCTION_COST` / `BUILDABLE` key when the
- * blocker names a *thing*, and `null` when it names a window — the evening, a
- * day off the calendar phase, an evaluation that has to pass on its own.
+ * `blockers` is prose, for printing. `blockerDetails` is the same list with more
+ * beside each entry:
+ *
+ *   - `kind` - the `CONSTRUCTION_COST` / `BUILDABLE` key when the blocker names a
+ *     *thing*, and `null` when it names a window - the evening, a weekday, an
+ *     evaluation that has to pass on its own.
+ *   - `window` - true for a blocker that is a wait and not a task.
+ *   - `unavailable` - why this cannot be satisfied yet, when its writer is not in
+ *     the build ({@link GATES_WITHOUT_A_WRITER}).
  *
  * It exists because the HUD has to tell "go and build this" apart from "this
  * cannot be built in this version yet", and most of the ladder above 2 stars is
@@ -282,22 +448,24 @@ const TIME_GATED_TIERS = new Set([3, 4]);
  * in the reader — which is how `payout(7, …)` silently returned 0 for every
  * office in the tower. The translation belongs at the seam, once.
  *
- * @returns {{star:number, activity:number, nextStar:number|null, activityNeeded:number,
- *   activityReady:boolean, blockers:string[],
- *   blockerDetails:{text:string, kind:string|null}[], ready:boolean}}
+ * @returns {{star:number, activity:number, threshold:number|null, nextStar:number|null,
+ *   activityNeeded:number, activityReady:boolean, hotelsCounted:boolean, blockers:string[],
+ *   blockerDetails:{text:string, kind:string|null, window?:boolean, unavailable?:string}[],
+ *   ready:boolean}}
  */
 export function starGateStatus(tower) {
   const star = tower.starCount;
-  const activity = towerActivity(tower);
+  const activity = starPopulation(tower);
+  const hotelsCounted = star < HOTEL_STOPS_COUNTING_AT_STAR;
   const gates = starGatesOf(tower);
   const details = [];
-  const block = (text, kind = null) => details.push({ text, kind });
+  const block = (text, kind = null, extra = null) => details.push({ text, kind, ...extra });
 
-  if (star >= MAX_STAR) {
-    const text = 'nothing — beyond 5 stars is the cathedral’s path, not this one';
+  if (star >= TOWER_RANK) {
+    const text = 'nothing — this tower has the Tower rank';
     return {
-      star, activity, nextStar: null, activityNeeded: 0, activityReady: true,
-      blockers: [text], blockerDetails: [{ text, kind: null }],
+      star, activity, threshold: null, nextStar: null, activityNeeded: 0, activityReady: true,
+      hotelsCounted, blockers: [text], blockerDetails: [{ text, kind: null }],
       ready: false,
     };
   }
@@ -308,22 +476,43 @@ export function starGateStatus(tower) {
   if (!activityReady) block((needed - activity) + ' more tower activity');
 
   for (const gate of QUALITATIVE_GATES[star] ?? []) {
-    if (!gates[gate.flag]) block(gate.missing, gate.kind);
+    const met = gate.met ? gate.met(gates) : Boolean(gates[gate.flag]);
+    if (met) continue;
+    const extra = {};
+    if (gate.window) extra.window = true;
+    if (GATES_WITHOUT_A_WRITER[gate.flag]) extra.unavailable = GATES_WITHOUT_A_WRITER[gate.flag];
+    block(gate.missing, gate.kind, extra);
+  }
+
+  if (star === 4) {
+    // The help file: *"ALL demands"*. Not only the two the gates above name - a tower
+    // that is still asking for a parking space is a tower that is not satisfied.
+    const demands = activeDemands(tower);
+    if (demands.length) block('every demand answered (' + demands.map((d) => d.text).join('; ') + ')');
   }
 
   if (TIME_GATED_TIERS.has(star)) {
     // `daypart_index >= 4` and `calendar_phase_flag == 0`. Both are windows
     // rather than tasks, so they are phrased as waiting rather than as building.
-    if (tower.clock.daypart < EVENING_DAYPART) block('the evening');
-    if (tower.clock.calendarPhase) block('a day off the calendar phase');
+    if (tower.clock.daypart < EVENING_DAYPART) block('the evening (after 5 PM)', null, { window: true });
+    if (tower.clock.calendarPhase) block('a weekday', null, { window: true });
+  } else if (star === MAX_STAR) {
+    // `EVALUATION.md`: the wedding is a weekend event, and arrival processing
+    // *"runs only when `g_day_tick < 800`"*.
+    if (!tower.clock.calendarPhase) block('a weekend', null, { window: true });
+    if (tower.clock.dayTick >= WEDDING_DEADLINE_TICK) {
+      block('a morning (before ' + formatClock(WEDDING_DEADLINE_TICK) + ')', null, { window: true });
+    }
   }
 
   return {
     star,
     activity,
+    threshold: needed,
     nextStar: star + 1,
     activityNeeded: activityReady ? 0 : needed - activity,
     activityReady,
+    hotelsCounted,
     blockers: details.map((d) => d.text),
     blockerDetails: details,
     ready: details.length === 0,
@@ -341,6 +530,11 @@ export function resetStarGateState(tower) {
   return tower.gates;
 }
 
+/** The line the bar says when a rung is climbed. */
+export const starRiseNotice = (star) => (star >= TOWER_RANK
+  ? 'The tower has earned the Tower rank'
+  : 'The tower has reached ' + star + ' stars');
+
 /**
  * The per-tick check. Both halves must pass; one star at a time.
  *
@@ -349,17 +543,30 @@ export function resetStarGateState(tower) {
  * advance happens the moment the tower is eligible, not at the next checkpoint
  * after it.
  *
+ * The last rung is the same call: at 5 stars the checklist is the cathedral's
+ * (`EVALUATION.md` § Award Check: *"first requires `compute_tower_tier_from_ledger() >
+ * g_star_count`"* - the 15,000 - then the 40 guests, before tick 800) and the award is
+ * `star_count = 6`. The reference reaches it from the guests' arrival rather than from a
+ * tick, but both read the same flags, and an arrival is the only thing that can change
+ * them mid-day, so the first tick after the 40th is the same moment.
+ *
+ * A star rise says so: one notice, once, in the tower's notice log.
+ *
  * @returns {{advanced:boolean, star:number, from?:number, blockers:string[]}}
  */
 export function tryAdvanceStar(tower) {
+  if (tower.starCount >= TOWER_RANK) {
+    return { advanced: false, star: tower.starCount, blockers: starGateStatus(tower).blockers };
+  }
   const status = starGateStatus(tower);
-  if (tower.starCount >= MAX_STAR || !status.ready) {
+  if (!status.ready) {
     return { advanced: false, star: tower.starCount, blockers: status.blockers };
   }
 
   const from = tower.starCount;
   tower.starCount = from + 1;
   resetStarGateState(tower);
+  postNotice(tower, 'starRise', starRiseNotice(tower.starCount), { good: true });
   return { advanced: true, star: tower.starCount, from, blockers: [] };
 }
 
