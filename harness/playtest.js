@@ -610,8 +610,8 @@ export function medicalTrial({ clinics = 1, days = 5, seed = 1 } = {}) {
  * `ramp: false` is the control: spaces nobody can reach are drawn blocked and answer
  * nothing, so the demand stays.
  */
-export function parkingTrial({ spaces = 0, ramp = true, buildOnDay = 0, days = 6, seed = 1 } = {}) {
-  const { world, tower, scheduler, offices, must } = servicesTower({ floors: 9, seed });
+export function parkingTrial({ spaces = 0, ramp = true, buildOnDay = 0, days = 6, seed = 1, floors = 9 } = {}) {
+  const { world, tower, scheduler, offices, must } = servicesTower({ floors, seed });
   const workers = tower.actors.filter((a) => a.family === FAMILY.office);
   const drivers = workers.filter((a) => {
     const office = tower.objects.get(a.objectId);
@@ -961,6 +961,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
       ['ramp + 8 spaces from day 0      ', { spaces: 8, ramp: true }],
       ['ramp + 8 spaces built on day 3  ', { spaces: 8, ramp: true, buildOnDay: 3 }],
       ['ramp + 32 spaces from day 0     ', { spaces: 32, ramp: true }],
+      ['3 floors, ramp + 32, on day 3   ', { spaces: 32, ramp: true, buildOnDay: 3, floors: 3 }],
     ]) {
       const r = parkingTrial({ ...options, days: trialDays + 1 });
       console.log(label + ' drivers in tower ' + r.driversInTower + ', usable spaces ' + r.usable);

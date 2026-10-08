@@ -989,6 +989,11 @@ export const tests = {
     const built = parkingTrial({ spaces: 32, ramp: true, buildOnDay: 2, days: 6 });
     assert(built.perDay.slice(0, 2).every((p) => p.peakCars === 0), 'before the garage there are no cars');
     assert(built.perDay.slice(2).some((p) => p.peakCars > 20), 'after it they park: ' + built.perDay.map((p) => p.peakCars));
+    // A garage big enough for everyone who drives answers the demand for good.
+    const small = parkingTrial({ spaces: 32, ramp: true, buildOnDay: 3, floors: 3, days: 6 });
+    assert(small.perDay[1].demanded && small.perDay[2].demanded, 'the notice fires while there is no garage');
+    assert(small.perDay.slice(3).every((p) => !p.demanded), 'and building one clears it: ' + JSON.stringify(small.perDay.map((p) => p.demanded)));
+    assert(small.perDay[3].peakCars > 0, 'because the cars park');
     const day = built.perDay.find((p) => p.peakCars > 0);
     assert(day.peakCars <= 32 * SPACE_CAPACITY, 'never more than two a space');
   },
