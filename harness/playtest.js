@@ -1114,7 +1114,14 @@ export function entertainmentTrial({
   const shopObjects = shops.map((s) => must(applyAction(world, { type: 'build', what: s.what, floor: s.floor, left: 100 }), s.what).object);
   rebuildRouteTables(tower);
   const { scheduler } = makeDriver(world);
-  if (startDay !== null) { tower.clock.dayCounter = startDay; tower.clock.dayTick = 0; }
+  if (startDay !== null) {
+    tower.clock.dayCounter = startDay; tower.clock.dayTick = 0;
+    // Since issue #16 a bomb or fire day HAS a bomb or a fire. This trial measures the payout
+    // rule on those days, so the event is held off the way the spec allows (a bomb comes at 2-4
+    // stars; a fire not during a cathedral evaluation) - `eventsTrial` is the one that lets it burn.
+    tower.starCount = 5;
+    starGatesOf(tower).cathedralPlaced = true;
+  }
 
   const settleTick = kind === 'theater' ? LOWER_ADVANCE_TICK : PARTY_ADVANCE_TICK;
   const spill = new Map(shopObjects.map((s) => [s.id, new Set()]));

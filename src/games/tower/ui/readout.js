@@ -207,7 +207,7 @@ export const rungName = (star) => (star >= TOWER_RANK ? 'Tower' : star + (star =
  *
  *   `Next: 3 stars - need 1,000 population (now 640), a security office`
  *   `Next: 4 stars - need 5,000 population (now 3,120), 2 hotel suites, a favorable VIP
- *    stay (VIP visits are not in this build yet); wait for the evening (after 5 PM)`
+ *    stay; wait for the evening (after 5 PM)`
  *
  * It lists the lot, not the first one: the bar's old "one blocker" answer left a
  * player with eight things to discover one at a time, and the issue's point is that

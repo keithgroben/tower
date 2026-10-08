@@ -254,7 +254,10 @@ export const tests = {
     const details = starGateStatus(tower).blockerDetails;
     const vip = details.find((d) => /VIP/.test(d.text));
     const evaluation = details.find((d) => /office-service/.test(d.text));
-    assert(vip.unavailable === GATES_WITHOUT_A_WRITER.vipStayFavorable && /not in this build/.test(vip.unavailable), 'VIP: ' + JSON.stringify(vip));
+    // Issue #16 gave the VIP gate its writer (`sim/events.js`), so it carries no excuse any more...
+    assert(!('vipStayFavorable' in GATES_WITHOUT_A_WRITER) && vip.unavailable === undefined, 'VIP: ' + JSON.stringify(vip));
+    // ...and the office-service evaluation (issue #17) still does.
+    assert(evaluation.unavailable === GATES_WITHOUT_A_WRITER.officeServiceOk, 'evaluation: ' + JSON.stringify(evaluation));
     assert(evaluation.unavailable === GATES_WITHOUT_A_WRITER.officeServiceOk, 'evaluation: ' + JSON.stringify(evaluation));
     // A gate that has a writer here carries no excuse: the caveat must not become wallpaper.
     const recycling = starGateStatus(towerAt(3, { office: 5000, gates: { ...ALL, recyclingAdequate: false } })).blockerDetails
@@ -466,7 +469,7 @@ export const tests = {
     const morning = says();
     assert(morning.startsWith('Next: 4 stars - need 5,000 population (now 4,000), '), morning);
     for (const part of ['2 hotel suites', 'recycling centre', 'medical center', 'a passed office-service evaluation',
-      'a favorable VIP stay (VIP visits are not in this build yet)', 'the evening (after 5 PM)']) {
+      'a favorable VIP stay', 'the evening (after 5 PM)']) {
       assert(morning.includes(part), '"' + part + '" is missing from: ' + morning);
     }
     // Everything this build CAN make, made; then the stand-ins for #16 and #17.

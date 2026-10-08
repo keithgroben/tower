@@ -133,6 +133,9 @@ export const tests = {
       recycling: '',
       // The metro station (issue #15) is a service too: a platform, nobody's lease.
       metro: '',
+      // The VIP (issue #16) is a standing visitor with no object; were one ever placed it would
+      // say nothing, as a clinic does.
+      vip: '',
     };
     const tower = createTower({ seed: 1 });
     let left = 0;

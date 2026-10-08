@@ -623,9 +623,14 @@ export const tests = {
   },
 
   'BOMB/FIRE DAYS: the theater and the party hall are paid nothing on day % 60 == 59 (and a live flag does the same), and reset anyway'() {
+    // Issue #16 made the calendar's bomb and fire REAL: a bomb planted in an unguarded tower
+    // blows up the very theater this test is watching. These two scenarios are about the
+    // PAYOUT RULE on those days, so the event itself is held off the way the spec allows -
+    // the bomb comes at 2-4 stars only (`bombCanComeAt`), the fire not while a cathedral
+    // evaluation is active - and `test/events.test.js` owns what the events do.
     const scenarios = [
-      ['a bomb day by the calendar', (t) => { t.clock.dayCounter = 59; }],
-      ['a fire day by the calendar', (t) => { t.clock.dayCounter = 83; }],
+      ['a bomb day by the calendar', (t) => { t.clock.dayCounter = 59; t.starCount = 5; }],
+      ['a fire day by the calendar', (t) => { t.clock.dayCounter = 83; t.gates = { ...t.gates, cathedralPlaced: true }; }],
       ['a live bomb', (t) => { t.clock.dayCounter = 10; t.events.bombActive = true; }],
       ['a live fire', (t) => { t.clock.dayCounter = 10; t.events.fireActive = true; }],
     ];
@@ -652,6 +657,7 @@ export const tests = {
     const theater = build(world, 'theater', { floor: 1, left: 0 });
     const { scheduler } = makeDriver(world);
     settleDay(scheduler, world.tower);
+    world.tower.starCount = 5;                                  // no bomb at 5 stars: see above
     world.tower.clock.dayCounter = 59; world.tower.clock.dayTick = 0;
     assert(settleDay(scheduler, world.tower).theater === 0, 'day 59: nothing');
     assert(world.tower.clock.dayCounter === 60, 'and the counter has moved on');

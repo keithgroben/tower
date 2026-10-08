@@ -32,6 +32,7 @@ import {
 } from '../sim/hotel.js';
 import { housekeepingArrival, housekeepingFamilyHandler } from '../sim/housekeeping.js';
 import { securityNightReset } from '../sim/security.js';
+import { vipArrival, vipFamilyHandler } from '../sim/events.js';
 import { medicalNightReset } from '../sim/medical.js';
 import { parkingNightReset } from '../sim/parking.js';
 import {
@@ -210,6 +211,16 @@ export function makeDriver(world, { observe } = {}) {
       resolveRoute,
       onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
     }),
+    /**
+     * The VIP (issue #16): one visitor, who books a suite, rides the lobby-to-suite route through
+     * the same router and the same lifts as everybody else, and rates the stay. Its delays are
+     * priced by the same pricer, which is the only reason its verdict means anything about the
+     * lifts. `sim/events.js` owns the rest of the visit (the booking, the night, the verdict).
+     */
+    [FAMILY.vip]: vipFamilyHandler({
+      resolveRoute,
+      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    }),
     [FAMILY.office]: officeFamilyHandler({
       resolveRoute,
       // Every delay the router reports is priced by the stress pipeline, which
@@ -268,6 +279,7 @@ export function makeDriver(world, { observe } = {}) {
     [FAMILY.hotelTwin]: hotelArrives,
     [FAMILY.hotelSuite]: hotelArrives,
     [FAMILY.housekeeping]: (actor, floor) => housekeepingArrival(tower, actor, floor),
+    [FAMILY.vip]: (actor, floor) => vipArrival(tower, actor, floor),
   }, applyRoutingDelay, {
     // `specs/TIME.md` § 2500. Sold condos clamp back to the sync sentinel and
     // every resident goes back to its band's starting state — which is what
