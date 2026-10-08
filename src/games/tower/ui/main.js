@@ -142,8 +142,9 @@ let lastStress = null;
  * is the palette answering for itself rather than a second table of what exists
  * — the day fast food lands, this starts returning true for it with no edit.
  *
- * It is what stops the goal clause naming a security office as though a player
- * could go and place one. Nothing in this build can.
+ * It is what stops the goal clause naming a requirement as though a player could
+ * go and place one when the palette has no such button: a security office can
+ * be placed since issue #12, a recycling centre and a metro station cannot yet.
  */
 const isBuildable = (kind) => Object.hasOwn(BUILDABLE, kind);
 

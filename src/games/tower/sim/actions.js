@@ -203,8 +203,8 @@ export const BUILDABLE = {
  * lift).
  *
  * `belowGrade`: `specs/COMMANDS.md` § Family-specific floor and stack rules,
- * verbatim - *"security office is basement-only"* (the original's own message for
- * it is "Item unavailable above ground"). The width is the reference
+ * verbatim - *"security office is basement-only"* (the original's string table
+ * has "Item unavailable above ground" among its placement refusals). The width is the reference
  * implementation's unscaled 16 (A47); `occupantState` is the guards' `0x01`
  * (`specs/TIME.md` § 2500).
  */

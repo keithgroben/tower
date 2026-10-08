@@ -137,8 +137,8 @@ export function starGlyph(star, max = MAX_STAR) {
  * a player's attention, and a bar is not a checklist.
  *
  * ⚠️ **A named requirement this build cannot make says so.** Higher rungs ask
- * for a security office, a recycling centre, a metro station; none of those has
- * a family yet, let alone a palette entry. A player who spends an hour hunting
+ * for a recycling centre and a metro station; neither has a family yet, let
+ * alone a palette entry. (A security office does, since issue #12.) A player who spends an hour hunting
  * a button that does not exist stops believing the next thing the bar tells
  * them, and that credit is much harder to win back than a feature is to ship.
  *
