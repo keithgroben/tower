@@ -15,7 +15,7 @@
  *
  * A fresh world per case, because `applyAction` commits.
  */
-import { applyAction, BUILDABLE, SHAFT_KIND } from '../src/games/tower/sim/actions.js';
+import { applyAction, BUILDABLE, LINK_KIND, SHAFT_KIND } from '../src/games/tower/sim/actions.js';
 import { CONSTRUCTION_COST } from '../src/games/tower/sim/economy.js';
 import { MAX_SERVED_SPAN, SHAFT_WIDTH } from '../src/games/tower/sim/elevators.js';
 import { GROUND_FLOOR, MAX_FLOOR, TILES_PER_FLOOR, isRented } from '../src/games/tower/sim/state.js';
@@ -77,7 +77,12 @@ export const tests = {
     }
     assert(TOOLS.some((t) => t.action === 'add_car'), 'a shaft you cannot add cars to is a shaft you cannot fix');
     assert(TOOLS.some((t) => t.action === 'demolish'), 'demolish is missing');
-    assert(new Set(TOOLS.map((t) => t.key)).size === TOOLS.length, 'two tools share a shortcut');
+    for (const kind of Object.keys(LINK_KIND)) {
+      assert(TOOLS.some((t) => t.action === 'build_link' && t.kind === kind), kind + ' has no tool');
+    }
+    const keys = TOOLS.map((t) => t.key).filter(Boolean);   // tools past the ninth have no key
+    assert(new Set(keys).size === keys.length, 'two tools share a shortcut');
+    assert(keys.every((k) => k.length === 1), 'a shortcut must be one key press');
     assert(new Set(TOOLS.map((t) => t.id)).size === TOOLS.length, 'two tools share an id');
   },
 

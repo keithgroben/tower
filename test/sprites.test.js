@@ -28,6 +28,7 @@
  * entry from it, or dropping a sheet's draw call — all three fail here.
  */
 import path from 'node:path';
+import { createSegment } from '../src/games/tower/sim/routing.js';
 import { CARRIER_MODE, addCar, createCarrier } from '../src/games/tower/sim/elevators.js';
 import { FAMILY, createTower, placeObject } from '../src/games/tower/sim/state.js';
 import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
@@ -134,6 +135,14 @@ function towerWithEverything() {
       actor.tripCount = 1;
       actor.accumulatedElapsed = bands[i];
     });
+  }
+
+  // Stairs and an escalator, so both link sheets are drawn (issue #5). Placed
+  // directly: this test is about whether the art reaches the screen, and the
+  // placement rules have their own tests in `links.test.js`.
+  tower.segments ??= [];
+  for (const [kind, left, entryFloor] of [['stairs', 100, 0], ['escalator', 112, 0]]) {
+    tower.segments.push({ ...createSegment({ kind, column: left + 4, entryFloor }), left });
   }
 
   return tower;
