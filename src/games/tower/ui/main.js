@@ -36,6 +36,7 @@ import { discardSavedWorld, loadSavedWorld, makeAutosave } from './persist.js';
 import { newTowerWorld } from './seed.js';
 import { mountLiftPanel } from './lift-panel.js';
 import { mountTheaterPanel } from './theater-panel.js';
+import { eventDialogBlocking, mountEventDialog } from './event-dialog.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -285,6 +286,15 @@ const liftPanel = mountLiftPanel($('liftpanel'), {
 });
 
 const theaterPanel = mountTheaterPanel($('theaterpanel'), {
+  getWorld: () => world,
+  apply: (command) => applyAction(world, command),
+  onChange: () => drawHud(),
+});
+
+// The question the tower asks (issue #16): a bomb's ransom, a fire's helicopter. While one is open
+// `frame()` does not ask the scheduler for another tick, so the two-tick default can never be
+// reached by a person who is still reading.
+const eventDialog = mountEventDialog($('eventdialog'), {
   getWorld: () => world,
   apply: (command) => applyAction(world, command),
   onChange: () => drawHud(),
@@ -562,6 +572,7 @@ function drawHud() {
   $('waiting').textContent = `${waiting} waiting`;
   // The theater window's figures move with the day; its buttons are left alone.
   theaterPanel.refresh();
+  eventDialog.refresh();
 }
 
 // -------------------------------------------------------------- the frame
@@ -575,7 +586,10 @@ function frame(nowMs) {
     // Real milliseconds in, whole ticks out. This is the entire boundary.
     // Every daily and 3-day rule now rides inside the scheduler's own
     // checkpoint table, so this is the whole of the sim step.
-    pump.advance(dtMs, speed, () => scheduler.tick(tower));
+    pump.advance(dtMs, speed, () => { if (!eventDialogBlocking(tower)) scheduler.tick(tower); });
+    // Open (or close) the question the moment the tick that raised (or answered) it is done,
+    // not up to a tenth of a second later when the HUD next refreshes.
+    eventDialog.refresh();
     // Render dt, not sim dt: the sky and the sprite clock run at wall speed so
     // a paused tower still has weather.
     renderer.draw(tower, dtMs);

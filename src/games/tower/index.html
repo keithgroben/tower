@@ -218,7 +218,34 @@
     font: 600 11px var(--mono);
     color: #9fb3c8;
   }
-  #liftpanel[hidden], #theaterpanel[hidden] { display: none; }
+  #liftpanel[hidden], #theaterpanel[hidden], #eventdialog[hidden] { display: none; }
+
+  /* ---------------------------------------------- the tower asks (issue #16) */
+
+  #eventdialog {
+    position: absolute;
+    left: 50%; top: 22%;
+    transform: translateX(-50%);
+    width: 440px; max-width: calc(100% - 24px);
+    padding: 14px 16px;
+    background: rgba(18, 24, 32, 0.98);
+    border: 2px solid var(--bad);
+    border-radius: 4px;
+    font: 600 12px var(--mono);
+    color: #c3d0de;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+    user-select: text;
+  }
+  #eventdialog .ev-title { color: var(--bad); font-size: 15px; margin-bottom: 8px; }
+  #eventdialog .ev-line { margin-top: 4px; }
+  #eventdialog .ev-buttons { display: flex; gap: 10px; margin-top: 14px; }
+  #eventdialog .ev-btn {
+    flex: 1; font: inherit; color: var(--ink); cursor: pointer;
+    background: #1b2430; border: 1px solid #3d4d60; border-radius: 3px; padding: 8px 10px;
+  }
+  #eventdialog .ev-btn:hover:not(:disabled) { border-color: var(--info); }
+  #eventdialog .ev-btn:disabled { opacity: 0.45; cursor: default; }
+  #eventdialog .ev-status { min-height: 1.4em; }
   #theaterpanel { width: 380px; }
   .tp-film { color: var(--ink); font-size: 13px; margin-bottom: 6px; }
   .tp-line { margin-top: 4px; }
@@ -328,6 +355,10 @@
   <!-- The theater window (issue #11). Filled by ui/theater-panel.js when a theater
        is clicked with no tool in hand. -->
   <div id="theaterpanel" hidden></div>
+
+  <!-- The question a bomb or a fire asks (issue #16). Filled by ui/event-dialog.js while the
+       sim has one open; the game does not run until it is answered. -->
+  <div id="eventdialog" hidden></div>
 
   <div id="foot">
     <span id="answer"></span>

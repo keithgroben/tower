@@ -1,0 +1,22 @@
+{
+  "frameW": 16,
+  "frameH": 16,
+  "animations": {
+    "stand": {
+      "col": 0,
+      "frames": 1
+    },
+    "fidget": {
+      "col": 1,
+      "frames": 1
+    },
+    "wait": {
+      "col": 2,
+      "frames": 1
+    },
+    "wait-annoyed": {
+      "col": 3,
+      "frames": 1
+    }
+  }
+}

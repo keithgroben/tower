@@ -184,8 +184,19 @@ export const STAR_RISE_MS = 7000;
 export function noticeToSay(fresh) {
   if (!fresh || fresh.length === 0) return null;
   const rise = fresh.find((n) => n.good) ?? null;
-  const shown = rise ?? fresh[fresh.length - 1];
-  return { text: shown.text, ok: Boolean(rise), ms: rise ? STAR_RISE_MS : null, rise: Boolean(rise) };
+  // An event's line (issue #16: a fire, a bomb, a VIP's verdict, treasure, Santa) carries a `tone`
+  // and outranks a complaint posted the same tick, as a rise outranks both: *"The fire was stopped"*
+  // must not be swallowed by *"Office workers demand Parking"*. It is held as long as a rise is.
+  const event = rise ? null : ([...fresh].reverse().find((n) => n.tone) ?? null);
+  const shown = rise ?? event ?? fresh[fresh.length - 1];
+  // The line under the tower is one line: the original's dialogs wrap, this does not.
+  const text = shown.text.replace(/\s*[\r\n]+\s*/g, ' ');
+  return {
+    text,
+    ok: Boolean(rise) || shown.tone === 'good',
+    ms: rise || event ? STAR_RISE_MS : null,
+    rise: Boolean(rise),
+  };
 }
 
 /** The tooltip on the stars: the population the ladder counted, and what it left out. */
