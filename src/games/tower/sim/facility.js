@@ -323,10 +323,13 @@ export function unhappinessReasons(tower, object) {
   const venue = venueOf(object);
   if (venue) {
     const out = [];
-    if (venue.availability === VENUE.dormant) return out;
     const access = accessOf(tower, object);
     if (access.reason) out.push(access.reason);
-    out.push(BUSINESS_WORDS[venueDerivedState(Math.max(venue.acquireCount ?? 0, venue.yesterdayVisitCount ?? 0))]);
+    // A shop nobody has reached is dormant: it has had no business to describe, but the way to it
+    // is exactly what a player wants to know.
+    if (venue.availability !== VENUE.dormant) {
+      out.push(BUSINESS_WORDS[venueDerivedState(Math.max(venue.acquireCount ?? 0, venue.yesterdayVisitCount ?? 0))]);
+    }
     return out;
   }
   const out = [];
