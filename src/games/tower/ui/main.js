@@ -22,9 +22,10 @@ import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { starGateStatus } from '../sim/progression.js';
 import { BUILDABLE } from '../sim/actions.js';
 import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
-import { COMMERCIAL_FAMILY_CODES, isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
+import { COMMERCIAL_FAMILY_CODES, FAMILY, isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
 import {
-  evictionNotice, hotelHealthReadout, infestationNotice, starClause, starGlyph, stressReadout, venueReadout,
+  entertainmentReadout, evictionNotice, hotelHealthReadout, infestationNotice, starClause, starGlyph, stressReadout,
+  venueReadout,
 } from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -33,6 +34,7 @@ import { TOOLS, preview } from './build.js';
 import { discardSavedWorld, loadSavedWorld, makeAutosave } from './persist.js';
 import { newTowerWorld } from './seed.js';
 import { mountLiftPanel } from './lift-panel.js';
+import { mountTheaterPanel } from './theater-panel.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -204,7 +206,12 @@ const endDrag = (e) => {
   // original's magnifier did on the elevator machinery.
   else if (!dragged) {
     const shaft = renderer.carrierAt(tower, ...point) ?? renderer.carrierColumnAt(tower, point[0]);
-    if (shaft) liftPanel.open(shaft.id); else liftPanel.close();
+    // Clicking a theater opens its window (issue #11): the film, and the two
+    // purchases that change it. Only one panel is ever open.
+    const hit = renderer.objectAt(tower, ...point);
+    if (shaft) { theaterPanel.close(); liftPanel.open(shaft.id); }
+    else if (hit?.family === FAMILY.theater) { liftPanel.close(); theaterPanel.open(hit.id); }
+    else { liftPanel.close(); theaterPanel.close(); }
   }
   if (!dragged) updateHover(...point);
   try { canvas.releasePointerCapture(e.pointerId); } catch { /* pointer already gone */ }
@@ -229,7 +236,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { selectTool(null); liftPanel.close(); return; }
+  if (e.key === 'Escape') { selectTool(null); liftPanel.close(); theaterPanel.close(); return; }
   const tool = TOOLS.find((t) => t.key === e.key);
   if (tool) { selectTool(activeTool?.id === tool.id ? null : tool); return; }
   if (e.key === ' ') { e.preventDefault(); setSpeed(speed === 0 ? 1 : 0); return; }
@@ -266,6 +273,12 @@ const liftPanel = mountLiftPanel($('liftpanel'), {
     if (tower.routeTablesDirty) { rebuildRouteTables(tower); tower.routeTablesDirty = false; }
     return result;
   },
+  onChange: () => drawHud(),
+});
+
+const theaterPanel = mountTheaterPanel($('theaterpanel'), {
+  getWorld: () => world,
+  apply: (command) => applyAction(world, command),
   onChange: () => drawHud(),
 });
 
@@ -361,7 +374,7 @@ function updateHover(px, py) {
   const occupants = tower.actors.filter((a) => a && a.objectId === object.id);
   // A venue's 48 are customers who may come, not people who live here, and the
   // line worth saying about it is what its day is worth.
-  const venueLine = venueReadout(object);
+  const venueLine = venueReadout(object) || entertainmentReadout(object, tower);
   if (venueLine) { $('hover').textContent = venueLine; return; }
   // Staff have no lease and no stress; "6 occupants · worst stress 0" would read
   // as a tenant who is doing perfectly.
@@ -511,6 +524,8 @@ function drawHud() {
   let waiting = 0;
   for (const actor of tower.actors) if (actor && actor.waitingFloor != null) waiting++;
   $('waiting').textContent = `${waiting} waiting`;
+  // The theater window's figures move with the day; its buttons are left alone.
+  theaterPanel.refresh();
 }
 
 // -------------------------------------------------------------- the frame
