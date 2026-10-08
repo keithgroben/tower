@@ -17,7 +17,10 @@ import { stressBand } from '../sim/stress.js';
 import { MAX_STAR } from '../sim/progression.js';
 import { VENUE, VISITOR_BANDS, closurePayout, venueOf } from '../sim/commercial.js';
 import { RENT_TIERS } from '../sim/economy.js';
-import { FAMILY } from '../sim/state.js';
+import { FAMILY, OBJECT_TYPE } from '../sim/state.js';
+import { pendingVisitors } from '../sim/medical.js';
+import { recyclingServed } from '../sim/recycling.js';
+import { SPACE_CAPACITY, rampConnected } from '../sim/parking.js';
 import {
   PARTY_HALL_MIN_HOTEL_ROOMS, PHASE, filmTitle, hotelRoomCount, payoutFor, recordOf,
 } from '../sim/entertainment.js';
@@ -118,6 +121,38 @@ export function hotelHealthReadout(dirty, infested) {
   if (infested > 0) parts.push(infested + ' infested');
   return parts.join(' · ');
 }
+
+// ------------------------------------------------------------ service facilities
+
+/**
+ * The line over a clinic, a recycling center, a parking space or a ramp (issue #13),
+ * or `''` for anything else. Each says the one thing a player cannot read off the
+ * building: whether it is doing its job. A space no ramp reaches, a ramp that does
+ * not meet the lobby and a center no service lift stops at all look fine from outside
+ * and all do nothing, which is the failure this repo keeps a list of.
+ */
+export function serviceReadout(object, tower) {
+  switch (object?.family) {
+    case FAMILY.medical:
+      return 'medical center · ' + pendingVisitors(object) + ' waiting · office workers visit from 3 stars, about 1 in 10 a day';
+    case FAMILY.recycling:
+      return 'recycling center · ' + (recyclingServed(tower, object.type === OBJECT_TYPE.recyclingUpper ? object : tower.objects.get(object.stackId) ?? object)
+        ? 'a service lift stops here, so it counts'
+        : 'NO service lift stops here, so it does not count')
+        + ' · covers under 2,500 activity · cannot be bulldozed';
+    case FAMILY.parkingSpace:
+      return 'parking space · ' + (object.parking?.cars?.length ?? 0) + ' of ' + SPACE_CAPACITY + ' cars · '
+        + (object.coverageFlag === 1 ? 'a ramp serves it' : 'BLOCKED - no ramp reaches it');
+    case FAMILY.parkingRamp:
+      return 'parking ramp · ' + (rampConnected(tower, object) ? 'meets the lobby' : 'CUT OFF from the lobby')
+        + ' · serves the spaces beside it on this floor';
+    default:
+      return '';
+  }
+}
+
+/** The tower's live demands as the bar says them, or `''` when it asks for nothing. */
+export const demandsReadout = (demands) => demands.map((d) => d.text).join(' · ');
 
 // ------------------------------------------------------------------- stars
 

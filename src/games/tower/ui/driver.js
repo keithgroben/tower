@@ -32,6 +32,12 @@ import {
 } from '../sim/hotel.js';
 import { housekeepingArrival, housekeepingFamilyHandler } from '../sim/housekeeping.js';
 import { securityNightReset } from '../sim/security.js';
+import { medicalNightReset } from '../sim/medical.js';
+import { parkingNightReset } from '../sim/parking.js';
+import {
+  RECYCLING_CHECK, RECYCLING_FINAL_TICK, RECYCLING_RESET_TICK, recyclingDailyReset,
+  updateRecyclingState,
+} from '../sim/recycling.js';
 import {
   LOWER_ACTIVATION_TICK, LOWER_ADVANCE_TICK, UPPER_ACTIVATION_TICK, UPPER_ADVANCE_TICK,
   activateLowerHalves, activateUpperHalves, advanceLowerHalves, advancePartyHalls, advanceUpperHalves,
@@ -248,7 +254,8 @@ export function makeDriver(world, { observe } = {}) {
       onSale: condoCashflow.onSale,
     }),
   }, {
-    [FAMILY.office]: officeArrival,
+    // The tower rides along so a car that reaches its space in the evening leaves it.
+    [FAMILY.office]: (actor, floor) => officeArrival(actor, floor, tower),
     [FAMILY.fastFood]: commercialArrival,
     [FAMILY.restaurant]: commercialArrival,
     [FAMILY.retail]: commercialArrival,
@@ -278,8 +285,14 @@ export function makeDriver(world, { observe } = {}) {
     // own visitors. Security's is the same row (*"14/33 ... -> `0x01`"*): the
     // guards back on duty, which touches only them. Last, and chained into this
     // ONE key - `extraCheckpoints` holds a single body per tick.
+    //
+    // Issue #13 chains the last two: the clinics' queues are emptied and the day's
+    // cars go home (`sim/medical.js`, `sim/parking.js`) - the office workers' own
+    // states go back to `0x20` at this checkpoint's reset, so nothing they were
+    // holding may outlive them.
     [CONDO_RESET_TICK]: (t) => {
       condoDailyReset(t); hotelDailyReset(t); entertainmentNightReset(t); securityNightReset(t);
+      medicalNightReset(t); parkingNightReset(t);
     },
     // `specs/TIME.md` § 1600: the hotel pass, on the tick the check-in window
     // opens — spread the cockroaches, recompute each room and give a dirty one
@@ -293,9 +306,17 @@ export function makeDriver(world, { observe } = {}) {
     // entertainment midday cycle (§ 1600 step 7, issue #11) goes AFTER the hotel
     // pass in this same body, as the spec orders it: the party hall ends and is
     // paid. ONE key still - a second would replace this one.
+    //
+    // The recycling midday reset (`TIME.md` § 1600 step 8) is the last thing on the
+    // tick: it always clears adequacy, and the afternoon and evening checks set it.
     [HOTEL_SWEEP_TICK]: (t) => {
       restaurantRebuild(t); hotelMiddaySweep(t); advancePartyHalls(t, showMoney);
+      updateRecyclingState(t, RECYCLING_CHECK.midday);
     },
+    // `TIME.md` § 32 and § 2566: the stack's daily reset, and the last adequacy check
+    // of the day. Two ticks nothing else owns (the 2000 check is in `ui/tick.js`).
+    [RECYCLING_RESET_TICK]: recyclingDailyReset,
+    [RECYCLING_FINAL_TICK]: (t) => { updateRecyclingState(t, RECYCLING_CHECK.final); },
     // § 1200: the day's checkout count (the newspaper trigger's input) resets,
     // and then (steps 2-3) the theaters are promoted and the party hall opens.
     [HOTEL_SALE_RESET_TICK]: (t) => { hotelSaleCountReset(t); middayEntertainment(t); },

@@ -22,10 +22,11 @@ import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { starGateStatus } from '../sim/progression.js';
 import { BUILDABLE } from '../sim/actions.js';
 import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
+import { activeDemands, demandsOf, noticesAfter } from '../sim/demands.js';
 import { COMMERCIAL_FAMILY_CODES, FAMILY, isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
 import {
-  entertainmentReadout, evictionNotice, hotelHealthReadout, infestationNotice, starClause, starGlyph, stressReadout,
-  venueReadout,
+  demandsReadout, entertainmentReadout, evictionNotice, hotelHealthReadout, infestationNotice, serviceReadout,
+  starClause, starGlyph, stressReadout, venueReadout,
 } from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -132,6 +133,11 @@ let hudDueMs = 0;
 let lastLetCount = -1;
 /** Rooms the cockroaches held at the last read; `-1` until there has been one. */
 let lastInfested = -1;
+/**
+ * The last notice the tower raised that this bar has said (issue #13). Starts at the
+ * newest one already in the log, so resuming a save does not re-announce yesterday.
+ */
+let lastNoticeId = demandsOf(tower).nextNoticeId - 1;
 /** The last real stress reading, held across the three-day counter reset. */
 let lastStress = null;
 
@@ -375,7 +381,7 @@ function updateHover(px, py) {
   const occupants = tower.actors.filter((a) => a && a.objectId === object.id);
   // A venue's 48 are customers who may come, not people who live here, and the
   // line worth saying about it is what its day is worth.
-  const venueLine = venueReadout(object) || entertainmentReadout(object, tower);
+  const venueLine = venueReadout(object) || entertainmentReadout(object, tower) || serviceReadout(object, tower);
   if (venueLine) { $('hover').textContent = venueLine; return; }
   // Staff have no lease and no stress; "6 occupants · worst stress 0" would read
   // as a tenant who is doing perfectly.
@@ -498,6 +504,17 @@ function drawHud() {
   }
   lastInfested = infested;
   $('cash').textContent = '$' + ledger.cash.toLocaleString('en-US');
+
+  // What the tower is asking for (issue #13), until something answers it - and each
+  // new notice said once on the line under the tower, in the sim's own words.
+  const demanded = demandsReadout(activeDemands(tower));
+  $('demands').hidden = !demanded;
+  $('demands').textContent = demanded;
+  const fresh = noticesAfter(tower, lastNoticeId);
+  if (fresh.length) {
+    lastNoticeId = fresh[fresh.length - 1].id;
+    say(fresh[fresh.length - 1].text, false);
+  }
 
   // The loop's own number: the stress of a TYPICAL worker.
   //
