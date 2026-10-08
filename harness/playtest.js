@@ -31,6 +31,7 @@ import {
   towerActivity,
 } from '../src/games/tower/sim/progression.js';
 import { SECURITY_OFFICES_FOR_THREE_STARS } from '../src/games/tower/sim/security.js';
+import { metroCommuterCount, metroPlatformFloor, metroServed, officeWorkerCommutes } from '../src/games/tower/sim/metro.js';
 import { starClause } from '../src/games/tower/ui/readout.js';
 import { CARRIER_MODE } from '../src/games/tower/sim/elevators.js';
 import {
@@ -643,6 +644,138 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #15: the metro station.
+
+/**
+ * **The metro gate trial.** The `4 -> 5` rung with every other requirement met, a weekday
+ * evening, 10,000 people: first WITHOUT a metro station (the star holds, and the bar says
+ * what is missing), then with one placed through `applyAction` (the star rises on the
+ * next tick). Nothing is written into the metro gate - the only way it moves is the
+ * placement - and the other gates (recycling, medical service, the day's route check) are
+ * the ones the ladder test sets by hand for the same reason: they are not this issue's.
+ *
+ * @returns {{before:{star:number, blockers:string[], ready:boolean, flag:boolean},
+ *   placed:{ok:boolean, cost:number, reason?:string}, after:{star:number, flag:boolean},
+ *   ticksHeld:number}}
+ */
+export function metroGateTrial({ seed = 1, heldTicks = 120 } = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  const { scheduler } = makeDriver(world);
+  tower.starCount = 4;
+  tower.populationLedger.office = 10_000;
+  Object.assign(starGatesOf(tower), {
+    officePlaced: true, securityPlaced: true, suitePlaced: true, recyclingAdequate: true,
+    medicalServiceOk: true, routesViable: true,
+  });
+  // 5 PM on a weekday - the window the rung needs (A62) - starting the tick before 1700.
+  tower.clock.dayCounter = 0;
+  tower.clock.dayTick = 1699;
+  const held = [];
+  for (let i = 0; i < heldTicks; i++) {
+    scheduler.tick(tower);
+    held.push(tower.starCount);
+  }
+  const status = starGateStatus(tower);
+  const before = {
+    star: tower.starCount, blockers: status.blockers, ready: status.ready, flag: starGatesOf(tower).metroPlaced,
+  };
+  const cash = tower.cash;
+  const placed = applyAction(world, { type: 'build', what: 'metroStation', floor: -6, left: 60 });
+  const cost = cash - tower.cash;
+  scheduler.tick(tower);
+  return {
+    before, placed: { ok: placed.ok, cost, reason: placed.reason },
+    after: { star: tower.starCount, flag: starGatesOf(tower).metroPlaced },
+    ticksHeld: held.filter((s) => s === 4).length,
+  };
+}
+
+/**
+ * **The commuter trial.** One tower, three ways: no metro station, a station with a lift
+ * to its platform, and a station no lift reaches. Eight floors of offices behind four
+ * lifts, two fast foods on the first two basements and two on the first floor, four stars
+ * (set directly: the ladder to it is `ladderTrial`'s business), the driver's own scheduler.
+ *
+ * Counts what the issue promised, from the sim's own state and the router's own events:
+ * commuters (the workers on the train residue), **boardings at the platform** (a car
+ * picking somebody up there - the only way anyone leaves that floor), where the commuters
+ * and the other workers ATE (a commuter eats only underground, so an above-ground
+ * count of anything but zero is a bug), the offices let, and the median stress.
+ *
+ * @returns {{label:string, metro:boolean, served:boolean, commuters:number, boardingsAtPlatform:number,
+ *   lunches:{commuterUnderground:number, commuterAbove:number, otherUnderground:number, otherAbove:number},
+ *   let:number, offices:number, population:number, stress:number|null}}
+ */
+export function metroCommuterTrial({ metro = true, lift = true, days = 5, seed = 1, floors = 9 } = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  tower.starCount = 4;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('metro trial: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  // The lifts stop at B4 when they are to reach the platform (the deepest a shaft may go
+  // under a station whose top floor is B3), and at B2 - the deepest outlet - when they are
+  // not. The control, with no station, has the shallow lifts too: it is the same tower.
+  const bottom = metro && lift ? -4 : -2;
+  const columns = [20, 50, 80, 140];
+  for (const column of columns) {
+    const shaft = must(applyAction(world, { type: 'build_shaft', kind: 'standard', bottom, top: floors + 1, column }), 'a lift');
+    for (let k = 0; k < 7; k++) must(applyAction(world, { type: 'add_car', carrierId: shaft.carrier.id }), 'a car');
+  }
+  // Fast food: two underground, two on the first floor.
+  for (const [floor, left] of [[-1, 30], [-2, 55], [1, 30], [1, 55]]) {
+    must(applyAction(world, { type: 'build', what: 'fastFood', floor, left }), 'a fast food');
+  }
+  let offices = 0;
+  for (let floor = 2; floor <= floors; floor++) {
+    for (let left = 0; left + BUILDABLE.office.width <= 150; left += BUILDABLE.office.width) {
+      const right = left + BUILDABLE.office.width - 1;
+      if (columns.some((c) => left <= c + 5 && right >= c - 2)) continue;
+      if (applyAction(world, { type: 'build', what: 'office', floor, left }).ok) offices++;
+    }
+  }
+  if (metro) must(applyAction(world, { type: 'build', what: 'metroStation', floor: -5, left: 100 }), 'the metro station');
+  rebuildRouteTables(tower);
+
+  const platform = metroPlatformFloor(tower);
+  let boardingsAtPlatform = 0;
+  const { scheduler } = makeDriver(world, {
+    observe: {
+      delay: (kind, delay) => {
+        if (kind === 'boarding' && platform !== null && delay.sourceFloor === platform) boardingsAtPlatform++;
+      },
+    },
+  });
+  const lunches = { commuterUnderground: 0, commuterAbove: 0, otherUnderground: 0, otherAbove: 0 };
+  const counted = new Set();
+  for (let d = 0; d < days; d++) {
+    for (let t = 0; t < TICKS_PER_DAY; t++) {
+      scheduler.tick(tower);
+      if (t % 4) continue;
+      for (const actor of tower.actors) {
+        if (!actor || actor.family !== FAMILY.office || (actor.state & 0x3f) !== OFFICE_STATE.atLunch) continue;
+        const office = tower.objects.get(actor.objectId);
+        const venue = tower.objects.get(actor.venueObjectId);
+        if (!office || !venue) continue;
+        const key = actor.id + ':' + tower.clock.dayCounter;
+        if (counted.has(key)) continue;
+        counted.add(key);
+        const who = metro && officeWorkerCommutes(tower, actor, office) ? 'commuter' : 'other';
+        lunches[who + (venue.floor < 0 ? 'Underground' : 'Above')]++;
+      }
+    }
+  }
+  const r = readout(world);
+  return {
+    label: !metro ? 'no metro station' : lift ? 'station, a lift reaches its platform' : 'station, NO lift reaches it',
+    metro, served: metroServed(tower), commuters: metro ? metroCommuterCount(tower) : 0,
+    boardingsAtPlatform, lunches, let: r.let, offices, population: population(tower), stress: r.stress,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Issue #13: the tower demands things back.
 
 /**
@@ -1162,6 +1295,28 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
           + String(row.let).padStart(9) + '  ' + (row.blockers.join(' | ') || '-'));
       }
       console.log('');
+    }
+    process.exit(0);
+  }
+  if (process.argv.includes('--metro')) {
+    // `node harness/playtest.js --metro [days]` - the issue #15 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 5);
+    const g = metroGateTrial();
+    console.log('metro gate trial: four stars, 10,000 people, 5 PM on a weekday, every other 4 -> 5 gate met.\n');
+    console.log('  WITHOUT a metro station (' + g.ticksHeld + ' ticks held): ' + g.before.star + ' stars, ready=' + g.before.ready
+      + ', gate=' + g.before.flag + ', blockers: ' + g.before.blockers.join(' | '));
+    console.log('  placed through applyAction: ' + (g.placed.ok ? 'ok, $' + g.placed.cost.toLocaleString('en-US') : 'REFUSED: ' + g.placed.reason));
+    console.log('  one tick later:            ' + g.after.star + ' stars, gate=' + g.after.flag + '\n');
+
+    console.log('metro commuter trial: ' + trialDays + ' days, 8 floors of offices, 4 lifts x 8 cars, two fast foods underground'
+      + ' (B1, B2) and two on F1.\n');
+    console.log('variant                                  commuters  boardings@platform  commuter lunch (under/above)  others (under/above)  let        stress');
+    for (const variant of [{ metro: false }, { metro: true, lift: true }, { metro: true, lift: false }]) {
+      const r = metroCommuterTrial({ ...variant, days: trialDays });
+      console.log(r.label.padEnd(41) + String(r.commuters).padStart(9) + String(r.boardingsAtPlatform).padStart(20)
+        + (String(r.lunches.commuterUnderground) + ' / ' + r.lunches.commuterAbove).padStart(30)
+        + (String(r.lunches.otherUnderground) + ' / ' + r.lunches.otherAbove).padStart(22)
+        + (String(r.let) + '/' + r.offices).padStart(9) + String(r.stress ?? '-').padStart(10));
     }
     process.exit(0);
   }
