@@ -887,5 +887,94 @@
       }
     ],
     "fit": "contain"
+  },
+  "cathedral": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "s1",
+        "frames": 1
+      },
+      {
+        "name": "s2",
+        "frames": 1
+      },
+      {
+        "name": "s3",
+        "frames": 1
+      },
+      {
+        "name": "s4",
+        "frames": 1
+      },
+      {
+        "name": "s5",
+        "frames": 1
+      },
+      {
+        "name": "s1-wedding",
+        "frames": 1
+      },
+      {
+        "name": "s2-wedding",
+        "frames": 1
+      },
+      {
+        "name": "s3-wedding",
+        "frames": 1
+      },
+      {
+        "name": "s4-wedding",
+        "frames": 1
+      },
+      {
+        "name": "s5-wedding",
+        "frames": 1
+      },
+      {
+        "name": "s1-crowned",
+        "frames": 1
+      },
+      {
+        "name": "s2-crowned",
+        "frames": 1
+      },
+      {
+        "name": "s3-crowned",
+        "frames": 1
+      },
+      {
+        "name": "s4-crowned",
+        "frames": 1
+      },
+      {
+        "name": "s5-crowned",
+        "frames": 1
+      }
+    ]
+  },
+  "fireworks": {
+    "frameW": 64,
+    "frameH": 64,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "burst-red",
+        "frames": 6,
+        "speed": "idle"
+      },
+      {
+        "name": "burst-gold",
+        "frames": 6,
+        "speed": "idle"
+      },
+      {
+        "name": "burst-blue",
+        "frames": 6,
+        "speed": "idle"
+      }
+    ]
   }
 }

@@ -44,6 +44,10 @@ import {
   BOMB_RANSOM, HELICOPTER_COST, TREASURE_AMOUNTS, VIP_RETRY_DAYS, eventsOf, vipBlocker,
 } from '../src/games/tower/sim/events.js';
 import { carsParked, usableSpaces } from '../src/games/tower/sim/parking.js';
+import {
+  CATHEDRAL_BASE_FLOOR, cathedralGuests, cathedralServed, guestsAtTheCathedral, hasCathedral,
+} from '../src/games/tower/sim/cathedral.js';
+import { inspectionOf, inspectableOffices } from '../src/games/tower/sim/inspection.js';
 import { medicalCenters } from '../src/games/tower/sim/medical.js';
 import {
   RECYCLING_AFTERNOON_TICK, RECYCLING_FINAL_TICK, RECYCLING_MIDDAY_TICK, recyclingCenters, workingRecyclingCenters,
@@ -483,6 +487,116 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
 }
 
 // ---------------------------------------------------------------------------
+// Issue #17: the cathedral and the wedding.
+
+/**
+ * **The lifts to the 100th floor**, through `applyAction`, and nothing else: the tower a wedding
+ * needs. A standard lift serves 31 floors at most (`MAX_SERVED_SPAN`), and the router's change
+ * between lifts is ONE sky lobby (`ROUTING.md` § Transfer Groups: a carrier reaches a floor
+ * directly or through a single transfer group), so a hundred floors is exactly two lifts: an
+ * **express** from the ground to the 89th floor (three stars; it stops only at the lobby and the
+ * sky lobbies, 14, 29, 44, 59, 74, 89), a sky lobby there, and a standard lift from it to floor
+ * 99. A chain of standard lifts cannot do it - the third change is a route the router does not
+ * find (measured: floors 74 and up fail).
+ *
+ * @param {{tower:object, ledger:object}} world
+ * @param {{column?:number, cars?:number}} [options] `column` is the express lift's
+ * @returns {{ok:boolean, reason?:string, carriers:object[]}}
+ */
+export function buildWeddingSpine(world, { column = 20, cars = 6 } = {}) {
+  const made = [];
+  const shaft = (kind, bottom, top, col) => {
+    const r = applyAction(world, { type: 'build_shaft', kind, bottom, top, column: col });
+    if (!r.ok) return r;
+    for (let i = 0; i < cars; i++) {
+      const c = applyAction(world, { type: 'add_car', carrierId: r.carrier.id });
+      if (!c.ok) return c;
+    }
+    made.push(r.carrier);
+    return r;
+  };
+  const steps = [
+    ['express lift to floor 89', () => shaft('express', 0, 89, column)],
+    ['sky lobby on floor 89', () => applyAction(world, { type: 'build', what: 'lobby', floor: 89, left: column - 6 })],
+    ['standard lift 89-99', () => shaft('standard', 89, CATHEDRAL_BASE_FLOOR, 50)],
+  ];
+  for (const [what, run] of steps) {
+    const r = run();
+    if (!r.ok) return { ok: false, reason: what + ': ' + r.reason, carriers: made };
+  }
+  return { ok: true, carriers: made };
+}
+
+/**
+ * **A tower for a wedding.** A bare lot at `stars` stars, the lifts to floor 99 (`spine`: `'lifts'` or `'none'`), and the cathedral placed through the seam. The guests are asleep until the
+ * next tick 0, so the first wedding is the next weekend: `dayCounter` starts on the day before one and
+ * the clock a few ticks short of the morning.
+ *
+ * @returns {{world:object, tower:object, scheduler:object, cathedral:object|null, guests:object[]}}
+ */
+export function weddingTower({ seed = 1, stars = 5, spine = 'lifts', cars = 6, cash = 90_000_000, place = true } = {}) {
+  const world = newTowerWorld({ seed, cash });
+  const { tower } = world;
+  tower.starCount = stars;
+  if (spine !== 'none') {
+    const built = buildWeddingSpine(world, { cars });
+    if (!built.ok) throw new Error('wedding tower: ' + built.reason);
+  }
+  let cathedral = null;
+  if (place) {
+    const r = applyAction(world, { type: 'build', what: 'cathedral', floor: CATHEDRAL_BASE_FLOOR, left: 20 });
+    if (!r.ok) throw new Error('wedding tower: the cathedral would not build: ' + r.reason);
+    cathedral = r.object;
+  }
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+  // The Friday before the first weekend (day 1 is a weekday, day 2 the weekend), just before dawn.
+  tower.clock.dayCounter = 1;
+  tower.clock.calendarPhase = false;
+  tower.clock.dayTick = 2590;
+  return { world, tower, scheduler, cathedral, guests: cathedralGuests(tower) };
+}
+
+/**
+ * **The wedding trial.** One weekend morning at the cathedral, tick by tick: when each of the forty
+ * guests set out, when each arrived, and what the star ladder's count said. Reports the numbers the
+ * issue asks for - the arrival ticks against the 800 deadline - for a tower with the lifts to floor 99
+ * and for one without.
+ *
+ * @returns {{spine:string, setOut:number[], arrived:number[], count:number, lastArrival:number|null,
+ *   parked:number, riding:number, shut:boolean}}
+ */
+export function weddingTrial({ spine = 'lifts', cars = 6, weekend = true, seed = 1 } = {}) {
+  const env = weddingTower({ seed, spine, cars });
+  const { tower, scheduler } = env;
+  if (!weekend) tower.clock.dayCounter = 3;           // day 3 is a Monday-alike: weekday
+  const arrivedAt = new Map();
+  const setOutAt = new Map();
+  let count = 0;
+  const target = weekend ? 2 : 4;
+  // Run from just before dawn through noon of the day that counts. (The day counter turns at tick
+  // 2300, so the tail of the evening before already carries the new number: only 1250-2299 is noon.)
+  while (!(tower.clock.dayCounter === target && tower.clock.dayTick >= 1250 && tower.clock.dayTick < 2300)) {
+    scheduler.tick(tower);
+    if (tower.clock.dayCounter !== target) continue;
+    for (const g of env.guests) {
+      if (!setOutAt.has(g.id) && (g.state === 0x60 || g.state === 0x03)) setOutAt.set(g.id, tower.clock.dayTick);
+      if (!arrivedAt.has(g.id) && g.state === 0x03) arrivedAt.set(g.id, tower.clock.dayTick);
+    }
+    count = Math.max(count, tower.gates.weddingGuestsArrived);
+  }
+  const arrived = [...arrivedAt.values()].sort((a, b) => a - b);
+  return {
+    spine, setOut: [...setOutAt.values()].sort((a, b) => a - b), arrived, count,
+    lastArrival: arrived.length ? arrived[arrived.length - 1] : null,
+    parked: env.guests.filter((g) => g.state === 0x27).length,
+    riding: env.guests.filter((g) => g.state === 0x60).length,
+    served: cathedralServed(tower),
+    shut: arrived.length < 40,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Issue #14: the complete star ladder.
 
 /**
@@ -502,11 +616,14 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
  *    ~250 (1,500 people) and the point here is the gates, not the head-count. It is
  *    counted exactly like any other bucket - recycling sizes itself to it - so the centers
  *    the script builds are real and the trial still fails if there are too few.
- *  - **`officeServiceOk`**, **`cathedralPlaced`** and the
- *    wedding's **`weddingGuestsArrived`** (issue #17): set by the script the morning after
- *    the rung they belong to opens, on the first weekend morning for the wedding. Each is
- *    the exact flag its issue will write. (**`metroPlaced`** was one until issue #15: the
- *    script now BUILDS the station, on the bottom floor, and the sim latches the gate.)
+ *
+ * **Nothing else is a stand-in.** `metroPlaced` stopped being one with issue #15 (the script
+ * builds the station), `vipStayFavorable` with issue #16 (a real VIP rides the real lifts), and
+ * `officeServiceOk`, `cathedralPlaced` and `weddingGuestsArrived` with issue #17: the inspector
+ * rides to a let office on the first evaluation day at three stars, and at five the script builds
+ * **the lifts to the 100th floor** (`buildWeddingSpine`) and the cathedral through `applyAction`,
+ * and the forty guests ride them on the first weekend morning after. No flag in `tower.gates` is
+ * written by the script.
  *
  * Returns the numbers; the CLI prints them and `test/ladder.test.js` asserts on the same
  * function, so the harness and the test cannot disagree about what was run.
@@ -514,7 +631,10 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
  * @returns {{days:number, perDay:object[], rises:{star:number, day:number, tick:number}[],
  *   finalStar:number, built:object[], refused:object[], hud:string}}
  */
-export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
+/** Where the ladder trial's express lift to the 100th floor will stand: clear of its four lifts (20, 50, 80, 110). */
+const SPINE_COLUMN = 34;
+
+export function ladderTrial({ days = 24, seed = 1, floors = 9 } = {}) {
   const world = newTowerWorld({ seed, cash: 90_000_000 });
   const { tower } = world;
   const must = (result, what) => {
@@ -527,8 +647,11 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
   }
   let offices = 0;
   for (let floor = 1; floor <= floors; floor++) {
-    // The first twelve tiles are kept clear for the service lift the recycling centers need.
+    // The first twelve tiles are kept clear for the service lift the recycling centers need, and
+    // the tiles the express lift to the 100th floor will stand in are kept clear for it (the
+    // player's foresight: it cannot be sunk through offices, and it is only wanted at 5 stars).
     for (let left = 12; left + BUILDABLE.office.width <= 150; left += BUILDABLE.office.width) {
+      if (left <= SPINE_COLUMN + 5 && left + BUILDABLE.office.width - 1 >= SPINE_COLUMN) continue;
       if (applyAction(world, { type: 'build', what: 'office', floor, left }).ok) offices++;
     }
   }
@@ -537,11 +660,13 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
 
   const built = [];
   const refused = [];
-  const tryBuild = (action, label) => {
-    const result = applyAction(world, action);
+  const tryBuild = (action, label, run = null) => {
+    const result = run ? run() : applyAction(world, action);
     (result.ok ? built : refused).push({ day: tower.clock.dayCounter, what: label, ...(result.ok ? {} : { reason: result.reason }) });
     return result.ok;
   };
+  let spine = false;
+  let cathedralPlacedDay = null;
   const count = (family) => [...tower.objects.values()].filter((o) => o.family === family).length;
   let serviceLift = false;
   let spaces = 0;
@@ -608,35 +733,40 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
         if (spaces === 0) tryBuild({ type: 'build', what: 'parkingRamp', floor: -1, left: 70 }, 'parking ramp');
         for (let k = 0; k < 8 && spaces < 35; k++, spaces++) {
           const left = spaces < 19 ? 71 + 4 * spaces : 66 - 4 * (spaces - 19);
+          // The garage leaves the express lift's column clear (it starts at the ground and its pit is B1).
+          if (left <= SPINE_COLUMN + 5 && left + 3 >= SPINE_COLUMN - 1) continue;
           tryBuild({ type: 'build', what: 'parkingSpace', floor: -1, left }, 'parking space');
         }
       }
     }
-    // The stand-ins, the morning after the rung they belong to opens.
-    const gates = starGatesOf(tower);
-    const set = (flag, value = true) => {
-      if (gates[flag] === value) return;
-      gates[flag] = value;
-      flagsSetOn[flag] = tower.clock.dayCounter;
-    };
-    // The VIP is no stand-in any more (issue #16): a real visitor books one of the two suites the
-    // script built, rides the real lifts, and `sim/events.js` writes the gate when he is pleased.
-    if (star === 3 && gates.suitePlaced) set('officeServiceOk');
-    if (star === 5) set('cathedralPlaced');
+    // The cathedral (issue #17), once the ladder names it: the lifts to the 100th floor, then the
+    // building. Both through the seam; the sim latches the gate and the guests do the rest.
+    if (status.blockerDetails.some((d) => d.kind === 'cathedral') && !hasCathedral(tower)) {
+      if (!spine) spine = tryBuild(null, 'lifts to the 100th floor', () => buildWeddingSpine(world, { column: SPINE_COLUMN }));
+      if (spine && tryBuild({ type: 'build', what: 'cathedral', floor: CATHEDRAL_BASE_FLOOR, left: 50 }, 'cathedral')) {
+        cathedralPlacedDay ??= tower.clock.dayCounter;
+      }
+    }
   };
 
   const perDay = [];
   const rises = [];
   let seenRise = 0;
+  /** The gates the SIM opened, and the day: the proof that no flag was written by the script. */
+  const realOn = {};
+  let weddingTick = null;
   for (let d = 0; d < days; d++) {
     for (let t = 0; t < TICKS_PER_DAY; t++) {
       scheduler.tick(tower);
-      const { dayTick, calendarPhase } = tower.clock;
+      const { dayTick } = tower.clock;
       if (dayTick === 30) morning();
-      // The wedding: 40 guests at the cathedral, a weekend morning, before tick 800.
-      if (dayTick === 300 && calendarPhase && tower.starCount === 5 && tower.gates.cathedralPlaced) {
-        tower.gates.weddingGuestsArrived = WEDDING_GUESTS;
-        flagsSetOn.weddingGuestsArrived ??= tower.clock.dayCounter;
+      // What the sim wrote, for the report: the day each gate it owns first opened.
+      for (const flag of ['officeServiceOk', 'vipStayFavorable', 'cathedralPlaced']) {
+        if (tower.gates[flag] && !(flag in realOn)) realOn[flag] = tower.clock.dayCounter;
+      }
+      if (tower.gates.weddingGuestsArrived >= WEDDING_GUESTS && !('weddingGuestsArrived' in realOn)) {
+        realOn.weddingGuestsArrived = tower.clock.dayCounter;
+        weddingTick = dayTick;
       }
       for (const n of noticesAfter(tower, seenRise)) {
         seenRise = n.id;
@@ -652,7 +782,11 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
     });
   }
   const last = perDay[perDay.length - 1];
-  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, metroPlacedDay, hud: last.hud, world };
+  return {
+    days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, metroPlacedDay, hud: last.hud, world,
+    realOn, weddingTick, cathedralPlacedDay,
+    inspections: tower.lastInspection ?? null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1547,10 +1681,10 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   }
   if (process.argv.includes('--ladder')) {
     // `node harness/playtest.js --ladder [days]` - the issue #14 proof.
-    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 14);
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 24);
     const r = ladderTrial({ days: trialDays });
     console.log('star ladder trial: ' + r.offices + ' real offices, a scripted player reading the bar, ' + trialDays
-      + ' days. STAND-INS: the population above the real tenants ("crowd"), and the flags of issues 15-17.\n');
+      + ' days. THE ONE STAND-IN: the population above the real tenants ("crowd"); every gate flag is written by the sim.\n');
     console.log('day  star  population  (real)  the bar says');
     for (const row of r.perDay) {
       console.log(String(row.day).padStart(3) + String(row.star).padStart(6) + String(row.population).padStart(12)
@@ -1563,7 +1697,25 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     console.log('refused: ' + (r.refused.length
       ? [...firstRefusals].map(([what, why]) => what + ' (first of ' + r.refused.filter((b) => b.what === what).length + '): ' + why).join(' | ')
       : 'nothing'));
-    console.log('stand-in flags set on days: ' + JSON.stringify(r.flagsSetOn));
+    console.log('gate flags written by the SCRIPT: ' + (Object.keys(r.flagsSetOn).length ? JSON.stringify(r.flagsSetOn) : 'none'));
+    console.log('gates the SIM opened, and on which day: ' + JSON.stringify(r.realOn));
+    console.log('the cathedral was placed on day ' + r.cathedralPlacedDay + '; the fortieth guest arrived at tick ' + r.weddingTick
+      + '; the last inspection: ' + JSON.stringify(r.inspections));
+    process.exit(0);
+  }
+  if (process.argv.includes('--wedding')) {
+    // `node harness/playtest.js --wedding` - the issue #17 proof: a weekend morning at the cathedral.
+    console.log('wedding trial: a bare lot, five stars, a cathedral on floor 99, a weekend morning. Ticks are day ticks.\n');
+    console.log('lifts to floor 99      day      guests out  first set out  last set out  arrived  last arrival  count  parked');
+    console.log('-'.repeat(112));
+    for (const [spine, weekend, cars] of [['lifts', true, 6], ['lifts', true, 1], ['lifts', false, 6], ['none', true, 6]]) {
+      const r = weddingTrial({ spine, weekend, cars });
+      console.log((spine === 'lifts' ? 'express + standard, ' + cars + ' car' + (cars === 1 ? '' : 's') : 'none').padEnd(22)
+        + String(weekend ? 'weekend' : 'weekday').padStart(8) + String(r.setOut.length).padStart(14)
+        + String(r.setOut[0] ?? '-').padStart(15) + String(r.setOut.at(-1) ?? '-').padStart(14)
+        + String(r.arrived.length).padStart(9) + String(r.lastArrival ?? '-').padStart(14)
+        + String(r.count).padStart(7) + String(r.parked).padStart(8));
+    }
     process.exit(0);
   }
   if (process.argv.includes('--housekeeping')) {

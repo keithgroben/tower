@@ -856,6 +856,11 @@ const DISTANCE_FEEDBACK_STATES = {
   // The VIP (issue #16, `FAMILY.vip`): judged like the suite guest it is - the long ride up
   // and the long ride down, and nothing in between. `spec/DEVIATIONS.md` A66.
   0x30: [0x20, 0x05],
+  // The wedding guests (issue #17, `FAMILY.cathedral`): the fresh dispatch up and the fresh
+  // dispatch home, as `cathedral.ts` passes `emitDistanceFeedback: isFreshDispatch`.
+  0x24: [0x20, 0x05],
+  // The inspector (issue #17, `FAMILY.inspector`): the one long ride to the office.
+  0x31: [0x20],
 };
 
 /** `state & 0x3f`. The in-transit bit is `0x40`; the base state is what gates. */

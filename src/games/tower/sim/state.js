@@ -120,6 +120,17 @@ export const OBJECT_TYPE = {
   metroTop: 0x1f,
   metroMiddle: 0x20,
   metroBottom: 0x21,
+  /**
+   * **The cathedral is a five-floor stack** (issue #17, `specs/facility/EVALUATION.md` §
+   * Building: *"places five object slices with type codes `0x24..0x28`"*), bottom to top: the
+   * bottom slice is `0x24` and the top `0x28`. All five carry family `0x24` (`FAMILY.cathedral`),
+   * as the metro's three floors carry `0x1f`. `sim/cathedral.js`.
+   */
+  cathedralSlice1: 0x24,
+  cathedralSlice2: 0x25,
+  cathedralSlice3: 0x26,
+  cathedralSlice4: 0x27,
+  cathedralSlice5: 0x28,
 };
 
 export const FAMILY = {
@@ -206,6 +217,21 @@ export const FAMILY = {
    * `specs/`, so it gets an unused one. `spec/DEVIATIONS.md` A66.
    */
   vip: 0x30,
+  /**
+   * **The cathedral and its wedding guests** (issue #17): eight guests to each of the five
+   * slices, forty in all, every one of them family `0x24` (`EVALUATION.md` § Runtime Sims: *"the
+   * runtime sim family byte initialized ... is `0x24` for every visitor"*). They are visitors,
+   * not tenants and not residents: nothing about them is population. `sim/cathedral.js`.
+   */
+  cathedral: 0x24,
+  /**
+   * **The inspector** (issue #17): the one visitor the office-service evaluation sends to an
+   * office (`GAME-STATE.md` § Office Service Evaluation: *"when the cathedral guest arrives at
+   * the target office"*). Not a placed facility - it owns no object - and not staff. `0x31` is
+   * ours: the spec's visitor is the cathedral's `0x24`, which cannot exist at the three stars
+   * the evaluation runs at. `sim/inspection.js`, `spec/DEVIATIONS.md` A73.
+   */
+  inspector: 0x31,
 };
 
 /**
@@ -215,7 +241,8 @@ export const FAMILY = {
  * demolish a parking space for evicting a tenant it never had.
  */
 export const SERVICE_FACILITY_FAMILIES = new Set([
-  FAMILY.medical, FAMILY.parkingSpace, FAMILY.parkingRamp, FAMILY.recycling, FAMILY.metro,
+  // The cathedral owns forty guests, but they are visitors: a chapel has no tenant to evict.
+  FAMILY.medical, FAMILY.parkingSpace, FAMILY.parkingRamp, FAMILY.recycling, FAMILY.metro, FAMILY.cathedral,
 ]);
 
 /** Families whose actors are **staff**: they work the tower, they do not live in it. */
@@ -276,6 +303,10 @@ export const OCCUPANTS = {
   // "seeded to 0, never consumed" - placement passes `occupantCount: 0`.)
   [FAMILY.theater]: 60,
   [FAMILY.partyHall]: 50,
+  // The cathedral: **eight guests to each of its five slices** (`EVALUATION.md` § Runtime Sims:
+  // *"Each cathedral slice has span size 8, for 40 evaluation visitors total"*). Placed with
+  // the building, parked (`0x27`), and woken at the start of every day.
+  [FAMILY.cathedral]: 8,
 };
 
 /**
@@ -340,6 +371,10 @@ export const POPULATION_CONTRIBUTION = {
   // who are already counted where they work (`sim/metro.js`). An explicit `0` for the
   // reason every row above gives - `population()` reads a missing key from `OCCUPANTS`.
   [FAMILY.metro]: 0,
+  // Wedding guests are visitors for a morning, not people who live or work here. An explicit
+  // `0`, for the reason every row above gives (`population()` falls back to `OCCUPANTS`, which
+  // would count forty guests as forty residents the day the cathedral is placed).
+  [FAMILY.cathedral]: 0,
 };
 
 /** Families whose population is gated on a linked venue record rather than a lease. */

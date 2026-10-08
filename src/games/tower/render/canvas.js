@@ -49,6 +49,7 @@ import { HK_STATE } from '../sim/housekeeping.js';
 import { pendingVisitors } from '../sim/medical.js';
 import { recyclingServed } from '../sim/recycling.js';
 import { metroServed, trainAtPlatform } from '../sim/metro.js';
+import { AUX as CATHEDRAL_AUX, CATHEDRAL_TOP_FLOOR, cathedralServed } from '../sim/cathedral.js';
 import { BLAST_FLOORS_ABOVE, BLAST_FLOORS_BELOW, BLAST_TILES_LEFT, BLAST_TILES_RIGHT, FIRE_RIGHT_REACH, VIP_STATE, santaFlight } from '../sim/events.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR,
@@ -434,6 +435,14 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
     const floor = object.type === OBJECT_TYPE.metroTop ? 'top' : object.type === OBJECT_TYPE.metroMiddle ? 'middle' : 'bottom';
     return { name: 'metro', animation: trainAtPlatform(object) ? floor + '-train' : floor };
   }
+  // The cathedral (issue #17): five floors, each its own slice of the `cathedral` sheet, lit
+  // while a wedding's guests are arriving (`EVALUATION.md`'s aux value `3`) and picked out in
+  // gold once the Tower rank is awarded (aux `2`).
+  if (family === FAMILY.cathedral) {
+    const slice = object.type - OBJECT_TYPE.cathedralSlice1 + 1;
+    const look = object.aux === CATHEDRAL_AUX.crowned ? '-crowned' : object.aux === CATHEDRAL_AUX.wedding ? '-wedding' : '';
+    return { name: 'cathedral', animation: 's' + slice + look };
+  }
   if (family === FAMILY.parkingRamp) return { name: 'parking-ramp', animation: 'tile' };
   if (family === FAMILY.parkingSpace) {
     const cars = object.parking?.cars?.length ?? 0;
@@ -681,6 +690,13 @@ export const SPRITE_USES = {
   hotel: ['booked-day', 'booked-night', 'poor-review'],
   housekeeping: ['day', 'night'],
   metro: ['top', 'top-train', 'middle', 'middle-train', 'bottom', 'bottom-train'],
+  // The cathedral (issue #17): five slices, bottom to top, plain, lit for a wedding and gilded
+  // for the Tower rank; and the finish's fireworks, three colours of burst.
+  cathedral: [
+    's1', 's2', 's3', 's4', 's5', 's1-wedding', 's2-wedding', 's3-wedding', 's4-wedding', 's5-wedding',
+    's1-crowned', 's2-crowned', 's3-crowned', 's4-crowned', 's5-crowned',
+  ],
+  fireworks: ['burst-red', 'burst-gold', 'burst-blue'],
   security: ['day', 'night'],
   medical: ['day', 'night'],
   'parking-ramp': ['tile'],
@@ -716,6 +732,37 @@ export const SPRITE_USES = {
   'sky-explorer': ['drift'],
   'sky-stunt': ['fly'],
 };
+
+export const FIREWORK_FRAME_MS = 150;
+export const FIREWORK_FRAMES = 6;
+export const FIREWORK_BURST_MS = FIREWORK_FRAME_MS * FIREWORK_FRAMES;
+export const FIREWORK_COLOURS = ['burst-red', 'burst-gold', 'burst-blue'];
+
+/**
+ * **The finish's fireworks schedule** (issue #17): which bursts are in the air `age` milliseconds
+ * after the Tower rank, and where. Pure and deterministic: burst `i` starts at `i * 700` ms (with a
+ * stagger), rises to a height and an offset that are fixed functions of `i`, and is one of the
+ * three colours in turn. One or two are in the air at once; the show runs for `total` bursts
+ * (about 22 seconds, inside the renderer's `FINALE_MS`).
+ *
+ * @returns {{index:number, colour:string, frame:number, dx:number, rise:number}[]}
+ */
+export function fireworksShow(age, total = 32) {
+  const out = [];
+  for (let i = 0; i < total; i++) {
+    const start = i * 700 + ((i * 5) % 3) * 90;
+    const t = age - start;
+    if (t < 0 || t >= FIREWORK_BURST_MS) continue;
+    out.push({
+      index: i,
+      colour: FIREWORK_COLOURS[i % FIREWORK_COLOURS.length],
+      frame: Math.min(FIREWORK_FRAMES - 1, Math.floor(t / FIREWORK_FRAME_MS)),
+      dx: ((i * 37) % 13) * 2.5 - 15,
+      rise: 2 + ((i * 53) % 5) * 0.8,
+    });
+  }
+  return out;
+}
 
 /**
  * Delivered sheets this build cannot draw yet, each with the reason.
@@ -835,6 +882,16 @@ export function makeRenderer(canvas, options = {}) {
   let blastKey = undefined;
   let blastSeenAt = 0;
   const BLAST_MS = 1800;
+  /**
+   * The Tower rank's fireworks (issue #17), played for `FINALE_MS` of wall time from the frame
+   * the renderer first sees `tower.finale` change - and not replayed for a rank it found
+   * already there (a crowned save loaded later), the same rule the blast follows. Launched from
+   * the cathedral's roof; every position and every moment is a pure function of the burst's number,
+   * so the show is the same show every time.
+   */
+  let finaleKey = undefined;
+  let finaleSeenAt = 0;
+  const FINALE_MS = 24000;
 
   /** Last frame's answer to "is this let", per object. See `diffLetStatus`. */
   const letSeen = new Map();
@@ -1019,6 +1076,7 @@ export function makeRenderer(canvas, options = {}) {
     drawVipInSuite(L, tower);
     drawFire(L, tower);
     drawBlast(L, tower);
+    drawFireworks(L, tower);
     for (const o of tower.objects.values()) drawUnitSignals(L, o, tower);
     // Last of the world passes, and it has to stay last: the whole point is
     // that nothing draws over it.
@@ -1313,6 +1371,7 @@ export function makeRenderer(canvas, options = {}) {
       : o.family === FAMILY.medical ? '#3d6b66'
       : o.family === FAMILY.recycling ? '#3f4a3a'
       : o.family === FAMILY.metro ? '#4a3a2c'
+      : o.family === FAMILY.cathedral ? '#8c8576'
       : o.family === FAMILY.parkingSpace || o.family === FAMILY.parkingRamp ? '#2f3a46'
       : let_ ? KIND_COLOR[o.family] ?? INFO : 'rgba(120,132,148,0.35)';
     ctx.fillRect(x, y, w, L.fh - 2);
@@ -1408,6 +1467,9 @@ export function makeRenderer(canvas, options = {}) {
     } else if (o.type === OBJECT_TYPE.metroTop && !metroServed(tower)) {
       // A platform no lift reaches brings nobody (`sim/metro.js`): said where it stands.
       text = 'NO LIFT TO THE PLATFORM';
+    } else if (o.type === OBJECT_TYPE.cathedralSlice1 && !cathedralServed(tower)) {
+      // *"Your Cathedral must be accessible"*: with no lift to its floor nobody rides up to the wedding.
+      text = 'NO LIFT TO THE CATHEDRAL';
     }
     if (!text) return;
     ctx.fillStyle = 'rgba(11,15,20,0.72)';
@@ -1429,7 +1491,8 @@ export function makeRenderer(canvas, options = {}) {
    */
   function drawUnitSignals(L, o, tower) {
     if (VENUE.has(o.family) || ENTERTAINMENT_FAMILIES.has(o.family)) return void drawVenueSignal(L, o, tower);
-    if (o.family === FAMILY.medical || o.family === FAMILY.recycling || o.family === FAMILY.metro) {
+    if (o.family === FAMILY.medical || o.family === FAMILY.recycling || o.family === FAMILY.metro
+      || o.family === FAMILY.cathedral) {
       return void drawServiceSignal(L, o, tower);
     }
     if (!TENANTED.has(o.family) && !HOTEL.has(o.family)) return;
@@ -1993,6 +2056,33 @@ export function makeRenderer(canvas, options = {}) {
     }
   }
 
+  /**
+   * The finish (issue #17): fireworks over the cathedral for the moment the tower is crowned.
+   * `fireworksShow` is the pure schedule (below); this only places it on the screen.
+   */
+  function drawFireworks(L, tower) {
+    const finale = tower.finale ?? null;
+    const key = finale ? finale.day + ':' + finale.tick : null;
+    if (finaleKey === undefined) { finaleKey = key; finaleSeenAt = -Infinity; return; }
+    if (key !== finaleKey) { finaleKey = key; finaleSeenAt = sprites.elapsedMs; }
+    if (!finale) return;
+    const age = sprites.elapsedMs - finaleSeenAt;
+    if (age < 0 || age > FINALE_MS) return;
+    let roof = null;
+    for (const o of tower.objects.values()) if (o.family === FAMILY.cathedral && o.floor === CATHEDRAL_TOP_FLOOR) roof = o;
+    const centreTile = roof ? (roof.left + roof.right + 1) / 2 : TILES_PER_FLOOR / 2;
+    const roofY = L.floorY(CATHEDRAL_TOP_FLOOR);
+    for (const burst of fireworksShow(age)) {
+      const x = L.tileX(centreTile + burst.dx) - 32 * L.zoom;
+      const y = roofY - burst.rise * L.fh - 32 * L.zoom;
+      if (x + 64 * L.zoom < 0 || x > W || y + 64 * L.zoom < 0 || y > H) continue;
+      if (!sprites.drawSprite(ctx, { name: 'fireworks', animation: burst.colour, x, y, scale: L.zoom, frame: burst.frame })) {
+        ctx.fillStyle = WARN;
+        ctx.fillRect(x + 28 * L.zoom, y + 28 * L.zoom, 8 * L.zoom, 8 * L.zoom);
+      }
+    }
+  }
+
   /** Santa (issue #16): a sleigh across the sky on the last evening of the year, from the clock alone. */
   function drawSanta(tower) {
     const progress = santaFlight(tower.clock);
@@ -2029,9 +2119,12 @@ export function makeRenderer(canvas, options = {}) {
           return;
         }
       }
+      // The wedding guests (issue #17) are guests; the inspector is drawn as the VIP is, the one
+      // figure in the game that is yellow, because nobody else arrives to be looked at.
       const sheet = actor.family === FAMILY.condo ? 'person-resident'
-        : actor.family === FAMILY.vip ? 'person-vip'
-        : HOTEL.has(actor.family) || ENTERTAINMENT_FAMILIES.has(actor.family) ? 'person-guest' : 'person-worker';
+        : actor.family === FAMILY.vip || actor.family === FAMILY.inspector ? 'person-vip'
+        : HOTEL.has(actor.family) || ENTERTAINMENT_FAMILIES.has(actor.family) || actor.family === FAMILY.cathedral
+          ? 'person-guest' : 'person-worker';
       // A calm guest on the way up to check in is carrying a suitcase — the one
       // frame the guest sheet has that the others do not. Stress still wins: a
       // guest near the red band is shown fed up, bags or no bags.
@@ -2162,6 +2255,7 @@ export function makeRenderer(canvas, options = {}) {
       ctx.fillStyle = o.family === FAMILY.lobby ? '#5aa9e6'
         : o.family === FAMILY.housekeeping ? '#2fb5a8'
         : o.family === FAMILY.security ? '#5b7fd6'
+        : o.family === FAMILY.cathedral ? '#d8d1bf'
         : isHotelInfested(o) ? BAD
         : isHotelRoomDirty(o) ? WARN
         : officeIsLet(o) ? KIND_COLOR[o.family] ?? INFO : 'rgba(140,150,165,0.55)';

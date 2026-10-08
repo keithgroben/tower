@@ -49,6 +49,9 @@ import {
 import { clearDemand } from './demands.js';
 import { METRO_FLOORS, METRO_WIDTH, belowMetroReason, metroObstruction, placeMetro } from './metro.js';
 import { answerEvent, clearScars, maybeFindTreasure } from './events.js';
+import {
+  CATHEDRAL_BASE_FLOOR, CATHEDRAL_FLOORS, CATHEDRAL_WIDTH, cathedralFloorReason, cathedralObstruction, placeCathedral,
+} from './cathedral.js';
 
 /**
  * What each buildable maps to. The palette is built from this, so it cannot
@@ -335,6 +338,27 @@ BUILDABLE.metroStation = {
 };
 
 /**
+ * **The cathedral** (issue #17): five stars, $3,000,000 (plus the floor tiles of its five
+ * floors, as the metro's), **one to a tower**, **on the 100th floor and nowhere else**, never
+ * bulldozed. A five-floor stack, so `floor` is its LOWEST floor and the one place it may
+ * stand is `CATHEDRAL_BASE_FLOOR` - `gradeReason`'s rule, shared with the ghost.
+ * `sim/cathedral.js` has the whole account, and the wedding that crowns the tower.
+ *
+ * The key is the construction-cost name, which is how the star bar tells *"go and build
+ * this"* from *"nothing builds one yet"* (`isBuildable` in `ui/main.js`).
+ */
+BUILDABLE.cathedral = {
+  family: FAMILY.cathedral,
+  type: OBJECT_TYPE.cathedralSlice1,
+  cost: 'cathedral',
+  width: CATHEDRAL_WIDTH,
+  label: 'Cathedral',
+  floors: CATHEDRAL_FLOORS,
+  onlyFloor: CATHEDRAL_BASE_FLOOR,
+  cathedral: true,
+};
+
+/**
  * Why this buildable cannot go on this floor, or null: the grade rule, for the
  * seam and the ghost alike. `aboveGrade` is `specs/COMMANDS.md`'s "must be above
  * grade (`floor > 0`)"; `belowGrade` is its "basement-only" (`floor < 0`). One
@@ -345,6 +369,8 @@ BUILDABLE.metroStation = {
  * center clicked on B1 would put its upper half on the ground floor.
  */
 export function gradeReason(spec, floor) {
+  // The cathedral's one floor (issue #17): *"Cathedral is available only on 100th floor"*.
+  if (spec.onlyFloor !== undefined && floor !== spec.onlyFloor) return cathedralFloorReason(floor);
   if (spec.aboveGrade && floor <= GROUND_FLOOR) {
     return 'a ' + spec.label.toLowerCase() + ' has to go above the ground floor';
   }
@@ -365,6 +391,8 @@ export function gradeReason(spec, floor) {
 export function placementObstruction(tower, spec, floor, left) {
   // The metro is a stack of its own: one to a tower, and on the bottom floor.
   if (spec.metro) return metroObstruction(tower, floor, left);
+  // The cathedral is a stack of its own: one to a tower, five clear floors.
+  if (spec.cathedral) return cathedralObstruction(tower, floor, left);
   // *"Cannot place items under Metro"* (`specs/COMMANDS.md`, error `0x0e`): every other
   // placement, whatever it is, whatever floors it stands on.
   const under = belowMetroReason(tower, floor);
@@ -676,7 +704,9 @@ const ACTIONS = {
         ? placeRecycling(tower, { floor, left }, () => createSimTripRecord())
         : spec.metro
           ? placeMetro(tower, { floor, left }, () => createSimTripRecord())
-          : placeObject(tower,
+          : spec.cathedral
+            ? placeCathedral(tower, { floor, left }, () => createSimTripRecord())
+            : placeObject(tower,
         { family: spec.family, type: spec.type, floor, left, right, occupantState: spec.occupantState },
         () => createSimTripRecord(),
         spec.finalize);
@@ -1100,6 +1130,9 @@ export function demolishRefusal(object) {
   // *"they cannot be removed"* (help file); the original's message is "Cannot destroy
   // this item". Any of the three floors: the stack stands whole or not at all.
   if (object.family === FAMILY.metro) return 'the metro station cannot be bulldozed';
+  // Issue #17: *"Cathedrals cannot be bulldozed"* (help file), the readme's list, and the
+  // original's "Cannot destroy this item". Any of the five floors: the stack stands whole.
+  if (object.family === FAMILY.cathedral) return 'the cathedral cannot be bulldozed';
   if (hasTenant(object)) return 'that unit is let — you cannot evict a tenant';
   return null;
 }

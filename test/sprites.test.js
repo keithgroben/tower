@@ -41,6 +41,7 @@ import { SECURITY_WIDTH } from '../src/games/tower/sim/security.js';
 import { MEDICAL_WIDTH, finalizeMedicalCenter } from '../src/games/tower/sim/medical.js';
 import { placeRecycling } from '../src/games/tower/sim/recycling.js';
 import { PLATFORM, placeMetro } from '../src/games/tower/sim/metro.js';
+import { AUX, CATHEDRAL_BASE_FLOOR, cathedralObjects, placeCathedral } from '../src/games/tower/sim/cathedral.js';
 import {
   PARKING_RAMP_WIDTH, PARKING_SPACE_WIDTH, finalizeParkingSpace, rebuildParkingCoverage,
 } from '../src/games/tower/sim/parking.js';
@@ -179,6 +180,10 @@ function towerWithEverything() {
   // (*"nothing goes beneath it"*): its lowest floor is B5, the recycling plant's is B4.
   const metro = placeMetro(tower, { floor: -5, left: 0 }, trips);
   assert(metro.ok, 'fixture: ' + metro.reason);
+  // The cathedral (issue #17): five slices on the 100th floor and up, so far above the rest of this
+  // fixture that `recordDrawnSprites` points the camera at it for the frames that matter.
+  const chapel = placeCathedral(tower, { floor: CATHEDRAL_BASE_FLOOR, left: 54 }, trips);
+  assert(chapel.ok, 'fixture: ' + chapel.reason);
   const garage = [];
   const bay = (left, width, make) => {
     const placed = placeObject(tower, { family: make.family, type: make.type, floor: -1, left, right: left + width - 1 },
@@ -400,6 +405,28 @@ async function recordDrawnSprites() {
   stockTheSky(renderer.sky, 1200);
   renderer.draw(tower, 100);
 
+  // The cathedral and the finish (issue #17). It stands on the 100th floor, so the camera goes up to it
+  // (an explicit `goTo` is one of the three moves the camera may make). Three looks: as built, with a
+  // wedding's guests arriving (aux 3), and crowned (aux 2) - and then the fireworks, which the renderer
+  // plays from the frame it first sees the rank change and which this test sets only AFTER the frames
+  // above have shown it a tower with no rank (it does not replay a crown it found already there). Each
+  // burst colour is a different burst, started a little after the last: 0 ms, ~900 ms, ~1500 ms.
+  tower.clock.dayTick = 300;
+  renderer.goTo(CATHEDRAL_BASE_FLOOR + 2, 68);
+  const setLook = (aux) => { for (const o of cathedralObjects(tower)) o.aux = aux; };
+  for (const aux of [AUX.idle, AUX.wedding, AUX.crowned]) {
+    setLook(aux);
+    stockTheSky(renderer.sky, 1200);
+    renderer.draw(tower, 16);
+  }
+  tower.finale = { day: 2, tick: 366, text: 'Congratulations! Your tower has been given a "Tower" Rating!' };
+  renderer.draw(tower, 0);                 // the frame that sees it (burst 0, red)
+  // The animation clock takes at most a 120 ms step a frame (a tab that slept must not skip a show),
+  // so a second and a half of fireworks is a run of short frames: gold from 880 ms, blue from 1490.
+  for (let i = 0; i < 18; i++) renderer.draw(tower, 100);
+  tower.finale = undefined;
+  setLook(AUX.idle);
+
   // A placement, so the scaffold-and-dust animation has something to play over.
   placeObject(tower, { family: FAMILY.office, floor: 8, left: 54, right: 59 },
     () => createSimTripRecord());
@@ -520,6 +547,13 @@ export const tests = {
       'a bay with one car': 'basement-parking/one-car',
       'a bay with two cars': 'basement-parking/two-cars',
       'the recycling plant': 'basement-utility/idle',
+      'the cathedral porch': 'cathedral/s1',
+      'the cathedral roof': 'cathedral/s5',
+      'a cathedral lit for a wedding': 'cathedral/s3-wedding',
+      'a cathedral gilded for the Tower rank': 'cathedral/s5-crowned',
+      'a red firework': 'fireworks/burst-red',
+      'a gold firework': 'fireworks/burst-gold',
+      'a blue firework': 'fireworks/burst-blue',
       'the metro concourse': 'metro/top',
       'the metro platform, empty': 'metro/bottom',
       'a train at the metro platform': 'metro/bottom-train',

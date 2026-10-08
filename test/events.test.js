@@ -28,6 +28,7 @@ import {
   vipBlocker, vipCandidateSuites, vipVerdict,
 } from '../src/games/tower/sim/events.js';
 import { daypartOf } from '../src/games/tower/sim/clock.js';
+import { CATHEDRAL_BASE_FLOOR, placeCathedral } from '../src/games/tower/sim/cathedral.js';
 import { makeRng } from '../src/games/tower/sim/rng.js';
 import {
   FAMILY, __resetIds, createTower, placeObject, population,
@@ -425,10 +426,17 @@ export const tests = {
       building(t, 6);
       assert(!tryStartFire(t) && t.events.fire === null, stars + ' stars: no fire');
     }
+    // Issue #17: the evaluation site is the cathedral itself - a REAL one, placed. The latch
+    // (`gates.cathedralPlaced`) was the stand-in until it existed; setting only the latch no
+    // longer stops a fire, and standing the building does.
+    const latched = bare({ stars: 3, day: 83 });
+    building(latched, 6);
+    starGatesOf(latched).cathedralPlaced = true;
+    assert(tryStartFire(latched), 'the latch alone is not an evaluation site');
     const cathedral = bare({ stars: 3, day: 83 });
     building(cathedral, 6);
-    starGatesOf(cathedral).cathedralPlaced = true;
-    assert(!tryStartFire(cathedral), 'no fire while a cathedral evaluation is on');
+    assert(placeCathedral(cathedral, { floor: CATHEDRAL_BASE_FLOOR, left: 0 }, () => createSimTripRecord()).ok, 'fixture: a cathedral');
+    assert(!tryStartFire(cathedral) && cathedral.events.fire === null, 'no fire while a cathedral evaluation site stands');
     const late = bare({ stars: 3, day: 83, tick: 1700 });
     building(late, 6);
     assert(!tryStartFire(late), 'and none after the morning period (daypart >= 4)');
@@ -749,7 +757,9 @@ export const tests = {
     assert(r.blocker === 'the VIP already approved of the tower', 'and no more VIPs: ' + r.blocker);
     const outcomes = r.history.map((h) => h.outcome);
     same(outcomes, ['booked', 'arrived', 'in the suite', 'comfortable'], 'the visit, in order');
-    const texts = demandsOf(t).notices.map((n) => n.text);
+    // The notice log holds 40 lines and a 12-day tower raises more than that (the office-service
+    // inspector, issue #17, adds two on day 3), so the words are read from the first three days.
+    const texts = demandsOf(vipTrial({ lift: 'good', days: 3 }).world.tower).notices.map((n) => n.text);
     assert(texts.includes('A VIP has arrived at your Tower.') && texts.includes('The VIP has checked out. They seem to have had a comfortable stay!'), 'the original\'s lines');
     // The ladder no longer excuses this gate: the writer exists.
     assert(!('vipStayFavorable' in GATES_WITHOUT_A_WRITER), 'the no-writer table lost the VIP');
@@ -986,7 +996,7 @@ export const tests = {
   },
 
   'the shape: one tower field, one family, one action, one save version'() {
-    assert(SAVE_VERSION === 10, 'save v10: ' + SAVE_VERSION);
+    assert(SAVE_VERSION >= 10, 'save v10 or later (issue #17 is v11): ' + SAVE_VERSION);
     const t = bare();
     const e = eventsOf(t);
     for (const key of ['bombActive', 'fireActive', 'decision', 'bomb', 'fire', 'vip', 'vipActorId', 'lastVip', 'scars', 'blast', 'dug', 'history']) {
