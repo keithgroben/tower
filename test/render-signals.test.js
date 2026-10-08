@@ -115,6 +115,9 @@ export const tests = {
       hotelSingle: '',
       hotelTwin: '',
       hotelSuite: '',
+      // Housekeeping is a service: it is not let, sold or booked, and it is never
+      // vacant — it has staff, not tenants — so it carries no sign.
+      housekeeping: '',
     };
     const tower = createTower({ seed: 1 });
     let left = 0;

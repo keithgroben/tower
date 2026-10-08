@@ -29,7 +29,7 @@
  * **its** refusal, so a disagreement surfaces as a visible sentence rather than
  * as a ghost that lied.
  */
-import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, hasTenant, linkObstruction, lobbyFloorReason, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
+import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, demolishRefusal, linkObstruction, lobbyFloorReason, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
 import { lockReason } from '../sim/progression.js';
 import {
   carCostForMode, chargeConstruction, payout, placementCost, CONSTRUCTION_COST, TYPE_CODES,
@@ -328,8 +328,10 @@ export function preview(world, tool, target) {
     const o = target.object;
     const footprint = { kind: 'room', floor: o.floor, left: o.left, right: o.right };
     // The sim's own predicate, not a second reading of `unitStatus` — a shop is
-    // in the open band from the moment it is placed and has no tenant to evict.
-    if (hasTenant(o)) return refuse('that unit is let — you cannot evict a tenant', { cost: 0, footprint });
+    // in the open band from the moment it is placed and has no tenant to evict,
+    // and housekeeping and the lobby cannot be removed at all.
+    const refusal = demolishRefusal(o);
+    if (refusal) return refuse(refusal, { cost: 0, footprint });
     return { ok: true, cost: 0, footprint, command };
   }
 

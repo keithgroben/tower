@@ -9,8 +9,8 @@
  *   - the stay is paid AT CHECKOUT, to the tower's own cash, exactly once;
  *   - a hotel the lifts cannot reach never fills;
  *   - a guest who cannot get to the lobby does not pay;
- *   - and a cleaned room takes a guest again, on a weekend too — the contract
- *     issue #9 (housekeeping) is going to build on.
+ *   - and a cleaned room takes a guest again, on a weekend too — cleaned, since
+ *     issue #9, by real housekeeping staff that walk there.
  *
  * Everything above them is the machinery that makes those true. Two habits from
  * `CLAUDE.md`'s failure list are deliberate: the band tests state what the
@@ -123,7 +123,7 @@ function stubCtx(codes, extra = {}) {
 // ------------------------------------------------------------ world fixtures
 
 /** A star-3 tower with one lift to F6 and the given rooms. Nothing else. */
-function hotelWorld({ rooms = [], top = 6, stars = 3, cars = 1 } = {}) {
+function hotelWorld({ rooms = [], top = 6, stars = 3, cars = 1, housekeeping = 0 } = {}) {
   const world = newTowerWorld({ seed: 1, cash: 50_000_000 });
   const { tower } = world;
   tower.starCount = stars;
@@ -135,9 +135,21 @@ function hotelWorld({ rooms = [], top = 6, stars = 3, cars = 1 } = {}) {
     assert(r.ok, `${what} on F${floor} @${left} would not build: ${r.reason}`);
     return r.object;
   });
+  // Housekeeping needs a way up that is not the guests' lift: a service elevator.
+  // The facilities go on F1, beside the guest lift and clear of the rooms.
+  const staff = [];
+  if (housekeeping) {
+    const service = applyAction(world, { type: 'build_shaft', kind: 'service', bottom: 0, top, column: 52 });
+    assert(service.ok, 'the service lift would not build: ' + service.reason);
+    for (let i = 0; i < housekeeping; i++) {
+      const r = applyAction(world, { type: 'build', what: 'housekeeping', floor: 1, left: 60 + i * 16 });
+      assert(r.ok, 'housekeeping would not build: ' + r.reason);
+      staff.push(r.object);
+    }
+  }
   rebuildRouteTables(tower);
   tower.routeTablesDirty = false;
-  return { world, tower, built, driver: makeDriver(world) };
+  return { world, tower, built, staff, driver: makeDriver(world) };
 }
 
 const SIX_ROOMS = [
@@ -652,7 +664,7 @@ export const tests = {
     assert(twin.object.unitStatus === 9, 'a twin with ONE guest in must not be rewritten to a count of 2');
   },
 
-  '⚠️ checkout leaves the room DIRTY: the turnover band, the latch cleared, a flag issue #9 can read'() {
+  '⚠️ checkout leaves the room DIRTY: the turnover band, the latch cleared, a flag housekeeping reads'() {
     for (const [daypart, band] of [[0, 0x28], [3, 0x28], [4, 0x30], [6, 0x30]]) {
       const { tower, object } = towerWithRoom('hotelSuite', { daypart });
       object.unitStatus = 3; object.occupiedFlag = true; object.activationTickCount = 5;
@@ -1246,15 +1258,17 @@ export const tests = {
     assert(tower.cash - before === expected, `the stays paid ${tower.cash - before}, wanted ${expected}`);
   },
 
-  '⚠️ THE CONTRACT FOR HOUSEKEEPING: a room written back to the vacant band takes a guest the next evening — weekdays AND the weekend'() {
-    // Issue #9 will own cleaning. What it can rely on is this: checkout leaves
-    // the turnover band; writing the room back to the vacant band is all it takes;
-    // and the 1600 sweep re-latches it. The test plays housekeeper from outside
-    // the sim, in the morning, and asserts a stay every night of a quarter —
-    // days 0 and 1 are weekdays and day 2 is the weekend (calendarPhase).
-    const { world, tower, built, driver } = hotelWorld({ rooms: SIX_ROOMS });
+  '⚠️ housekeeping CLEANS: with a housekeeping facility every room takes a guest every night — weekdays AND the weekend'() {
+    // Issue #8 left a contract here: checkout leaves the turnover band, writing the
+    // room back to the vacant band is all it takes, and the 1600 sweep re-latches
+    // it. This used to play housekeeper from outside the sim; now the sim does it.
+    // Six rooms on two floors, one housekeeping facility on F1 and a service
+    // elevator to carry the staff up — and nothing in this test writes a room's
+    // band. Days 0 and 1 are weekdays and day 2 is the weekend (calendarPhase).
+    const { world, tower, built, driver } = hotelWorld({ rooms: SIX_ROOMS, housekeeping: 1 });
     const stays = new Map();                                  // day counter -> check-ins that evening
     const wasBooked = new Map(built.map((o) => [o.id, false]));
+    const wasDirty = new Map(built.map((o) => [o.id, false]));
     const dayTypes = new Map();
     let cleaned = 0;
 
@@ -1266,11 +1280,9 @@ export const tests = {
           dayTypes.set(dayCounter, tower.clock.calendarPhase ? 'weekend' : 'weekday');
         }
         wasBooked.set(o.id, now);
-        // The housekeeper: mid-morning, any dirty room goes back on the market.
-        if (dayTick === 1000 && isHotelRoomDirty(o)) {
-          o.unitStatus = tower.clock.daypart < 4 ? HOTEL_UNIT_STATUS.vacantEarly : HOTEL_UNIT_STATUS.vacantLate;
-          cleaned++;
-        }
+        const dirty = isHotelRoomDirty(o);
+        if (wasDirty.get(o.id) && !dirty && !isHotelInfested(o)) cleaned++;
+        wasDirty.set(o.id, dirty);
       }
     });
 
@@ -1281,23 +1293,36 @@ export const tests = {
     }
     assert([...dayTypes.values()].includes('weekend') && [...dayTypes.values()].includes('weekday'),
       'the run covered both day types: ' + [...dayTypes.entries()].join(' '));
-    assert(cleaned >= built.length * 2, 'the stand-in housekeeper cleaned ' + cleaned + ' rooms');
+    assert(cleaned >= built.length * 2, 'the staff cleaned ' + cleaned + ' rooms');
+    assert(built.every((o) => !isHotelInfested(o)), 'and nothing was infested');
   },
 
-  '⚠️ WITHOUT housekeeping a room earns one stay and then stays dirty — the reference’s rule, and #9’s reason to exist'() {
+  '⚠️ WITHOUT housekeeping a room earns one stay, goes dirty, and three passes later is INFESTED — for good'() {
+    // The reference's rule (FACILITIES.md § occupied_flag: the latch is not set
+    // again above 0x27) and HOTEL.md § Cockroach Infestation. Day 0 is the night
+    // before anyone has left; the checkout is the morning of day 1, so the three
+    // 1600 passes that give a strike fall on days 1, 2 and 3.
     const { world, tower, built, driver } = hotelWorld({ rooms: SIX_ROOMS });
     let checkIns = 0;
     const was = new Map(built.map((o) => [o.id, false]));
-    run(world, driver, 5 * 2600, () => {
+    const at = {};
+    run(world, driver, 7 * 2600, (dayTick, dayCounter) => {
       for (const o of built) {
         const now = isHotelBooked(o);
         if (now && !was.get(o.id)) checkIns++;
         was.set(o.id, now);
       }
+      if (dayTick === 1500) {
+        at[dayCounter] = built.filter(isHotelRoomDirty).length + '/' + built.filter(isHotelInfested).length;
+      }
     });
-    assert(checkIns === built.length, `${checkIns} check-ins over five nights, wanted exactly one per room (${built.length})`);
-    assert(built.every(isHotelRoomDirty), 'every room is dirty');
-    assert(built.every((o) => o.occupiedFlag === false), 'and shut: the latch is not set again above 0x27');
+    assert(checkIns === built.length, `${checkIns} check-ins over seven nights, wanted exactly one per room (${built.length})`);
+    assert(at[1] === `${built.length}/0` && at[2] === `${built.length}/0` && at[3] === `${built.length}/0`,
+      'dirty/infested at tick 1500 on days 1..3 (before each pass): ' + JSON.stringify(at));
+    assert(at[4] === `0/${built.length}` && at[6] === `0/${built.length}`,
+      'infested after the third pass, and for ever: ' + JSON.stringify(at));
+    assert(built.every(isHotelInfested), 'every room is infested');
+    assert(built.every((o) => o.occupiedFlag === false), 'and shut');
   },
 
   'one tower, three stars, seeded offices beside the rooms: the noise rule bites the hotel, not the office'() {

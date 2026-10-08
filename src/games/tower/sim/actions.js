@@ -17,8 +17,8 @@
  * `check_construction_funds_available_for_floor_range`.
  */
 import {
-  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR, floorExists, isSkyLobbyFloor, isUnitLet,
-  placeObject, spanBlocked,
+  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR, floorExists, isSkyLobbyFloor,
+  isStaffFamily, isUnitLet, placeObject, spanBlocked,
 } from './state.js';
 import {
   CARRIER_MODE, MAX_SERVED_SPAN, SCHEDULE_SLOTS, SHAFT_WIDTH, addCar, carrierSlotIndex, createCarrier,
@@ -30,6 +30,7 @@ import { MAX_SEGMENTS, createSegment, segmentTopFloor } from './routing.js';
 import { createSimTripRecord } from './stress.js';
 import { FAST_FOOD_WIDTH, finalizeCommercialVenue } from './commercial.js';
 import { HOTEL_WIDTH } from './hotel.js';
+import { HOUSEKEEPING_WIDTH } from './housekeeping.js';
 
 /**
  * What each buildable maps to. The palette is built from this, so it cannot
@@ -124,6 +125,29 @@ export const BUILDABLE = {
     cost: 'hotelSuite',
     width: HOTEL_WIDTH.hotelSuite,
     label: 'Hotel Suite',
+    aboveGrade: true,
+  },
+
+  /**
+   * **Housekeeping**: six staff who clean the rooms guests have left. Two stars,
+   * $50,000 and $10,000 a quarter (`specs/ECONOMY.md`), and it **cannot be
+   * bulldozed** — see {@link demolishRefusal}. `sim/housekeeping.js` has the
+   * whole account of what the staff do; they walk by stairs and service
+   * elevators, so the facility is only as useful as the route from it to the
+   * rooms.
+   *
+   * `aboveGrade`: the reference implementation's underground list (support,
+   * transport, parking, recycling, a few public facilities) does not include
+   * housekeeping, so it is built above the ground floor like the rooms it
+   * serves. TODO(parity): no spec file states this; `spec/DEVIATIONS.md` A33.
+   * The width is the implementation's unscaled 15 for the same reason (A26).
+   */
+  housekeeping: {
+    family: FAMILY.housekeeping,
+    type: OBJECT_TYPE.housekeeping,
+    cost: 'housekeeping',
+    width: HOUSEKEEPING_WIDTH,
+    label: 'Housekeeping',
     aboveGrade: true,
   },
 };
@@ -637,10 +661,8 @@ const ACTIONS = {
   demolish({ tower }, { objectId }) {
     const object = tower.objects.get(objectId);
     if (!object) return refuse('nothing there');
-    // "Lobbies ... cannot be removed" (help file; the original's message is
-    // "Cannot destroy this item"). It also keeps `transferFloors` honest.
-    if (object.family === FAMILY.lobby) return refuse('lobbies cannot be removed');
-    if (hasTenant(object)) return refuse('that unit is let — you cannot evict a tenant');
+    const refusal = demolishRefusal(object);
+    if (refusal) return refuse(refusal);
 
     tower.objects.delete(objectId);
     tower.actors = tower.actors.filter((a) => a.objectId !== objectId);
@@ -696,7 +718,31 @@ const nextCarrierId = (tower) =>
  * which is what makes one definition mandatory rather than tidy.
  */
 export const hasTenant = (object) =>
-  !COMMERCIAL_FAMILY_CODES.has(object.family) && isUnitLet(object);
+  !COMMERCIAL_FAMILY_CODES.has(object.family) && !isStaffFamily(object.family) && isUnitLet(object);
+
+/**
+ * Why this object cannot be demolished, or `null`. **The one definition** — the
+ * seam asks it and so does the ghost, so the two cannot word a refusal
+ * differently or disagree about whether one applies.
+ *
+ *  - *"Lobbies ... cannot be removed"* (help file; the original's message is
+ *    "Cannot destroy this item"). It also keeps `transferFloors` honest.
+ *  - **Housekeeping cannot be bulldozed**: the help file and the readme both list
+ *    *"Lobbies, housekeeping, security, recycling, the metro and the cathedral"*
+ *    as unremovable (`SimTower-gameplay-analysis.md`). It is not "let" — it has no
+ *    tenant — so `hasTenant` would answer no and the wrong reason would be given;
+ *    its staff are not tenants either, which is why `hasTenant` excludes them.
+ *  - a let unit: you drop the rent or you fix the lifts, you do not evict.
+ *
+ * An infested hotel room is none of these, which is the point of it: *"the only
+ * cure is destroying the room"*.
+ */
+export function demolishRefusal(object) {
+  if (object.family === FAMILY.lobby) return 'lobbies cannot be removed';
+  if (object.family === FAMILY.housekeeping) return 'housekeeping cannot be bulldozed';
+  if (hasTenant(object)) return 'that unit is let — you cannot evict a tenant';
+  return null;
+}
 
 /**
  * The seam. `world` is `{ tower, ledger }` — both, because building costs

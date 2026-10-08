@@ -1,0 +1,15 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "dirty": {
+      "col": 0,
+      "frames": 1
+    },
+    "infested": {
+      "col": 1,
+      "frames": 2,
+      "speed": "idle"
+    }
+  }
+}

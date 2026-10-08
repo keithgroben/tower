@@ -125,6 +125,21 @@ function towerWithEverything() {
     actor.accumulatedElapsed = 300;      // the clamp: red band
   }
 
+  // Housekeeping (issue #9): the facility itself, a room that has been checked
+  // out of and not cleaned (the mess), a room the cockroaches have taken (the
+  // swarm), and two of the six staff — one waiting for a service lift, one mopping
+  // the dirty room. On the hotel floor and the floor above it, clear of the rooms.
+  const dirtyRoom = place(tower, { family: FAMILY.hotelSingle, floor: HOTEL_FLOOR, left: 80, right: 83 }, trips);
+  const lostRoom = place(tower, { family: FAMILY.hotelSingle, floor: HOTEL_FLOOR, left: 84, right: 87 }, trips);
+  dirtyRoom.unitStatus = 0x28;
+  lostRoom.unitStatus = 0x38;
+  const station = place(tower, { family: FAMILY.housekeeping, floor: HOTEL_FLOOR + 1, left: 54, right: 68 }, trips);
+  const [queued, mopping] = tower.actors.filter((a) => a.objectId === station.id);
+  queued.waitingFloor = HOTEL_FLOOR + 1;         // standing at the lift, a calm figure
+  mopping.state = 2;                             // HK_STATE.rest: in the room, tidying
+  mopping.targetRoomId = dirtyRoom.id;
+  mopping.targetFloor = HOTEL_FLOOR;
+
   // An express shaft beside the standard one. Nothing places one in the game
   // yet, but the sheets are delivered and the carrier model supports it.
   const express = createCarrier({
@@ -360,6 +375,11 @@ export const tests = {
       'a guest in the bed': 'hotel/booked-day',
       'an empty, ready hotel room': 'room-empty/hotel',
       'a guest with a suitcase': 'person-guest/luggage',
+      'the housekeeping facility': 'housekeeping/day',
+      'a room left dirty': 'room-status/dirty',
+      'a room the cockroaches have taken': 'room-status/infested',
+      'a housekeeper at a room': 'person-staff/clean',
+      'a housekeeper waiting for a lift': 'person-staff/stand',
       'somebody waiting, fed up': 'person-worker/wait-annoyed',
       'somebody waiting, calm': 'person-worker/stand',
       'a lift car with its doors open': 'elevator-car/open',
