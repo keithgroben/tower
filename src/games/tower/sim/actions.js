@@ -25,7 +25,7 @@ import {
   isExpressStopFloor, resizeCarrierSlots,
 } from './elevators.js';
 import {
-  CONSTRUCTION_COST, carCostForMode, chargeConstruction, floorConstructionCost, placementCost,
+  CONSTRUCTION_COST, carCostForMode, chargeConstruction, floorConstructionCost, placementCost, refundConstruction,
 } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
 import { MAX_SEGMENTS, createSegment, segmentTopFloor } from './routing.js';
@@ -38,6 +38,7 @@ import {
   filmChangeReason, filmTitle, isEntertainmentFamily, placeEntertainment, primaryOf,
 } from './entertainment.js';
 import { HOTEL_WIDTH } from './hotel.js';
+import { rentRefusal } from './facility.js';
 import { HOUSEKEEPING_WIDTH } from './housekeeping.js';
 import { GUARD_STATE, SECURITY_WIDTH, securityObstruction } from './security.js';
 import { MEDICAL_WIDTH, finalizeMedicalCenter, medicalObstruction } from './medical.js';
@@ -692,7 +693,7 @@ const ACTIONS = {
     if (blocked) return refuse(blocked);
 
     const cost = buildCost(tower, spec, floor);
-    const paid = chargeConstruction(ledger, cost);
+    const paid = chargeConstruction(ledger, cost, { bucket: 'construction' });
     if (!paid.charged) {
       return refuse('that costs $' + cost.toLocaleString('en-US')
         + ' and you have $' + ledger.cash.toLocaleString('en-US'));
@@ -711,7 +712,7 @@ const ACTIONS = {
         () => createSimTripRecord(),
         spec.finalize);
     if (!placed.ok) {
-      ledger.cash += paid.cost;                       // nothing was built; refund
+      refundConstruction(ledger, paid.cost);          // nothing was built; refund
       return placed;
     }
     // Latch any star gate this placement satisfies, now rather than at the next
@@ -750,7 +751,7 @@ const ACTIONS = {
     if (blocked) return refuse(blocked);
 
     const cost = CONSTRUCTION_COST[spec.cost] ?? 0;
-    const paid = chargeConstruction(ledger, cost);
+    const paid = chargeConstruction(ledger, cost, { bucket: 'construction' });
     if (!paid.charged) {
       return refuse('that costs $' + cost.toLocaleString('en-US')
         + ' and you have $' + ledger.cash.toLocaleString('en-US'));
@@ -762,7 +763,7 @@ const ACTIONS = {
         id: nextCarrierId(tower), mode: spec.mode, bottomFloor: bottom, topFloor: top, column,
       });
     } catch (error) {
-      ledger.cash += paid.cost;
+      refundConstruction(ledger, paid.cost);
       return refuse(error.message);
     }
     addCar(carrier);                                  // a shaft with no car is a hole
@@ -834,7 +835,7 @@ const ACTIONS = {
     if (stopped) return refuse(stopped);
 
     const cost = CONSTRUCTION_COST[spec.cost];
-    const paid = chargeConstruction(ledger, cost);
+    const paid = chargeConstruction(ledger, cost, { bucket: 'construction' });
     if (!paid.charged) {
       return refuse('that costs $' + cost.toLocaleString('en-US')
         + ' and you have $' + ledger.cash.toLocaleString('en-US'));
@@ -934,14 +935,14 @@ const ACTIONS = {
     const carrier = tower.carriers.find((c) => c.id === carrierId);
     if (!carrier) return refuse('no such shaft');
     const cost = carCostForMode(carrier.mode);
-    const paid = chargeConstruction(ledger, cost);
+    const paid = chargeConstruction(ledger, cost, { bucket: 'construction' });
     if (!paid.charged) {
       return refuse('a car costs $' + cost.toLocaleString('en-US')
         + ' and you have $' + ledger.cash.toLocaleString('en-US'));
     }
     const car = addCar(carrier);
     if (!car) {
-      ledger.cash += paid.cost;
+      refundConstruction(ledger, paid.cost);
       return refuse('that shaft is full — ' + carrier.cars.length + ' cars is the limit');
     }
     return { ok: true, cost, cars: carrier.cars.length };
@@ -1007,7 +1008,7 @@ const ACTIONS = {
     if (why) return refuse(why);
 
     const cost = FILM_PRICE[pool];
-    const paid = chargeConstruction(ledger, cost);
+    const paid = chargeConstruction(ledger, cost, { bucket: 'films' });
     if (!paid.charged) {
       return refuse('a ' + (pool === 'new' ? 'new release' : 'classic') + ' costs $' + cost.toLocaleString('en-US')
         + ' and you have $' + ledger.cash.toLocaleString('en-US'));
@@ -1040,9 +1041,13 @@ const ACTIONS = {
     // price**, and a condo's sale price is settled at the sale: without this a
     // player could sell at $40,000, re-tier to $200,000, and be refunded five
     // times what they were paid.
-    if (object.family === FAMILY.condo && isUnitLet(object)) {
-      return refuse('that condo is sold — you can only price one that is still for sale');
-    }
+    //
+    // Issue #18: and only the six priced families have a tier at all (`ECONOMY.md`: *"4: no payout
+    // / unpriced sentinel - set for all non-priced families"*). `rentRefusal` is the one definition,
+    // asked by this seam, the build ghost and the Facility window, so a cathedral or a security
+    // office is never offered - or given - a rent.
+    const why = rentRefusal(object);
+    if (why) return refuse(why);
     object.rentLevel = tier;
     object.dirty = true;
     return { ok: true, tier };

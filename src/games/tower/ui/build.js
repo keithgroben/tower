@@ -31,6 +31,7 @@
  */
 import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, buildCost, demolishRefusal, gradeReason, linkObstruction, lobbyFloorReason, placementObstruction, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
 import { lockReason } from '../sim/progression.js';
+import { rentRefusal } from '../sim/facility.js';
 import {
   carCostForMode, chargeConstruction, payout, CONSTRUCTION_COST, TYPE_CODES,
 } from '../sim/economy.js';
@@ -316,6 +317,9 @@ export function preview(world, tool, target) {
   if (command.type === 'set_rent') {
     const o = target.object;
     const footprint = { kind: 'room', floor: o.floor, left: o.left, right: o.right };
+    // The seam's own refusal (`sim/facility.js` `rentRefusal`): not rentable, or a sold condo.
+    const why = rentRefusal(o);
+    if (why) return refuse(why, { cost: 0, footprint });
     const rent = payout(RENT_KEY[o.type ?? o.family], command.tier);
     if (!rent) return refuse('that room does not pay rent', { cost: 0, footprint });
     return {
