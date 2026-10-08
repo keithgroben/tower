@@ -162,6 +162,34 @@ export function starGlyph(star, max = MAX_STAR) {
   return '★'.repeat(filled) + '☆'.repeat(max - filled);
 }
 
+/** How long a star rise stays on the line under the tower: long enough to be read twice. */
+export const STAR_RISE_MS = 7000;
+
+/**
+ * Which of a frame's new notices the line under the tower says, and how (issue #14).
+ *
+ * A frame can carry several; the line holds one. A star rise outranks a complaint -
+ * *"The tower has reached 3 stars"* must not be swallowed by a parking notice posted the
+ * same tick - and is drawn as good news and held longer. Otherwise the newest wins, as
+ * it always did. `rise` tells the caller to pulse the stars.
+ *
+ * @param {{text:string, good?:boolean}[]} fresh notices posted since the last look
+ * @returns {{text:string, ok:boolean, ms:number|null, rise:boolean}|null}
+ */
+export function noticeToSay(fresh) {
+  if (!fresh || fresh.length === 0) return null;
+  const rise = fresh.find((n) => n.good) ?? null;
+  const shown = rise ?? fresh[fresh.length - 1];
+  return { text: shown.text, ok: Boolean(rise), ms: rise ? STAR_RISE_MS : null, rise: Boolean(rise) };
+}
+
+/** The tooltip on the stars: the population the ladder counted, and what it left out. */
+export function starTitle(status) {
+  if (!status) return '';
+  return 'population ' + grouped(status.activity)
+    + (status.hotelsCounted === false ? ' (hotel guests no longer count toward stars)' : '');
+}
+
 /** `1,000`. The population the bar quotes is a figure a player compares, so it is grouped. */
 const grouped = (n) => Math.round(n).toLocaleString('en-US');
 
