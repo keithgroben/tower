@@ -38,6 +38,7 @@ import { refreshStartOfDayGates, tryAdvanceStar } from '../sim/progression.js';
 import { CLOSURE_TICK, REBUILD_TICK, RESTAURANT_CLOSURE_TICK } from '../sim/commercial.js';
 import { RECYCLING_CHECK, updateRecyclingState } from '../sim/recycling.js';
 import { rebuildParkingCoverage } from '../sim/parking.js';
+import { metroTrainTick } from '../sim/metro.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -180,6 +181,11 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
       [LEDGER_CHECKPOINT_TICK]: (t) => runTowerLedgerCheckpoint(t),
     },
     families,
+    // `specs/TIME.md` step 5, the second of the two early hooks: the metro's train
+    // (`sim/metro.js`, `METRO.md` § Per-Tick Special-Visitor Toggle). The scheduler
+    // holds the `day_tick > 240` and `daypart < 4` guards; the rest, and the roll, are
+    // the function's - and a tower with no station draws nothing.
+    vip: metroTrainTick,
     carriers: (t) => tickCarriers(t.carriers, t.clock, carrierContext),
     // The only thing in the game that says you are winning. Every tick, because
     // two of its gates are time windows — see `sim/scheduler.js` step 9.

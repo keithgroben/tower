@@ -47,6 +47,7 @@ import {
   parkingSpaceObstruction, rebuildParkingCoverage,
 } from './parking.js';
 import { clearDemand } from './demands.js';
+import { METRO_FLOORS, METRO_WIDTH, belowMetroReason, metroObstruction, placeMetro } from './metro.js';
 
 /**
  * What each buildable maps to. The palette is built from this, so it cannot
@@ -311,6 +312,28 @@ BUILDABLE.parkingRamp = {
 };
 
 /**
+ * **The metro station** (issue #15): four stars, $1,000,000 and $100,000 a pass
+ * (`specs/ECONOMY.md`; the original's own build menu prints *"Metro Station -
+ * $1000000"*, `spec/DEVIATIONS.md` A7), underground only, **one to a tower**, never
+ * bulldozed, and nothing may be built under it. A three-floor stack, so `floor` is its
+ * LOWEST floor and the grade rule is `gradeReason`'s: all three floors below ground.
+ * `sim/metro.js` has the whole account, and what its commuters do.
+ *
+ * The key is the construction-cost name, which is how the star bar tells *"go and
+ * build this"* from *"nothing builds one yet"* (`isBuildable` in `ui/main.js`).
+ */
+BUILDABLE.metroStation = {
+  family: FAMILY.metro,
+  type: OBJECT_TYPE.metroTop,
+  cost: 'metroStation',
+  width: METRO_WIDTH,
+  label: 'Metro Station',
+  belowGrade: true,
+  floors: METRO_FLOORS,
+  metro: true,
+};
+
+/**
  * Why this buildable cannot go on this floor, or null: the grade rule, for the
  * seam and the ghost alike. `aboveGrade` is `specs/COMMANDS.md`'s "must be above
  * grade (`floor > 0`)"; `belowGrade` is its "basement-only" (`floor < 0`). One
@@ -339,6 +362,12 @@ export function gradeReason(spec, floor) {
  * the 16-venue table.
  */
 export function placementObstruction(tower, spec, floor, left) {
+  // The metro is a stack of its own: one to a tower, and on the bottom floor.
+  if (spec.metro) return metroObstruction(tower, floor, left);
+  // *"Cannot place items under Metro"* (`specs/COMMANDS.md`, error `0x0e`): every other
+  // placement, whatever it is, whatever floors it stands on.
+  const under = belowMetroReason(tower, floor);
+  if (under) return under;
   if (spec.entertainment) return entertainmentObstruction(tower, spec.entertainment, floor, left);
   // A center is two floors, and every one after the first has to stand beside one.
   if (spec.recycling) return recyclingObstruction(tower, floor, left);
@@ -360,9 +389,14 @@ export function placementObstruction(tower, spec, floor, left) {
 /** What a build costs: the facility, plus the floor tiles of every floor it stands on. */
 export function buildCost(tower, spec, floor) {
   const base = placementCost(spec.cost, { tiles: spec.width, floor, lobbyHeight: tower.lobbyHeight });
-  return (spec.floors ?? 1) > 1
-    ? base + floorConstructionCost({ floor: floor + 1, tiles: spec.width, lobbyHeight: tower.lobbyHeight })
-    : base;
+  // Every further floor of a stack pays its own floor tiles (a theater has one more,
+  // the metro two; `METRO.md`: the binary's cost is `3 x 30 x YEN[0]` of tiles plus the
+  // per-object price, which is the `$1,000,000` here - A7).
+  let total = base;
+  for (let i = 1; i < (spec.floors ?? 1); i++) {
+    total += floorConstructionCost({ floor: floor + i, tiles: spec.width, lobbyHeight: tower.lobbyHeight });
+  }
+  return total;
 }
 
 /** Elevator kinds a player can place. */
@@ -468,6 +502,8 @@ export function linkObstruction(tower, { kind, floor, left }) {
   if (!Number.isInteger(floor) || !Number.isInteger(left)) return 'point at a floor';
   const box = linkFootprint({ floor, left });
   if (!floorExists(box.bottom) || !floorExists(box.top)) return 'that link leaves the tower';
+  const under = belowMetroReason(tower, box.bottom);
+  if (under) return under;
   if (box.left < 0 || box.right >= TILES_PER_FLOOR) return 'that link leaves the lot';
 
   for (const landing of [box.bottom, box.top]) {
@@ -532,6 +568,10 @@ export const SHAFT_SEPARATION = 8;
  * not have is a rule in two places. It has one now.
  */
 export function shaftObstruction(tower, spec, ignoreCarrierId = null) {
+  // `METRO.md` § Placement Gates: `extend_carrier_down` rejects *"`target_floor <
+  // g_metro_station_floor_index - 1`"*. A new shaft's bottom is the same question.
+  const under = belowMetroReason(tower, spec.bottom);
+  if (under) return under;
   const box = shaftClearance(spec);
   const columns = new Set();
   for (let c = box.left; c <= box.right; c++) columns.add(c);
@@ -633,7 +673,9 @@ const ACTIONS = {
       ? placeEntertainment(tower, { kind: spec.entertainment, floor, left }, () => createSimTripRecord())
       : spec.recycling
         ? placeRecycling(tower, { floor, left }, () => createSimTripRecord())
-        : placeObject(tower,
+        : spec.metro
+          ? placeMetro(tower, { floor, left }, () => createSimTripRecord())
+          : placeObject(tower,
         { family: spec.family, type: spec.type, floor, left, right, occupantState: spec.occupantState },
         () => createSimTripRecord(),
         spec.finalize);
@@ -1036,6 +1078,10 @@ export function demolishRefusal(object) {
   // cathedral can't be bulldozed"* (the same help-file list). A clinic, a parking space
   // and a ramp are not on it.
   if (object.family === FAMILY.recycling) return 'recycling centers cannot be bulldozed';
+  // Issue #15: the same list - *"Cathedral, Metro Station, Recycling centers"* (readme),
+  // *"they cannot be removed"* (help file); the original's message is "Cannot destroy
+  // this item". Any of the three floors: the stack stands whole or not at all.
+  if (object.family === FAMILY.metro) return 'the metro station cannot be bulldozed';
   if (hasTenant(object)) return 'that unit is let — you cannot evict a tenant';
   return null;
 }
