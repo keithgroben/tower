@@ -891,11 +891,14 @@ export function commercialFamilyHandler(ctx) {
   return function serviceVenueCustomer(tower, actor) {
     const object = tower.objects.get(actor.objectId);
     if (!object || !COMMERCIAL_FAMILIES.has(object.family)) return;
-    // A venue with no linked record is not a venue yet (`ui/seed.js` places its
-    // measurement-fixture shops that way, on purpose, and `state.js` counts them
-    // as nobody). Its customers do nothing — and, above all, draw no RNG, which
-    // would move every other number in a benchmark that must stay comparable.
-    if (!venueOf(object)) return;
+    // A SHOP with no linked record is not a shop yet: `ui/seed.js` places its four
+    // basement shops that way, on purpose (a measurement fixture, counted as
+    // nobody by `state.js`), and since issue #10 gave retail its 48 customers
+    // they would otherwise roll the gate's dice every stride - drawing RNG, and
+    // moving every other number in a benchmark that must stay comparable. (The
+    // seed's fast food is record-less too, and has always rolled them; changing
+    // that would move the benchmark just as surely, so it is left exactly alone.)
+    if (object.family === FAMILY.retail && !venueOf(object)) return;
 
     if (actor.state >= 0x40) {
       if (shouldWaitForQueuedCarrier(actor, tower.clock)) return;

@@ -26,7 +26,7 @@
 import {
   CAPACITY_CAPS, CLOSURE_PAYOUT, CLOSURE_TICK, RESTAURANT_CLOSURE_TICK, RESTAURANT_REBUILD_TICK,
   RESTAURANT_WIDTH, RETAIL_WIDTH, VENUE, VENUE_SIM_SLOTS, closeIdleRetailShop, closurePayout,
-  commercialDispatch, commercialGate, growVenueSeed, openRetailShop, placeCommercialVenue,
+  commercialDispatch, commercialFamilyHandler, commercialGate, growVenueSeed, openRetailShop, placeCommercialVenue,
   rebuildCommercialVenues, venueOf,
 } from '../src/games/tower/sim/commercial.js';
 import {
@@ -460,6 +460,23 @@ export const tests = {
     assert(arrived.moved, 'it arrived');
     assert(record.availability !== VENUE.dormant && arrivedSeen.opened === 1, 'the shop opened, once');
     assert(record.currentPopulation === 1, 'and the customer got a seat: the shop was opened BEFORE the slot was asked for');
+  },
+
+  'the seed shops with no linked record stay inert: no dice, so the benchmark does not move'() {
+    __resetIds();
+    const tower = createTower();
+    tower.clock = clockAt(1, { dayTick: 600 });
+    const placed = placeCommercialVenue(tower, { family: FAMILY.retail, floor: 2, left: 20, right: 31 },
+      () => createSimTripRecord());
+    const shop = placed.object;
+    delete shop.venue;                                   // ui/seed.js places its shops with no linked record
+    shop.occupiedFlag = true;
+    let draws = 0;
+    tower.rng = { chance: () => { draws++; return true; }, int: () => { draws++; return 0; }, next: () => { draws++; return 0; } };
+    const handler = commercialFamilyHandler(stubCtx(3));
+    for (const actor of tower.actors) { actor.state = 0x20; handler(tower, actor); }
+    assert(draws === 0, 'a record-less shop drew ' + draws + ' random numbers');
+    assert(tower.actors.every((a) => a.state === 0x20), 'and did nothing');
   },
 
   'the shop gate waits for the daily bootstrap, then trickles like fast food'() {
