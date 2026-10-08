@@ -31,7 +31,7 @@
  */
 import { BUILDABLE, SHAFT_KIND, hasTenant, shaftObstruction } from '../sim/actions.js';
 import {
-  chargeConstruction, payout, placementCost, CONSTRUCTION_COST, TYPE_CODES,
+  carCostForMode, chargeConstruction, payout, placementCost, CONSTRUCTION_COST, TYPE_CODES,
 } from '../sim/economy.js';
 
 /**
@@ -164,7 +164,7 @@ export function costOf(tower, command) {
     return placementCost(spec.cost, { tiles: spec.width, floor: command.floor, lobbyHeight: tower.lobbyHeight });
   }
   if (command.type === 'build_shaft') return CONSTRUCTION_COST[SHAFT_KIND[command.kind]?.cost] ?? 0;
-  if (command.type === 'add_car') return CONSTRUCTION_COST.elevatorStandard ?? 0;
+  if (command.type === 'add_car') return carCostForMode(tower.carriers.find((c) => c.id === command.carrierId)?.mode);
   return 0;
 }
 

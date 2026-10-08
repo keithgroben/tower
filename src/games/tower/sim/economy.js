@@ -188,13 +188,12 @@ export const TYPE_CODES = {
  * One-time construction cost in dollars, `specs/ECONOMY.md` § Construction
  * Costs. The spec's table is in cash units; these are × $100.
  *
- * TODO(parity): `metroStation` is `10000` units = $1,000,000 in that table, but
- * `specs/facility/METRO.md` derives the metro stack's actual charge as
- * `3 x 30 x YEN[0]` = $45,000 with a per-object cost of *zero* for
- * `0x1f/0x20/0x21`, and the reference implementation ships $45,000. $1,000,000
- * is suspiciously the metro's $100,000 *operating* expense times ten. Kept as
- * the table states it; the metro stack's real charge is a placement question,
- * not this table's.
+ * `metroStation` is `10000` units = **$1,000,000**. That is also what the
+ * original's own build menu prints (*"Metro Station - $1000000"*, string list
+ * 32518/1009 in `SIMTOWER.EXE`) and what its help file says, so DEVIATIONS A7
+ * (which had settled on `METRO.md`'s derived $45,000) is reversed: the price a
+ * player is shown is the price the game charges. `METRO.md`'s $45,000 is the
+ * floor-tile part of the placement, not the facility price.
  *
  * TODO(parity): the reference implementation prices all three shaft modes at a
  * flat $200,000, contradicting its own table (0x01 $200,000 / 0x2a $400,000 /
@@ -228,6 +227,24 @@ export const CONSTRUCTION_COST = {
   elevatorService: 100_000,
   parkingRamp: 50_000,
 };
+
+/**
+ * What one **extra car** costs, by carrier mode name. The shaft prices above
+ * are the *shaft*; a car is a separate, cheaper purchase. The original's own
+ * build-menu strings say so: *"Standard Elevator - $200000/Shaft $80000/Car"*,
+ * *"Express Elevator - $400000/Shaft $150000/Car"*,
+ * *"Service Elevator - $100000/Shaft $50000/Car"* (`SIMTOWER.EXE`, string list
+ * 32518/1009). Until this table existed `add_car` charged the SHAFT price, so a
+ * second car cost $200,000 instead of $80,000. Recorded as DEVIATIONS A6.
+ */
+export const CAR_COST = {
+  standard: 80_000,
+  express: 150_000,
+  service: 50_000,
+};
+
+/** The price of one more car for a carrier whose `mode` is a `CARRIER_MODE` number. */
+export const carCostForMode = (mode) => CAR_COST[['express', 'standard', 'service'][mode] ?? 'standard'];
 
 /**
  * Per-tile rate charged on the upper floors of a multi-floor lobby, before the
