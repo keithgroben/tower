@@ -10,7 +10,7 @@
  */
 import {
   DAY_ADVANCE_TICK, DAYPART_LABELS, NEW_GAME_TICK, TICKS_PER_DAY,
-  advanceClock, calendarPhaseFlag, clockTime, createClock, daypartOf, formatClock, isEvening,
+  advanceClock, calendarOf, calendarPhaseFlag, dayTypeOf, clockTime, createClock, daypartOf, formatClock, isEvening,
 } from '../src/games/tower/sim/clock.js';
 import { INITIAL_STATE, RAND_MAX, makeRng } from '../src/games/tower/sim/rng.js';
 
@@ -132,12 +132,25 @@ export const tests = {
     assert(clock.dayTick === 0, 'tick ended at ' + clock.dayTick);
   },
 
-  'the calendar phase flag is two days in every twelve'() {
+  'the calendar phase flag is the weekend: days 2, 5, 8 and 11 of the 12-day year'() {
     // ((day_counter % 12) % 3) >= 2 — a rhythm that blocks some dispatch gates.
     const set = [];
     for (let day = 0; day < 12; day++) if (calendarPhaseFlag(day)) set.push(day);
     assert(JSON.stringify(set) === JSON.stringify([2, 5, 8, 11]),
       'the calendar phase fires on days ' + set.join(',') + ', expected 2,5,8,11');
+  },
+
+  'a quarter is two weekdays and a weekend, and a year is four quarters (issue #4)'() {
+    // The manual: "A SimTower Quarter has two week-days and one week-end"; 12-day year.
+    const types = Array.from({ length: 12 }, (_, d) => dayTypeOf(d)[4] === 'd' ? 'D' : 'E').join('');
+    assert(types === 'DDEDDEDDEDDE', 'weekday/weekend pattern is ' + types);
+    assert(JSON.stringify(calendarOf(0)) === JSON.stringify({ year: 1, quarter: 1, dayInQuarter: 0, type: 'weekday' }), 'day 0');
+    const d5 = calendarOf(5);
+    assert(d5.year === 1 && d5.quarter === 2 && d5.dayInQuarter === 2 && d5.type === 'weekend', 'day 5: ' + JSON.stringify(d5));
+    const d12 = calendarOf(12);
+    assert(d12.year === 2 && d12.quarter === 1 && d12.type === 'weekday', 'day 12 opens year 2: ' + JSON.stringify(d12));
+    // The wrap at 11988 starts a fresh cycle, as TIME.md says.
+    assert(calendarOf(11987).type === 'weekend' && calendarOf(0).type === 'weekday', 'the wrap restarts the cycle');
   },
 
   'a new game starts at night, on the expense checkpoint'() {

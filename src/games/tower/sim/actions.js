@@ -177,7 +177,7 @@ const describeObstruction = (tower, box) => {
   const floor = first.floor < 0 ? 'B' + (-first.floor) : String(first.floor);
   const more = n > 1 ? ' (and ' + (n - 1) + ' more)' : '';
   return 'the lift needs tiles ' + box.left + '–' + box.right + ' from floor ' + box.bottom
-    + ' to ' + box.top + ', and a ' + kind + ' on floor ' + floor + ' is in them' + more;
+    + ' to ' + box.top + ', and ' + (/^[aeiou]/.test(kind) ? 'an ' : 'a ') + kind + ' on floor ' + floor + ' is in them' + more;
 };
 
 
