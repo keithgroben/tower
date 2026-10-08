@@ -77,6 +77,19 @@ export const OBJECT_TYPE = {
   retail: 10,
   fastFood: 0x0c,
   housekeeping: 0x0f,
+  /**
+   * The two entertainment venues are TWO-FLOOR facilities, and each floor is its
+   * own placed object (`specs/facility/ENTERTAINMENT.md` § Placed-Object Types:
+   * *"Adjacent type codes denote upper and lower halves, base type = upper,
+   * base+1 = lower"*). The movie theater is `0x12` over `0x13`, the party hall
+   * `0x1d` over `0x1e`. (The theater's internal stairway split, `0x22` / `0x23`,
+   * is a reference artefact of its object table and is not modelled: the
+   * facility is one box per floor here. `spec/DEVIATIONS.md` A41.)
+   */
+  theaterUpper: 0x12,
+  theaterLower: 0x13,
+  partyHallUpper: 0x1d,
+  partyHallLower: 0x1e,
 };
 
 export const FAMILY = {
@@ -118,6 +131,14 @@ export const FAMILY = {
    * staff carry the same code, as the guests of a hotel room do.
    */
   housekeeping: 0x0f,
+  /**
+   * The audience of a movie theater (`0x12`) and the guests of a party hall
+   * (`0x1d`). Both halves of a facility carry its family; the half is the
+   * placed `type`. Their actors are the venue's *visitors*, exactly as a
+   * restaurant's 48 are its customers - see `sim/entertainment.js`.
+   */
+  theater: 0x12,
+  partyHall: 0x1d,
 };
 
 /** Families whose actors are **staff**: they work the tower, they do not live in it. */
@@ -162,6 +183,16 @@ export const OCCUPANTS = {
   // game's own manual ("6 staff") agree. They are placed with the facility, not
   // hired later, exactly as an office's workers are.
   [FAMILY.housekeeping]: 6,
+  // The audience a venue half can seat, `ENTERTAINMENT.md` § Runtime Budget
+  // Rules: a theater's per-half budget runs 60 / 60 / 40 / 20 by film age, so
+  // sixty sims per half is what lets the budget - not the headcount - be the
+  // limit; a party hall's lower half is budgeted 50 (the analysis' "50 guests").
+  // The spec's own *40-slot span* would cap a theater at 80 and a hall at 40,
+  // which makes the $15,000 tier and the 50 guests unreachable.
+  // `spec/DEVIATIONS.md` A41. (The party hall's UPPER half owns none: it is
+  // "seeded to 0, never consumed" - placement passes `occupantCount: 0`.)
+  [FAMILY.theater]: 60,
+  [FAMILY.partyHall]: 50,
 };
 
 /**
@@ -203,6 +234,13 @@ export const POPULATION_CONTRIBUTION = {
   // key: `population()` falls back to `OCCUPANTS` for a missing entry, which would
   // count the six staff as residents. `spec/DEVIATIONS.md` A33.
   [FAMILY.housekeeping]: 0,
+  // A venue's visitors are counted where visitors are counted - the daily
+  // rebuild's `cinema` / `partyHall` population buckets (`sim/entertainment.js`),
+  // not as residents. An explicit 0, for the reason housekeeping's is one: a
+  // missing key falls back to `OCCUPANTS` and would count 120 audience members
+  // as people who live here.
+  [FAMILY.theater]: 0,
+  [FAMILY.partyHall]: 0,
 };
 
 /** Families whose population is gated on a linked venue record rather than a lease. */
@@ -465,6 +503,15 @@ export function createTower({ seed = 1, startingCash = 2000000 } = {}) {
     hotelSaleCount: 0,
     /** `newspaper_trigger`, recomputed at every checkout. `0` or `1`. */
     newspaperTrigger: 0,
+    /**
+     * The bomb and fire bits of the reference's `game_state_flags`
+     * (`specs/EVENTS.md`: *"suppressed while a bomb or fire event is already
+     * active"*). Nothing sets them yet - the events themselves are issue #16 -
+     * but entertainment already reads them (`entertainmentPaysToday`): *"entertainment
+     * pays nothing on bomb/fire days"*. Whoever builds the events sets these two
+     * booleans while an event is live and clears them when it ends.
+     */
+    events: { bombActive: false, fireActive: false },
   };
 }
 
@@ -488,6 +535,11 @@ export function createTower({ seed = 1, startingCash = 2000000 } = {}) {
  *   commercial venue's linked record is created. Passed in rather than
  *   imported, so this file stays the spine and learns nothing about families.
  * @returns {{ok:boolean, reason?:string, object?:object}}
+ *
+ * `placement.occupantCount` / `placement.occupantState` override the family's
+ * `OCCUPANTS` entry and the unplaced-occupant start state. A two-floor facility
+ * needs both: a party hall's upper half owns nobody, and a venue's visitors
+ * start parked rather than waiting to be hired.
  */
 export function placeObject(tower, placement, makeTripFields = () => ({}), finalize = null) {
   const { family, floor, left, right } = placement;
@@ -505,14 +557,14 @@ export function placeObject(tower, placement, makeTripFields = () => ({}), final
   finalize?.(tower, object);
 
   // The six workers, at placement, before anything is rented.
-  const count = OCCUPANTS[family] ?? 0;
+  const count = placement.occupantCount ?? OCCUPANTS[family] ?? 0;
   for (let occupantIndex = 0; occupantIndex < count; occupantIndex++) {
     const actor = createActor({
       family,
       anchorFloor: floor,
       objectId: object.id,
       occupantIndex,
-      state: STATE_UNPLACED_OCCUPANT,
+      state: placement.occupantState ?? STATE_UNPLACED_OCCUPANT,
       tripFields: makeTripFields(),
     });
     tower.actors.push(actor);

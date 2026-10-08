@@ -32,7 +32,7 @@ import { advanceSimTripCounters, rebaseSimElapsedFromClock } from '../sim/stress
 import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
 import { LEDGER_CHECKPOINT_TICK } from '../sim/economy.js';
 import {
-  restaurantClosure, runCommercialClosure, runCommercialRebuild, runTowerLedgerCheckpoint,
+  restaurantClosure, runCommercialClosure, runCommercialRebuild, runEntertainmentRebuild, runTowerLedgerCheckpoint,
 } from '../sim/ledger-adapter.js';
 import { refreshStartOfDayGates, tryAdvanceStar } from '../sim/progression.js';
 import { CLOSURE_TICK, REBUILD_TICK, RESTAURANT_CLOSURE_TICK } from '../sim/commercial.js';
@@ -137,7 +137,11 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
        * allowed to want it. Reopening the venues at tick 0 instead would leave
        * them open for 240 ticks with yesterday's capacity still on the record.
        */
-      [REBUILD_TICK]: (t) => runCommercialRebuild(t),
+      //
+      // `specs/TIME.md` § 240 step 2 rides on the same tick: the entertainment
+      // ledger rebuild (budgets reseeded, ages bumped, counters cleared), AFTER
+      // the linked-facility rebuild of step 1.
+      [REBUILD_TICK]: (t) => { runCommercialRebuild(t); runEntertainmentRebuild(t); },
       /**
        * The off-hours closure sweep: the day's visitors become the day's
        * money, and every venue closes to new customers. This is where a fast

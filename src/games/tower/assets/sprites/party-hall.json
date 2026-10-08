@@ -1,0 +1,18 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "upper": {
+      "col": 0,
+      "frames": 1
+    },
+    "lower": {
+      "col": 1,
+      "frames": 1
+    },
+    "party": {
+      "col": 2,
+      "frames": 1
+    }
+  }
+}

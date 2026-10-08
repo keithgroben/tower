@@ -815,7 +815,9 @@ export const tests = {
 
   '⚠️ noise: 20 tiles, same floor, office / restaurant / retail / fast food — and not hotels, not condos'() {
     assert(HOTEL_NOISE_RADIUS === 20, 'radius');
-    const sources = [FAMILY.office, FAMILY.restaurant, FAMILY.retail, FAMILY.fastFood];
+    // `FACILITIES.md` § Noise Source Matching, hotel row: "restaurant, office, retail,
+    // fast food, entertainment" - the last joined with issue #11 (both venues).
+    const sources = [FAMILY.office, FAMILY.restaurant, FAMILY.retail, FAMILY.fastFood, FAMILY.theater, FAMILY.partyHall];
     assert([...HOTEL_NOISE_FAMILIES].sort().join() === [...sources].sort().join(), 'the source set is exactly the spec row');
 
     // The room spans 10..13 (a single). The distance is edge to edge, the way

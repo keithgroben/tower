@@ -190,7 +190,7 @@
 
   /* ------------------------------------------------------ lift control panel */
 
-  #liftpanel {
+  #liftpanel, #theaterpanel {
     position: absolute;
     left: 140px; top: 92px;
     width: 410px;
@@ -203,13 +203,19 @@
     font: 600 11px var(--mono);
     color: #9fb3c8;
   }
-  #liftpanel[hidden] { display: none; }
-  #liftpanel button {
+  #liftpanel[hidden], #theaterpanel[hidden] { display: none; }
+  #theaterpanel { width: 380px; }
+  .tp-film { color: var(--ink); font-size: 13px; margin-bottom: 6px; }
+  .tp-line { margin-top: 4px; }
+  .tp-buys { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .tp-buy { text-align: left; }
+  .tp-buy.poor { color: #56687d; }
+  #liftpanel button, #theaterpanel button {
     font: inherit; color: inherit; cursor: pointer;
     background: #1b2430; border: 1px solid #2c3948; border-radius: 3px; padding: 3px 6px;
   }
-  #liftpanel button:hover:not(:disabled) { color: var(--ink); border-color: #3d4d60; }
-  #liftpanel button:disabled { opacity: 0.45; cursor: default; }
+  #liftpanel button:hover:not(:disabled), #theaterpanel button:hover:not(:disabled) { color: var(--ink); border-color: #3d4d60; }
+  #liftpanel button:disabled, #theaterpanel button:disabled { opacity: 0.45; cursor: default; }
   .lp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--ink); }
   .lp-grid { display: grid; grid-template-columns: 52px repeat(7, 1fr); gap: 3px; align-items: center; }
   .lp-col { font-size: 9px; color: #56687d; text-align: center; }
@@ -302,6 +308,10 @@
   <!-- The elevator control panel. Filled by ui/lift-panel.js when a shaft is
        clicked with no tool in hand. -->
   <div id="liftpanel" hidden></div>
+
+  <!-- The theater window (issue #11). Filled by ui/theater-panel.js when a theater
+       is clicked with no tool in hand. -->
+  <div id="theaterpanel" hidden></div>
 
   <div id="foot">
     <span id="answer"></span>

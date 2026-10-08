@@ -31,6 +31,7 @@ import { CARRIER_MODE } from '../src/games/tower/sim/elevators.js';
 import {
   CLOSURE_TICK, RESTAURANT_CLOSURE_TICK, closurePayout, venueOf,
 } from '../src/games/tower/sim/commercial.js';
+import { ENT_STATE, LOWER_ADVANCE_TICK, PARTY_ADVANCE_TICK } from '../src/games/tower/sim/entertainment.js';
 
 const TICKS_PER_DAY = 2600;
 
@@ -477,8 +478,126 @@ export function commercialTrial({
   };
 }
 
+/**
+ * **The entertainment trial** (issue #11): one theater or party hall on F1-F2, a
+ * lift, nothing scripted, and what each day's show drew and was PAID.
+ *
+ * `film` picks what the theater is showing: `'new'` (a new release, fresh: 60 + 60
+ * seats), `'classic'` (a fresh classic: 40 + 40) or `'stale'` (a classic nine days
+ * old: 20 + 20). `hotelRooms` single rooms stand above it for a party hall's
+ * condition; `shops` are `{ what, floor }` venues built at tile 100 to watch the
+ * spillover; `startDay` puts the calendar on a chosen day (59 is a bomb day).
+ * `lift: false` is the control: the venue's floors cannot be reached.
+ *
+ * The money is read as the CASH that moved across the settling tick (1900 for a
+ * theater, 1600 for a hall), so it is what the game paid, not what the record
+ * says it meant to. Returns the numbers; the CLI below prints them and
+ * `test/entertainment.test.js` asserts on the same function.
+ */
+export function entertainmentTrial({
+  kind = 'theater', days = 6, seed = 1, lift = true, film = 'new', hotelRooms = 0, startDay = null, shops = [],
+} = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  tower.starCount = 3;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('entertainment trial: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  const ROOM_FLOOR = 3;
+  const roomTop = hotelRooms ? ROOM_FLOOR + Math.ceil(hotelRooms / 12) - 1 : 0;
+  const top = Math.max(3, roomTop, ...shops.map((s) => s.floor));
+  if (lift) must(applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: 0, top, column: 40 }), 'the lift');
+  const venue = must(applyAction(world, { type: 'build', what: kind, floor: 1, left: 60 }), kind).object;
+  const record = venue.venue;
+  if (kind === 'theater') {
+    const preset = { new: [9, 0], classic: [3, 0], stale: [3, 20] }[film];
+    if (!preset) throw new Error('entertainment trial: no film called "' + film + '"');
+    [record.selector, record.age] = preset;
+  }
+  for (let i = 0; i < hotelRooms; i++) {
+    must(applyAction(world, {
+      type: 'build', what: 'hotelSingle', floor: ROOM_FLOOR + Math.floor(i / 12), left: 100 + (i % 12) * 4,
+    }), 'room ' + i);
+  }
+  const shopObjects = shops.map((s) => must(applyAction(world, { type: 'build', what: s.what, floor: s.floor, left: 100 }), s.what).object);
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+  if (startDay !== null) { tower.clock.dayCounter = startDay; tower.clock.dayTick = 0; }
+
+  const settleTick = kind === 'theater' ? LOWER_ADVANCE_TICK : PARTY_ADVANCE_TICK;
+  const spill = new Map(shopObjects.map((s) => [s.id, new Set()]));
+  const perDay = [];
+  let before = tower.cash;
+  for (let i = 0; i < days * TICKS_PER_DAY; i++) {
+    if (tower.clock.dayTick === settleTick - 1) before = tower.cash;
+    scheduler.tick(tower);
+    if (tower.clock.dayTick >= 1500 && tower.clock.dayTick < 2100 && spill.size) {
+      for (const a of tower.actors) {
+        if (a.family !== venue.family || (a.state & 0x3f) !== ENT_STATE.dwelling || !spill.has(a.venueObjectId)) continue;
+        spill.get(a.venueObjectId).add(a.id);
+      }
+    }
+    if (tower.clock.dayTick === settleTick) {
+      perDay.push({ day: tower.clock.dayCounter, attendance: record.lastAttendance, pays: tower.cash - before });
+    }
+  }
+  return {
+    kind, days, film, hotelRooms, lift, perDay,
+    attendance: perDay.map((p) => p.attendance), total: perDay.reduce((sum, p) => sum + p.pays, 0),
+    spill: shopObjects.map((s, i) => ({
+      what: shops[i].what, floor: shops[i].floor, customers: spill.get(s.id).size, visits: venueOf(s).acquireCount,
+    })),
+    world, venue,
+  };
+}
+
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   || process.argv[1]?.endsWith('playtest.js')) {
+  if (process.argv.includes('--entertainment')) {
+    // `node harness/playtest.js --entertainment [days]` - the issue #11 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 8);
+    const dollars = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
+    const row = (r) => r.perDay.map((p) => p.attendance + '=' + dollars(p.pays)).join('  ');
+    console.log('entertainment trial: one venue on F1-F2, a lift, ' + trialDays + ' days, nothing scripted.'
+      + " Each cell is the day's attendance = the CASH that moved when the venue was paid.\n");
+    console.log('MOVIE THEATER, by film (paid on attendance: <40 $0 / 40-79 $2,000 / 80-99 $10,000 / 100+ $15,000)');
+    for (const [label, options] of [
+      ['new release, fresh  ', { film: 'new' }],
+      ['classic, fresh      ', { film: 'classic' }],
+      ['classic, 9 days old ', { film: 'stale' }],
+      ['new release, NO lift', { film: 'new', lift: false }],
+    ]) {
+      const r = entertainmentTrial({ ...options, days: trialDays });
+      console.log('  ' + label + '  net ' + dollars(r.total).padStart(9) + '   ' + row(r));
+    }
+    console.log('\nPARTY HALL (50 guests, $20,000 a party; needs hotel rooms in the tower)');
+    for (const [label, options] of [
+      ['0 hotel rooms    ', { hotelRooms: 0 }],
+      ['1 hotel room     ', { hotelRooms: 1 }],
+      ['12 hotel rooms   ', { hotelRooms: 12 }],
+      ['12 rooms, NO lift', { hotelRooms: 12, lift: false }],
+    ]) {
+      const r = entertainmentTrial({ kind: 'partyHall', ...options, days: trialDays });
+      console.log('  ' + label + '  net ' + dollars(r.total).padStart(9) + '   ' + row(r));
+    }
+    console.log('\nBOMB / FIRE DAYS (day % 60 == 59 or day % 84 == 83): the audience comes and is not paid');
+    for (const startDay of [58, 59, 83]) {
+      const r = entertainmentTrial({ film: 'new', days: 3, startDay });
+      console.log('  starting on day ' + String(startDay).padStart(2) + '  '
+        + r.perDay.map((p) => 'day ' + p.day + ': ' + p.attendance + '=' + dollars(p.pays)).join('   '));
+    }
+    console.log('\nSHOP SPILLOVER (shops within five floors of the theater): theater-goers = distinct audience members who shopped');
+    const sp = entertainmentTrial({
+      film: 'new', days: 4,
+      shops: [{ what: 'fastFood', floor: 3 }, { what: 'fastFood', floor: 6 }, { what: 'fastFood', floor: 11 }],
+    });
+    for (const s of sp.spill) {
+      console.log('  fast food on F' + String(s.floor).padStart(2) + '  theater-goers ' + String(s.customers).padStart(3)
+        + '   venue visits ' + s.visits + (s.floor > 7 ? '   (out of range)' : ''));
+    }
+    process.exit(0);
+  }
   if (process.argv.includes('--commercial')) {
     // `node harness/playtest.js --commercial [days]` - the issue #10 proof.
     const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 12);

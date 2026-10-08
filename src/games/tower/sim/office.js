@@ -141,8 +141,8 @@ export const OFFICE_NOISE_RADIUS = 10;
  * Is a noise source within `OFFICE_NOISE_RADIUS` tiles on either side, on this
  * office's own floor?
  *
- * Commercial venues are the noise sources (`OFFICE_NOISE_FAMILIES`); entertainment
- * has no family code yet (issue #11). The radius is family-specific and belongs
+ * Commercial venues and the two entertainment venues are the noise sources
+ * (`OFFICE_NOISE_FAMILIES`). The radius is family-specific and belongs
  * next to the family it describes.
  */
 export function noiseSourceNear(tower, object) {
@@ -153,9 +153,12 @@ export function noiseSourceNear(tower, object) {
  * `specs/FACILITIES.md` § Noise Source Matching, the office row: *"restaurant (6),
  * retail (10), fast food (12), entertainment"*. The restaurant joined with issue
  * #10 — a restaurant beside an office costs the office 60 points of its failure
- * budget, exactly as a fast food does. (Entertainment has no code yet: issue #11.)
+ * budget, exactly as a fast food does. Entertainment joined with issue #11: both
+ * halves of a theater and of a party hall are noise sources.
  */
-export const OFFICE_NOISE_FAMILIES = new Set([FAMILY.restaurant, FAMILY.fastFood, FAMILY.retail]);
+export const OFFICE_NOISE_FAMILIES = new Set([
+  FAMILY.restaurant, FAMILY.fastFood, FAMILY.retail, FAMILY.theater, FAMILY.partyHall,
+]);
 
 /**
  * § Noise Search, the geometry — *"scans placed-object slots on the same floor

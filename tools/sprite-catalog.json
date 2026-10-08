@@ -672,6 +672,44 @@
       }
     ]
   },
+  "theater": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "upper",
+        "frames": 1
+      },
+      {
+        "name": "lower",
+        "frames": 1
+      },
+      {
+        "name": "showing",
+        "frames": 1
+      }
+    ]
+  },
+  "party-hall": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "upper",
+        "frames": 1
+      },
+      {
+        "name": "lower",
+        "frames": 1
+      },
+      {
+        "name": "party",
+        "frames": 1
+      }
+    ]
+  },
   "room-status": {
     "frameW": 48,
     "frameH": 32,

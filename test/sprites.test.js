@@ -35,6 +35,7 @@ import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
 import { FLYERS } from '../src/games/tower/render/sky.js';
 import { SHEET_READY } from '../src/games/tower/render/sprites.js';
 import { RESTAURANT_WIDTH, RETAIL_WIDTH, finalizeCommercialVenue } from '../src/games/tower/sim/commercial.js';
+import { PHASE, placeEntertainment } from '../src/games/tower/sim/entertainment.js';
 import {
   PRELOAD_SHEETS, SPRITE_NOT_YET_DRAWN, SPRITE_UNUSED_ANIMATIONS, SPRITE_USES,
   makeRenderer,
@@ -154,6 +155,21 @@ function towerWithEverything() {
     { family: FAMILY.retail, floor: RESTAURANT_FLOOR, left: 80, right: 80 + RETAIL_WIDTH - 1 },
     trips, finalizeCommercialVenue);
   assert(unrented.ok, 'fixture: ' + unrented.reason);
+
+  // The entertainment venues (issue #11): each is two floors, so each sheet has
+  // an upper and a lower frame, and a third that lights the primary half while the
+  // venue's day is running. Two of each - one idle, one mid-day - so every frame
+  // of both sheets is drawn. Beside the seeded rooms (F1-F7 stand on tiles 54-93)
+  // rather than above them: a taller tower lifts the roof off a 760px frame, and
+  // the roof-cap sheet is accounted for by the same sweep.
+  for (const [kind, floor, left, running] of [
+    ['theater', 1, 0, false], ['theater', 1, 100, true],
+    ['partyHall', 3, 0, false], ['partyHall', 3, 100, true],
+  ]) {
+    const venue = placeEntertainment(tower, { kind, floor, left }, trips);
+    assert(venue.ok, 'fixture: ' + venue.reason);
+    if (running) venue.object.venue.phase = PHASE.attending;
+  }
 
   // An express shaft beside the standard one. Nothing places one in the game
   // yet, but the sheets are delivered and the carrier model supports it.
@@ -394,6 +410,12 @@ export const tests = {
       'a restaurant by day': 'restaurant/day',
       'a restaurant at night': 'restaurant/night',
       'a shop that has not been rented': 'shop/closed-night',
+      'a theater between shows': 'theater/upper',
+      'a theater ground floor': 'theater/lower',
+      'a theater with a picture on': 'theater/showing',
+      'a party hall gallery': 'party-hall/upper',
+      'a party hall before the party': 'party-hall/lower',
+      'a party in full swing': 'party-hall/party',
       'a room left dirty': 'room-status/dirty',
       'a room the cockroaches have taken': 'room-status/infested',
       'a housekeeper at a room': 'person-staff/clean',
