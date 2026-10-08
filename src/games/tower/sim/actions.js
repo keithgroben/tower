@@ -17,11 +17,11 @@
  * `check_construction_funds_available_for_floor_range`.
  */
 import {
-  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR, floorExists, isUnitLet,
+  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR, floorExists, isSkyLobbyFloor, isUnitLet,
   placeObject, spanBlocked,
 } from './state.js';
 import {
-  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier, resizeCarrierSlots,
+  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier, isExpressStopFloor, resizeCarrierSlots,
 } from './elevators.js';
 import { CONSTRUCTION_COST, carCostForMode, chargeConstruction, placementCost } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
@@ -90,9 +90,50 @@ export const BUILDABLE = {
 /** Elevator kinds a player can place. */
 export const SHAFT_KIND = {
   standard: { mode: CARRIER_MODE.STANDARD, cost: 'elevatorStandard', label: 'Elevator' },
+  // Two stars: for staff (housekeeping, from issue #9), never for tenants.
+  service: { mode: CARRIER_MODE.SERVICE, cost: 'elevatorService', label: 'Service Elevator' },
+  // Three stars: stops only at the ground lobby, the basements and the sky
+  // lobbies (14, 29, 44, ...), so it is the zone trunk and never a local.
+  express: { mode: CARRIER_MODE.EXPRESS, cost: 'elevatorExpress', label: 'Express Elevator' },
 };
 
 const refuse = (reason) => ({ ok: false, reason });
+
+/** Where a lobby may stand. Null when the floor is legal (or the thing is not a lobby). */
+export function lobbyFloorReason(family, floor) {
+  if (family !== FAMILY.lobby) return null;
+  if (floor === GROUND_FLOOR || isSkyLobbyFloor(floor)) return null;
+  return 'lobbies go only on the ground floor and every 15th floor (14, 29, 44, ...)';
+}
+
+/**
+ * The span rules every shaft command shares, in one place so the ghost and the
+ * sim cannot word them differently. Null when the span is legal.
+ *
+ * - standard and service shafts serve at most `MAX_SERVED_SPAN` floors
+ *   (`specs/COMMANDS.md`: "capped at 31 floors of span"; the original's own
+ *   message says "Elevator shaft can cover only 30 floors" — DEVIATIONS A24);
+ * - an **express** shaft is exempt from the cap but may only start and end at
+ *   an express stop: the basements, the ground lobby and the sky lobbies
+ *   (`ELEVATORS.md` § Served-Floor Mapping).
+ */
+export function shaftSpanReason(mode, bottom, top) {
+  if (!floorExists(bottom) || !floorExists(top)) return 'that shaft leaves the tower';
+  if (top <= bottom) return 'a shaft has to serve more than one floor';
+  if (mode === CARRIER_MODE.EXPRESS) {
+    for (const end of [bottom, top]) {
+      if (!isExpressStopFloor(end)) {
+        return 'an express lift stops only at the lobby and the sky lobbies (floors 14, 29, 44, ...) — floor '
+          + end + ' is not one';
+      }
+    }
+    return null;
+  }
+  if (top - bottom + 1 > MAX_SERVED_SPAN) {
+    return 'a shaft serves at most ' + MAX_SERVED_SPAN + ' floors — use a sky lobby';
+  }
+  return null;
+}
 
 // ------------------------------------------------------------ stairs & escalators
 
@@ -289,6 +330,12 @@ const ACTIONS = {
       return refuse('a ' + spec.label.toLowerCase() + ' has to go above the ground floor');
     }
 
+    // The lobby goes on the ground and on the sky-lobby floors, nowhere else —
+    // the original's own words: "Lobbys are only every 15 floors"
+    // (`specs/COMMANDS.md`: the lobby-or-express-floor predicate).
+    const wrongFloor = lobbyFloorReason(spec.family, floor);
+    if (wrongFloor) return refuse(wrongFloor);
+
     const right = left + spec.width - 1;
     if (spanBlocked(tower, floor, left, right)) return refuse('something is already built there');
 
@@ -312,6 +359,12 @@ const ACTIONS = {
     // Latch any star gate this placement satisfies, now rather than at the next
     // start of day — the reference sets these at placement.
     notePlacement(tower, spec.family);
+    // A sky lobby is a transfer point: the router needs to know the floor.
+    if (spec.family === FAMILY.lobby && floor > GROUND_FLOOR) {
+      tower.transferFloors ??= [];
+      if (!tower.transferFloors.includes(floor)) tower.transferFloors.push(floor);
+      tower.routeTablesDirty = true;
+    }
     return { ok: true, cost, object: placed.object };
   },
 
@@ -327,11 +380,8 @@ const ACTIONS = {
     // palette grows past the standard shaft. Before the price, as above.
     const locked = lockReason(tower, spec.cost, spec.label);
     if (locked) return refuse(locked);
-    if (!floorExists(bottom) || !floorExists(top)) return refuse('that shaft leaves the tower');
-    if (top <= bottom) return refuse('a shaft has to serve more than one floor');
-    if (top - bottom + 1 > MAX_SERVED_SPAN) {
-      return refuse('a shaft serves at most ' + MAX_SERVED_SPAN + ' floors — use a sky lobby');
-    }
+    const badSpan = shaftSpanReason(spec.mode, bottom, top);
+    if (badSpan) return refuse(badSpan);
 
     const blocked = shaftObstruction(tower, { mode: spec.mode, bottom, top, column });
     if (blocked) return refuse(blocked);
@@ -386,9 +436,8 @@ const ACTIONS = {
     if (newBottom > carrier.bottomFloor || newTop < carrier.topFloor) {
       return refuse('a shaft can be extended, not shortened — demolish it to move it');
     }
-    if (newTop - newBottom + 1 > MAX_SERVED_SPAN) {
-      return refuse('a shaft serves at most ' + MAX_SERVED_SPAN + ' floors — use a sky lobby');
-    }
+    const badSpan = shaftSpanReason(carrier.mode, newBottom, newTop);
+    if (badSpan) return refuse(badSpan);
 
     // Check only what is NEW, so a lift is never blocked by the rooms it
     // already legally serves.
@@ -474,6 +523,9 @@ const ACTIONS = {
   demolish({ tower }, { objectId }) {
     const object = tower.objects.get(objectId);
     if (!object) return refuse('nothing there');
+    // "Lobbies ... cannot be removed" (help file; the original's message is
+    // "Cannot destroy this item"). It also keeps `transferFloors` honest.
+    if (object.family === FAMILY.lobby) return refuse('lobbies cannot be removed');
     if (hasTenant(object)) return refuse('that unit is let — you cannot evict a tenant');
 
     tower.objects.delete(objectId);
