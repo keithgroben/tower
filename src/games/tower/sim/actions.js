@@ -29,6 +29,7 @@ import { lockReason, notePlacement } from './progression.js';
 import { MAX_SEGMENTS, createSegment, segmentTopFloor } from './routing.js';
 import { createSimTripRecord } from './stress.js';
 import { FAST_FOOD_WIDTH, finalizeCommercialVenue } from './commercial.js';
+import { HOTEL_WIDTH } from './hotel.js';
 
 /**
  * What each buildable maps to. The palette is built from this, so it cannot
@@ -84,6 +85,45 @@ export const BUILDABLE = {
      * field rather than an `if` on the family code so the office is one word
      * away, not one rediscovery away.
      */
+    aboveGrade: true,
+  },
+
+  /**
+   * The three hotel rooms, `sim/hotel.js`. A guest checks in each evening and
+   * out each morning, and the room is paid at checkout.
+   *
+   * `aboveGrade` is `specs/COMMANDS.md` verbatim: *"hotel rooms, offices, and
+   * condos must be above grade (`floor > 0`) or reject with `0x0a`"*. Star gates
+   * are `sim/progression.js`'s (single 2, twin and suite 3 — `spec/DEVIATIONS.md`
+   * A27) and are checked ahead of the price like every other lock.
+   *
+   * TODO(parity): **no spec states a hotel's tile span**; 4 / 6 / 10 are the
+   * reference *implementation*'s `TILE_WIDTHS`, taken unscaled — the same
+   * source and the same choice as the condo's 16 and the fast food's 16.
+   * `spec/DEVIATIONS.md` A26.
+   */
+  hotelSingle: {
+    family: FAMILY.hotelSingle,
+    type: OBJECT_TYPE.hotelSingle,
+    cost: 'hotelSingle',
+    width: HOTEL_WIDTH.hotelSingle,
+    label: 'Single Room',
+    aboveGrade: true,
+  },
+  hotelTwin: {
+    family: FAMILY.hotelTwin,
+    type: OBJECT_TYPE.hotelTwin,
+    cost: 'hotelTwin',
+    width: HOTEL_WIDTH.hotelTwin,
+    label: 'Twin Room',
+    aboveGrade: true,
+  },
+  hotelSuite: {
+    family: FAMILY.hotelSuite,
+    type: OBJECT_TYPE.hotelSuite,
+    cost: 'hotelSuite',
+    width: HOTEL_WIDTH.hotelSuite,
+    label: 'Hotel Suite',
     aboveGrade: true,
   },
 };
@@ -160,10 +200,14 @@ export const LINK_WIDTH = 8;
  * *"empty, restaurant, retail, fast food, party hall (upper), party hall
  * (lower), lobby, cinema (upper), cinema (lower), single hotel room"* — the
  * help file says it plainly: "only on commercial or public areas". Stairs skip
- * this check. Families that do not exist yet (party hall, cinema, hotel) join
- * this set when they land (issues #8 and #11).
+ * this check. The single hotel room joined it with issue #8 — **only the
+ * single**, exactly as the list says; the twin and the suite are not on it.
+ * Families that do not exist yet (party hall, cinema) join this set when they
+ * land (issue #11).
  */
-export const ESCALATOR_UNDERLAY = new Set([FAMILY.lobby, FAMILY.restaurant, FAMILY.retail, FAMILY.fastFood]);
+export const ESCALATOR_UNDERLAY = new Set([
+  FAMILY.lobby, FAMILY.restaurant, FAMILY.retail, FAMILY.fastFood, FAMILY.hotelSingle,
+]);
 
 /** A link's footprint: the same 8 tiles on its lower floor and the floor above. */
 export const linkFootprint = ({ floor, left }) => ({

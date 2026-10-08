@@ -68,6 +68,9 @@ export const zoneBand = (floor) => Math.max(0, Math.floor((floor + 1) / SKY_LOBB
 
 export const OBJECT_TYPE = {
   lobby: 0x18,
+  hotelSingle: 3,
+  hotelTwin: 4,
+  hotelSuite: 5,
   office: 7,
   condo: 9,
   restaurant: 6,
@@ -77,6 +80,16 @@ export const OBJECT_TYPE = {
 
 export const FAMILY = {
   lobby: 0x18,
+  /**
+   * Hotel rooms, `specs/facility/HOTEL.md`: *"Families `3`, `4`, and `5` are
+   * hotel rooms."* Three codes, one state machine (`sim/hotel.js`) — the family
+   * only chooses the guest count, the payout row and the construction price.
+   * `specs/FACILITIES.md` § Type codes: `3` Single Room, `4` Twin Room,
+   * `5` Hotel Suite.
+   */
+  hotelSingle: 3,
+  hotelTwin: 4,
+  hotelSuite: 5,
   office: 7,
   condo: 9,
   /**
@@ -110,6 +123,17 @@ export const FAMILY = {
  * matters: it decides how many of the 48 actually travel today.
  */
 export const OCCUPANTS = {
+  // Hotel guests: 1 / 2 / 2. `specs/facility/HOTEL.md` § Placement says the
+  // room allocates **2 / 3 / 3** sim slots, but the reference *implementation*
+  // never services slot 0 (`processHotelSim`: "the first occupant is never
+  // refreshed, so its state persists") and scores the room over the other
+  // 1 / 2 / 2 — which is also what `specs/PEOPLE.md` § Scoring, `FACILITIES.md`
+  // step 2 and the help file (*"They hold one tenant"* / *"two tenants"* /
+  // *"They can accommodate two guests"*) all say. This build models only the
+  // guests that run. `spec/DEVIATIONS.md` A25.
+  [FAMILY.hotelSingle]: 1,
+  [FAMILY.hotelTwin]: 2,
+  [FAMILY.hotelSuite]: 2,
   [FAMILY.office]: 6,
   [FAMILY.condo]: 3,
   [FAMILY.fastFood]: 48,
@@ -135,6 +159,13 @@ export const OCCUPANTS = {
  * see the note there.
  */
 export const POPULATION_CONTRIBUTION = {
+  // While a guest is checked in, and only then. A hotel's population is its
+  // stay, not its lease — see `isHotelBooked` in `sim/hotel.js`. 1 / 2 / 2:
+  // `specs/PEOPLE.md` § Families 3,4,5 — *"adds to population ledger
+  // (+1/+2/+2 for families 3/4/5)"*. `spec/DEVIATIONS.md` A25 (the suite).
+  [FAMILY.hotelSingle]: 1,
+  [FAMILY.hotelTwin]: 2,
+  [FAMILY.hotelSuite]: 2,
   [FAMILY.office]: 6,
   [FAMILY.condo]: 3,
   [FAMILY.retail]: 10,
@@ -211,9 +242,56 @@ export const CONDO_UNIT_STATUS = {
   expiryMin: 0x28,
 };
 
+/**
+ * A hotel room's `unit_status`, `specs/facility/HOTEL.md` § Placement And
+ * Stored State — *"preserve the three-band semantic split"*:
+ *
+ *   occupied / open        `0x00..0x17`   a guest is checked in
+ *   vacant / available     `0x18..0x27`   ready for tonight's guest
+ *   checked out / dirty    `0x28..0x37`   **needs housekeeping** (issue #9)
+ *   infested               `0x38..0x40`   cockroaches; only demolition cures it
+ *
+ * The `0x00`/`0x08` (and `0x18`/`0x20`, `0x28`/`0x30`, `0x38`/`0x40`) pairs are
+ * the reference's half-day branch — *"morning starts at 0, evening starts at 8"*
+ * — and carry no meaning of their own beyond which half of the day wrote them.
+ * `spec/DEVIATIONS.md` A31.
+ *
+ * **There is no separate "dirty" boolean on the object, on purpose.** The band
+ * IS the flag (the housekeeping claimant's search is *"a slot qualifies only
+ * when the room `unit_status` is `0x28` or `0x30`"*), and a second field kept in
+ * step with it is exactly the drift `CLAUDE.md` warns about. Read it with
+ * `isHotelRoomDirty(object)` in `sim/hotel.js`.
+ */
+export const HOTEL_UNIT_STATUS = {
+  /** Everything at or below is a guest in residence. Same ceiling as a sold condo. */
+  occupiedMax: 0x17,
+  /** What activation writes: `0x00` before daypart 4, `0x08` after. */
+  occupiedEarly: 0x00,
+  occupiedLate: 0x08,
+  /** The overnight clamp, and the value the checkout rewrite starts from. */
+  syncMarker: 0x10,
+  /** Placement and cleaning write `0x18` before daypart 4, `0x20` after. */
+  vacantEarly: 0x18,
+  vacantLate: 0x20,
+  vacantMax: 0x27,
+  /** Checkout writes `0x28` before daypart 4, `0x30` after. */
+  dirtyEarly: 0x28,
+  dirtyLate: 0x30,
+  dirtyMax: 0x37,
+  /** `0x38` / `0x40`. Nothing in this build reaches it; issue #9 owns it. */
+  infestedEarly: 0x38,
+  infestedLate: 0x40,
+};
+
+/** The three hotel family codes. */
+export const HOTEL_FAMILY_CODES = new Set([FAMILY.hotelSingle, FAMILY.hotelTwin, FAMILY.hotelSuite]);
+export const isHotelFamily = (family) => HOTEL_FAMILY_CODES.has(family);
+
 /** The highest `unit_status` that still counts as let, by family. */
 export const letBandMax = (family) =>
-  (family === FAMILY.condo ? CONDO_UNIT_STATUS.soldMax : UNIT_STATUS.activeMax);
+  (family === FAMILY.condo || isHotelFamily(family)
+    ? CONDO_UNIT_STATUS.soldMax
+    : UNIT_STATUS.activeMax);
 
 /** Is this placed unit let (an office rented, a condo sold)? */
 export const isUnitLet = (object) =>
@@ -242,6 +320,11 @@ export function initialUnitStatus(family, daypart = 0) {
   if (family === FAMILY.office) return 0x10;
   if (family === FAMILY.condo) {
     return daypart < 4 ? CONDO_UNIT_STATUS.unsoldEarly : CONDO_UNIT_STATUS.unsoldLate;
+  }
+  // `HOTEL.md`: *"hotel placement does **not** start in the checked-out band"* —
+  // a new room is vacant (`0x18` / `0x20`), not dirty.
+  if (isHotelFamily(family)) {
+    return daypart < 4 ? HOTEL_UNIT_STATUS.vacantEarly : HOTEL_UNIT_STATUS.vacantLate;
   }
   return 0;
 }
@@ -342,6 +425,14 @@ export function createTower({ seed = 1, startingCash = 2000000 } = {}) {
      * down stress, which makes it the one the player should feel clever about.
      */
     lobbyHeight: 1,
+    /**
+     * `family345_sale_count`: checkouts since checkpoint 1200 (`specs/TIME.md`
+     * § 1200 resets it). `specs/facility/HOTEL.md` § Checkout effects — it drives
+     * the newspaper popup, which this build counts but does not show yet.
+     */
+    hotelSaleCount: 0,
+    /** `newspaper_trigger`, recomputed at every checkout. `0` or `1`. */
+    newspaperTrigger: 0,
   };
 }
 

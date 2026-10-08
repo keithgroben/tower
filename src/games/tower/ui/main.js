@@ -21,6 +21,7 @@ import { DAYPART_LABELS, calendarOf, formatClock } from '../sim/clock.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { starGateStatus } from '../sim/progression.js';
 import { BUILDABLE } from '../sim/actions.js';
+import { isHotelFamily } from '../sim/state.js';
 import { evictionNotice, starClause, starGlyph, stressReadout } from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -398,9 +399,17 @@ function drawHud() {
   // "Leasable" is "owns occupants": `OCCUPANTS` in sim/state.js gives six to an
   // office and three to a condo and nothing to a lobby, so the table already
   // says which units can be let and this does not need a second list.
-  let let_ = 0, leasable = 0, tenants = 0;
+  let let_ = 0, leasable = 0, tenants = 0, guests = 0;
   for (const object of tower.objects.values()) {
     if (object.occupants.length === 0) continue;
+    // A hotel room is not let, it is booked by the night. Counted in the lease
+    // figure it empties every morning, and the next block would announce that
+    // fall as an eviction — "A fall in the let count is always an eviction" was
+    // true until the first checkout. Its guests are counted beside it instead.
+    if (isHotelFamily(object.family)) {
+      if (officeIsLet(object)) guests += object.occupants.length;
+      continue;
+    }
     leasable++;
     if (!officeIsLet(object)) continue;
     let_++;
@@ -431,7 +440,7 @@ function drawHud() {
   // disagrees with the "36/42 let" sitting next to it on the same bar. An
   // accounting hole that reads as good news is the failure this repo keeps a
   // list of.
-  $('people').textContent = `${tenants} living here · ${tower.actors.length} people`;
+  $('people').textContent = `${tenants} living here${guests ? ` · ${guests} guests` : ''} · ${tower.actors.length} people`;
   $('cash').textContent = '$' + ledger.cash.toLocaleString('en-US');
 
   // The loop's own number: the stress of a TYPICAL worker.

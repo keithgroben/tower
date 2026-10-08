@@ -315,6 +315,54 @@ export function condoCashflowHooks(tower) {
   };
 }
 
+/**
+ * The two moments a **hotel room** moves money, and they are not the same kind
+ * of event as the condo's pair: one is population, the other is income.
+ *
+ * `specs/facility/HOTEL.md`: *"Income is realized on checkout, not
+ * continuously."* A guest checking **in** pays nothing and adds only people —
+ * `specs/PEOPLE.md`: `activate_family_345_unit` *"adds to population ledger
+ * (+1/+2/+2 for families 3/4/5)"* — and the guest checking **out** (the last one,
+ * for a twin or a suite) banks the stay at the family row for the room's
+ * `rent_level` and takes the people back out.
+ *
+ * ⚠️ `addIncome`, **not** `activateFamilyCashflowIfOperational`. The latter is
+ * the 3-day instalment path: it is guarded by a once-per-cycle mark and would
+ * pay a room once per cycle however many guests had stayed in it. A hotel is paid
+ * per stay, and the sweep never pays it at all (hotels are not in
+ * {@link CASHFLOW_FAMILIES}).
+ *
+ * The population buckets hold the **people in the beds right now**, so the star
+ * ladder sees a hotel as exactly as many people as are sleeping in it — a tower
+ * whose guests cannot check out stays full of them.
+ */
+export function hotelCashflowHooks(tower) {
+  const ledger = ledgerFor(tower);
+  return {
+    onCheckIn(_tower, object) {
+      const bucket = HOTEL_BUCKET[object.family];
+      if (!bucket) return;
+      ledger.population[bucket] += POPULATION_BY_FAMILY[bucket] ?? 0;
+    },
+    onCheckout(_tower, object) {
+      const bucket = HOTEL_BUCKET[object.family];
+      if (!bucket) return;
+      addIncome(ledger, bucket, payout(bucket, object.rentLevel ?? DEFAULT_RENT_TIER));
+      // Floored: a bucket that went negative would subtract from the star
+      // thresholds that sum it, and "never below zero" is cheaper than finding
+      // out which path double-counted.
+      ledger.population[bucket] = Math.max(0, ledger.population[bucket] - (POPULATION_BY_FAMILY[bucket] ?? 0));
+    },
+  };
+}
+
+/** Hotel family code → the income/population bucket and payout row it is priced by. */
+const HOTEL_BUCKET = {
+  [FAMILY.hotelSingle]: 'hotelSingle',
+  [FAMILY.hotelTwin]: 'hotelTwin',
+  [FAMILY.hotelSuite]: 'hotelSuite',
+};
+
 // ------------------------------------------------- the commercial day
 
 /**

@@ -358,7 +358,16 @@ export const NAME_BY_TYPE_CODE = Object.fromEntries(
  * Live population contributed by one active unit, for the population ledger.
  * Office `+6` (`OFFICE.md` § Leasing And Opening), retail `+10`
  * (`COMMERCIAL.md` § Retail Income Timing), condo `+3` (`CONDO.md` § Refund
- * effect, which removes 3), hotel 1/2/3 by room type (`HOTEL.md` § header).
+ * effect, which removes 3), hotel **1 / 2 / 2** by room type.
+ *
+ * ⚠️ The suite was 3 here, from `HOTEL.md` § Identity (*"`5`: suite, population
+ * 3"*). Every other source says 2: the help file (*"They can accommodate two
+ * guests"*), `PEOPLE.md` § Families 3,4,5 (*"adds to population ledger
+ * (+1/+2/+2 for families 3/4/5)"*), `FACILITIES.md` step 2 (suite divisor 2) and
+ * the reference implementation's `activate_family_345_unit` (+1 single, +2
+ * otherwise). `HOTEL.md` also mixes it up with the *sim slot* count (2/3/3), and
+ * the implementation's ledger slot numbers (1/2/3 — the ledger index, not the
+ * amount) look like the same misreading. `spec/DEVIATIONS.md` A25.
  */
 export const POPULATION_BY_FAMILY = {
   office: 6,
@@ -366,7 +375,7 @@ export const POPULATION_BY_FAMILY = {
   condo: 3,
   hotelSingle: 1,
   hotelTwin: 2,
-  hotelSuite: 3,
+  hotelSuite: 2,
 };
 
 // ------------------------------------------------------------------- ledgers

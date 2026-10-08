@@ -40,7 +40,7 @@
  */
 import { makeRng } from './rng.js';
 import { ledgerFor } from './ledger-adapter.js';
-import { createActor, createObject, isUnitLet, population } from './state.js';
+import { createActor, createObject, isHotelFamily, isUnitLet, population } from './state.js';
 
 export const SAVE_SCHEMA = 'tower-save/v1';
 
@@ -53,8 +53,14 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * v1 is this repo's first working save. Nothing from `lift-save/v1` can be
  * read — a different state model entirely — and it is refused by schema, not
  * by version, which is why the message can say something useful.
+ *
+ * v2 (issue #8, hotel rooms) adds three families whose actors carry new state
+ * codes and `errandFloor`/`venueObjectId` fields, and two tower fields
+ * (`hotelSaleCount`, `newspaperTrigger`). A v1 file would still load — it has
+ * no hotels — but it would resume with the hotel star gates and population
+ * figures of a different build, which is the case the version exists for.
  */
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,
@@ -115,6 +121,9 @@ export function summarise({ tower, ledger }) {
   let let_ = 0, leasable = 0;
   for (const o of tower.objects.values()) {
     if (o.occupants.length === 0) continue;
+    // A hotel room is booked by the night, not let: counting it would show
+    // "40/60 let" in the save list in the morning and "60/60" in the evening.
+    if (isHotelFamily(o.family)) continue;
     leasable++;
     // Per family: a sold condo's band runs to 0x17, an office's to 0x0f.
     if (o.occupiedFlag && isUnitLet(o)) let_++;

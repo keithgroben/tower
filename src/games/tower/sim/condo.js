@@ -104,13 +104,18 @@ export const CONDO_NOISE_RADIUS = 30;
  * floor starts 60 points into a 150-point failure budget before anybody has
  * taken a single trip.
  *
- * TODO(parity): hotel rooms (3/4/5) and the entertainment families have no
- * `FAMILY` code in this build, so they are absent rather than mapped to
- * something wrong. `FAMILY.fastFood` is code `6`, which `specs/ECONOMY.md`
- * § Construction Costs calls Restaurant — either way it is on this row, so
- * nothing turns on the mislabel here.
+ * Hotel rooms (3/4/5) joined this set with issue #8 — **a condo beside a hotel
+ * is a condo with a noise problem**, though a hotel beside a condo is not
+ * (`FACILITIES.md`: *"hotels do **not** count other hotels or condos as
+ * noise"*). The restaurant, now that it has a code, is on the row too.
+ *
+ * TODO(parity): the entertainment families have no `FAMILY` code in this build
+ * (issue #11), so they are absent rather than mapped to something wrong.
  */
-export const CONDO_NOISE_FAMILIES = new Set([FAMILY.office, FAMILY.fastFood, FAMILY.retail]);
+export const CONDO_NOISE_FAMILIES = new Set([
+  FAMILY.hotelSingle, FAMILY.hotelTwin, FAMILY.hotelSuite,
+  FAMILY.restaurant, FAMILY.office, FAMILY.fastFood, FAMILY.retail,
+]);
 
 /** The countdown `0x10`'s dispatch seeds. `specs/PEOPLE.md` § Family 9 dispatch. */
 export const SOLD_CYCLE_SEED = 3;
