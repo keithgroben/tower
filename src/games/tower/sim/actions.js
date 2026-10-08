@@ -24,13 +24,19 @@ import {
   CARRIER_MODE, MAX_SERVED_SPAN, SCHEDULE_SLOTS, SHAFT_WIDTH, addCar, carrierSlotIndex, createCarrier,
   isExpressStopFloor, resizeCarrierSlots,
 } from './elevators.js';
-import { CONSTRUCTION_COST, carCostForMode, chargeConstruction, placementCost } from './economy.js';
+import {
+  CONSTRUCTION_COST, carCostForMode, chargeConstruction, floorConstructionCost, placementCost,
+} from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
 import { MAX_SEGMENTS, createSegment, segmentTopFloor } from './routing.js';
 import { createSimTripRecord } from './stress.js';
 import {
   FAST_FOOD_WIDTH, RESTAURANT_WIDTH, RETAIL_WIDTH, finalizeCommercialVenue, venueOf,
 } from './commercial.js';
+import {
+  FILM_PRICE, PARTY_HALL_WIDTH, THEATER_WIDTH, changeFilm, demolishEntertainment, entertainmentObstruction,
+  filmChangeReason, filmTitle, isEntertainmentFamily, placeEntertainment, primaryOf,
+} from './entertainment.js';
 import { HOTEL_WIDTH } from './hotel.js';
 import { HOUSEKEEPING_WIDTH } from './housekeeping.js';
 
@@ -187,6 +193,57 @@ export const BUILDABLE = {
   },
 };
 
+/**
+ * **The movie theater and the party hall** (issue #11): 3 stars, $500,000 and
+ * $100,000. Each is a two-floor facility - `floor` is the lower half, `floor + 1`
+ * the upper - and `placeEntertainment` builds both halves and the record they
+ * share (`sim/entertainment.js`). `floors: 2` is what the price, the footprint
+ * and the ghost read; `entertainment` names the kind.
+ *
+ * `aboveGrade`: *"`validate_floor_class_for_placement` rejects party hall and
+ * cinema when `placement_floor < 1`"* (`ENTERTAINMENT.md` § Placement
+ * Validation). Widths are the reference implementation's (A41).
+ */
+BUILDABLE.theater = {
+  family: FAMILY.theater,
+  type: OBJECT_TYPE.theaterUpper,
+  cost: 'movieTheater',
+  width: THEATER_WIDTH,
+  label: 'Movie Theater',
+  aboveGrade: true,
+  floors: 2,
+  entertainment: 'theater',
+};
+BUILDABLE.partyHall = {
+  family: FAMILY.partyHall,
+  type: OBJECT_TYPE.partyHallUpper,
+  cost: 'partyHall',
+  width: PARTY_HALL_WIDTH,
+  label: 'Party Hall',
+  aboveGrade: true,
+  floors: 2,
+  entertainment: 'partyHall',
+};
+
+/**
+ * Why this buildable cannot stand here, or null: the one definition of "is the
+ * ground free", for the seam and the ghost alike. A single-floor room needs its
+ * span clear; an entertainment venue needs both floors clear and a free slot in
+ * the 16-venue table.
+ */
+export function placementObstruction(tower, spec, floor, left) {
+  if (spec.entertainment) return entertainmentObstruction(tower, spec.entertainment, floor, left);
+  return spanBlocked(tower, floor, left, left + spec.width - 1) ? 'something is already built there' : null;
+}
+
+/** What a build costs: the facility, plus the floor tiles of every floor it stands on. */
+export function buildCost(tower, spec, floor) {
+  const base = placementCost(spec.cost, { tiles: spec.width, floor, lobbyHeight: tower.lobbyHeight });
+  return (spec.floors ?? 1) > 1
+    ? base + floorConstructionCost({ floor: floor + 1, tiles: spec.width, lobbyHeight: tower.lobbyHeight })
+    : base;
+}
+
 /** Elevator kinds a player can place. */
 export const SHAFT_KIND = {
   standard: { mode: CARRIER_MODE.STANDARD, cost: 'elevatorStandard', label: 'Elevator' },
@@ -261,11 +318,12 @@ export const LINK_WIDTH = 8;
  * help file says it plainly: "only on commercial or public areas". Stairs skip
  * this check. The single hotel room joined it with issue #8 — **only the
  * single**, exactly as the list says; the twin and the suite are not on it.
- * Families that do not exist yet (party hall, cinema) join this set when they
- * land (issue #11).
+ * The party hall and the cinema joined with issue #11 - all four halves, upper
+ * and lower, since both are the one family here.
  */
 export const ESCALATOR_UNDERLAY = new Set([
   FAMILY.lobby, FAMILY.restaurant, FAMILY.retail, FAMILY.fastFood, FAMILY.hotelSingle,
+  FAMILY.theater, FAMILY.partyHall,
 ]);
 
 /** A link's footprint: the same 8 tiles on its lower floor and the floor above. */
@@ -441,21 +499,22 @@ const ACTIONS = {
     if (wrongFloor) return refuse(wrongFloor);
 
     const right = left + spec.width - 1;
-    if (spanBlocked(tower, floor, left, right)) return refuse('something is already built there');
+    const blocked = placementObstruction(tower, spec, floor, left);
+    if (blocked) return refuse(blocked);
 
-    const cost = placementCost(spec.cost, {
-      tiles: spec.width, floor, lobbyHeight: tower.lobbyHeight,
-    });
+    const cost = buildCost(tower, spec, floor);
     const paid = chargeConstruction(ledger, cost);
     if (!paid.charged) {
       return refuse('that costs $' + cost.toLocaleString('en-US')
         + ' and you have $' + ledger.cash.toLocaleString('en-US'));
     }
 
-    const placed = placeObject(tower,
-      { family: spec.family, type: spec.type, floor, left, right },
-      () => createSimTripRecord(),
-      spec.finalize);
+    const placed = spec.entertainment
+      ? placeEntertainment(tower, { kind: spec.entertainment, floor, left }, () => createSimTripRecord())
+      : placeObject(tower,
+        { family: spec.family, type: spec.type, floor, left, right },
+        () => createSimTripRecord(),
+        spec.finalize);
     if (!placed.ok) {
       ledger.cash += paid.cost;                       // nothing was built; refund
       return placed;
@@ -707,10 +766,48 @@ const ACTIONS = {
       tower.populationLedger.retail = Math.max(0, (tower.populationLedger.retail ?? 0) - 10);
     }
 
+    // A venue is two objects and one record: both halves go together, and the
+    // population the record put on the ledger goes with them (the daily rebuild
+    // would only correct it tomorrow).
+    if (isEntertainmentFamily(object.family)) {
+      const gone = demolishEntertainment(tower, object);
+      const bucket = object.family === FAMILY.theater ? 'cinema' : 'partyHall';
+      if (gone && tower.populationLedger && bucket in tower.populationLedger) {
+        tower.populationLedger[bucket] = Math.max(0, tower.populationLedger[bucket] - gone.populationShare);
+      }
+      tower.routeTablesDirty = true;
+      return { ok: true, freed: object };
+    }
+
     tower.objects.delete(objectId);
     tower.actors = tower.actors.filter((a) => a.objectId !== objectId);
     tower.routeTablesDirty = true;
     return { ok: true, freed: object };
+  },
+
+  /**
+   * **Pick a theater's film** (issue #11; `ENTERTAINMENT.md` § Cinema "New Movie"
+   * Picker). `pool` is `'new'` ($300,000, the next new release) or `'classic'`
+   * ($150,000, the next classic). Either half of the theater will do. The age
+   * goes back to 0, so the next 240 rebuild reseeds from the freshest tier; the
+   * day already in progress keeps the budget it has.
+   */
+  set_theater_film({ tower, ledger }, { objectId, pool }) {
+    const object = tower.objects.get(objectId);
+    if (!object) return refuse('nothing there');
+    const record = primaryOf(tower, object)?.venue;
+    if (!record) return refuse('that is not a movie theater');
+    const why = filmChangeReason(record, pool);
+    if (why) return refuse(why);
+
+    const cost = FILM_PRICE[pool];
+    const paid = chargeConstruction(ledger, cost);
+    if (!paid.charged) {
+      return refuse('a ' + (pool === 'new' ? 'new release' : 'classic') + ' costs $' + cost.toLocaleString('en-US')
+        + ' and you have $' + ledger.cash.toLocaleString('en-US'));
+    }
+    const selector = changeFilm(record, pool);
+    return { ok: true, cost, selector, title: filmTitle(selector) };
   },
 
   /** Change a unit's rent tier. 0 is dearest, 3 is the one that always passes. */
@@ -761,7 +858,8 @@ const nextCarrierId = (tower) =>
  * which is what makes one definition mandatory rather than tidy.
  */
 export const hasTenant = (object) =>
-  !COMMERCIAL_FAMILY_CODES.has(object.family) && !isStaffFamily(object.family) && isUnitLet(object);
+  !COMMERCIAL_FAMILY_CODES.has(object.family) && !isStaffFamily(object.family)
+  && !isEntertainmentFamily(object.family) && isUnitLet(object);
 
 /**
  * Why this object cannot be demolished, or `null`. **The one definition** — the
