@@ -45,12 +45,35 @@ function copyRuntimeAssets(dirs) {
   };
 }
 
+/**
+ * `npm run dev` printed `http://localhost:5174` and that URL was a 404: the game
+ * lives at `src/games/tower/index.html`, one level down from Vite's root. Send
+ * `/` there in dev so the URL the README gives is the URL that works.
+ */
+function openTheGameAtRoot() {
+  return {
+    name: 'tower-root-redirect',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url === '/' || req.url === '/index.html') {
+          res.statusCode = 302;
+          res.setHeader('Location', '/src/games/tower/index.html');
+          res.end();
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
   root: '.',
   // Relative, so a build runs from a subdirectory, a file server, or inside a
   // desktop wrapper without being rebuilt for each.
   base: './',
-  plugins: [copyRuntimeAssets(['src/games/tower/assets'])],
+  plugins: [openTheGameAtRoot(), copyRuntimeAssets(['src/games/tower/assets'])],
   build: {
     rollupOptions: {
       input: {
