@@ -32,6 +32,13 @@ import {
   CLOSURE_TICK, RESTAURANT_CLOSURE_TICK, closurePayout, venueOf,
 } from '../src/games/tower/sim/commercial.js';
 import { ENT_STATE, LOWER_ADVANCE_TICK, PARTY_ADVANCE_TICK } from '../src/games/tower/sim/entertainment.js';
+import { activeDemands, demandsOf } from '../src/games/tower/sim/demands.js';
+import { OFFICE_STATE } from '../src/games/tower/sim/office.js';
+import { carsParked, usableSpaces } from '../src/games/tower/sim/parking.js';
+import { medicalCenters } from '../src/games/tower/sim/medical.js';
+import {
+  RECYCLING_AFTERNOON_TICK, RECYCLING_FINAL_TICK, RECYCLING_MIDDAY_TICK, recyclingCenters, workingRecyclingCenters,
+} from '../src/games/tower/sim/recycling.js';
 
 const TICKS_PER_DAY = 2600;
 
@@ -464,6 +471,185 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
   };
 }
 
+// ---------------------------------------------------------------------------
+// Issue #13: the tower demands things back.
+
+/**
+ * A three-star tower of offices behind real lifts, for the three service trials.
+ *
+ * Four standard lifts reach the first basement (so a worker can ride from a garage as
+ * well as from the lobby) and a service elevator runs through the three basements
+ * (so a recycling center can have its stop). Offices fill every free six tiles of the
+ * floors above the ground, clear of the shafts. Three stars is set directly: the
+ * ladder to it is `starLadderTrial`'s business, and what is measured here is what the
+ * tower asks for once it is there.
+ */
+export function servicesTower({ floors = 10, seed = 1, service = true } = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  tower.starCount = 3;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('services trial: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  const columns = [20, 50, 80, 110];
+  for (const column of columns) {
+    const shaft = must(applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: -1, top: floors + 1, column }), 'a lift');
+    for (let k = 0; k < 7; k++) must(applyAction(world, { type: 'add_car', carrierId: shaft.carrier.id }), 'a car');
+  }
+  if (service) {
+    must(applyAction(world, { type: 'build_shaft', kind: 'service', bottom: -3, top: 2, column: 132 }), 'the service elevator');
+  }
+  let offices = 0;
+  for (let floor = 1; floor <= floors; floor++) {
+    for (let left = 0; left + BUILDABLE.office.width <= 150; left += BUILDABLE.office.width) {
+      const right = left + BUILDABLE.office.width - 1;
+      if (columns.some((c) => left <= c + 5 && right >= c - 2)) continue;
+      if (service && left <= 136 && right >= 130) continue;
+      if (applyAction(world, { type: 'build', what: 'office', floor, left }).ok) offices++;
+    }
+  }
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+  return { world, tower, scheduler, offices, must };
+}
+
+/**
+ * **The recycling trial.** Issue #13's proof of the recycling gate: the flag the
+ * `3 -> 4` and `4 -> 5` rungs read, written by the three daily checks and read back
+ * at the tick after each, with the star ladder's own account of what is still
+ * missing.
+ *
+ * `centers` stacks go in the basement beside one another, with or without the
+ * service elevator that has to stop at them. Nothing is written into the flag or
+ * the ledger: the activity is the offices' own, and the answer is the sim's.
+ */
+export function recyclingTrial({ centers = 0, service = true, floors = 10, days = 4, seed = 1 } = {}) {
+  const { world, tower, scheduler, offices, must } = servicesTower({ floors, seed, service });
+  for (let i = 0; i < centers; i++) {
+    must(applyAction(world, { type: 'build', what: 'recyclingCenter', floor: -3, left: 40 + i * 25 }), 'a recycling center');
+  }
+  const perDay = [];
+  const checks = [RECYCLING_MIDDAY_TICK, RECYCLING_AFTERNOON_TICK, RECYCLING_FINAL_TICK];
+  // A new game starts at tick 2533, so a 2,600-tick step begins mid-night and puts the
+  // 2566 check at the START of the row. Begin each day at its own tick 0 instead, so a
+  // row reads 1600, 2000, 2566 in the order the day runs them.
+  while (tower.clock.dayTick !== 0) scheduler.tick(tower);
+  for (let d = 0; d < days; d++) {
+    const row = { day: tower.clock.dayCounter, flags: {}, activityAt: {} };
+    for (let t = 0; t < TICKS_PER_DAY; t++) {
+      scheduler.tick(tower);
+      if (checks.includes(tower.clock.dayTick)) {
+        row.flags[tower.clock.dayTick] = tower.gates.recyclingAdequate;
+        row.activityAt[tower.clock.dayTick] = towerActivity(tower);
+      }
+    }
+    row.demands = activeDemands(tower).map((x) => x.text);
+    perDay.push(row);
+  }
+  const status = starGateStatus(tower);
+  const working = workingRecyclingCenters(tower).length;
+  return {
+    centers, service, offices, perDay, working, placed: recyclingCenters(tower).length,
+    // What the last day's closing check saw, which is what decided its flag.
+    activity: perDay[perDay.length - 1].activityAt[RECYCLING_FINAL_TICK],
+    perCenter: working ? Math.trunc(perDay[perDay.length - 1].activityAt[RECYCLING_FINAL_TICK] / working) : null,
+    blockers: status.blockers, recyclingBlocked: status.blockers.includes('a recycling centre keeping up with the tower'),
+    adequate: tower.gates.recyclingAdequate,
+  };
+}
+
+/**
+ * **The medical trial.** What the 1-in-10 does to a tower with and without a clinic:
+ * workers who set out for one (counted off the state machine, not guessed), the
+ * deepest queue, the daily flag the ladder reads, and the notices.
+ */
+export function medicalTrial({ clinics = 1, days = 5, seed = 1 } = {}) {
+  const { world, tower, scheduler, offices, must } = servicesTower({ floors: 9, seed });
+  for (let i = 0; i < clinics; i++) {
+    must(applyAction(world, { type: 'build', what: 'medical', floor: 10, left: i ? 70 : 120 }), 'a medical center');
+  }
+  const workers = tower.actors.filter((a) => a.family === FAMILY.office);
+  const was = new Map();
+  const perDay = [];
+  for (let d = 0; d < days; d++) {
+    let visits = 0, deepest = 0, setOff = 0;
+    for (let t = 0; t < TICKS_PER_DAY; t++) {
+      scheduler.tick(tower);
+      for (const actor of workers) {
+        const base = actor.state & 0x3f;
+        const before = was.get(actor.id) ?? 0;
+        if (base === OFFICE_STATE.medicalOut && before !== OFFICE_STATE.medicalOut) setOff++;
+        if (base === OFFICE_STATE.atMedical && before !== OFFICE_STATE.atMedical) visits++;
+        was.set(actor.id, base);
+      }
+      let queued = 0;
+      for (const c of medicalCenters(tower)) queued += c.medical.queue.length;
+      if (queued > deepest) deepest = queued;
+    }
+    perDay.push({
+      day: tower.clock.dayCounter, setOff, visits, deepest,
+      flag: tower.gates.medicalServiceOk, demands: activeDemands(tower).map((x) => x.text),
+    });
+  }
+  return {
+    clinics, offices, workers: workers.length, perDay,
+    flag: tower.gates.medicalServiceOk,
+    notices: demandsOf(tower).notices.filter((n) => n.kind === 'medical').length,
+    blocked: starGateStatus(tower).blockers.includes('a medical center for the office workers'),
+  };
+}
+
+/**
+ * **The parking trial.** Drivers are the office workers with `(floor + slot) % 4 == 1`;
+ * they take a space a ramp serves, route from the garage floor and back, and when there
+ * is none the tower says *"Office workers demand Parking"*. `buildOnDay` lets the garage
+ * go up part-way, which is the demand being CLEARED by building: the notice fires, then
+ * the ramp and the spaces go in, and the line goes quiet.
+ *
+ * `ramp: false` is the control: spaces nobody can reach are drawn blocked and answer
+ * nothing, so the demand stays.
+ */
+export function parkingTrial({ spaces = 0, ramp = true, buildOnDay = 0, days = 6, seed = 1 } = {}) {
+  const { world, tower, scheduler, offices, must } = servicesTower({ floors: 9, seed });
+  const workers = tower.actors.filter((a) => a.family === FAMILY.office);
+  const drivers = workers.filter((a) => {
+    const office = tower.objects.get(a.objectId);
+    return (office.floor + a.occupantIndex) % 4 === 1;
+  }).length;
+  const garage = () => {
+    if (ramp) must(applyAction(world, { type: 'build', what: 'parkingRamp', floor: -1, left: 70 }), 'the ramp');
+    for (let i = 0; i < spaces; i++) {
+      // Right of the ramp first, then left of it: one unbroken row the ramp's walk can follow.
+      const left = i < 19 ? 71 + 4 * i : 66 - 4 * (i - 19);
+      must(applyAction(world, { type: 'build', what: 'parkingSpace', floor: -1, left }), 'space ' + i);
+    }
+  };
+  let built = false;
+  const perDay = [];
+  for (let d = 0; d < days; d++) {
+    if (!built && d >= buildOnDay) { garage(); built = true; }
+    let peak = 0, parkedToday = 0;
+    const seen = new Set();
+    for (let t = 0; t < TICKS_PER_DAY; t++) {
+      scheduler.tick(tower);
+      const cars = carsParked(tower);
+      if (cars > peak) peak = cars;
+      if (t % 40 === 0) for (const a of workers) if (a.parkedAt != null) seen.add(a.id);
+    }
+    parkedToday = seen.size;
+    perDay.push({
+      day: tower.clock.dayCounter, built, peakCars: peak, drivers: parkedToday,
+      demanded: activeDemands(tower).some((x) => x.kind === 'officeParking'),
+    });
+  }
+  return {
+    spaces, ramp, buildOnDay, offices, driversInTower: drivers, perDay,
+    usable: usableSpaces(tower).length,
+    notices: demandsOf(tower).notices.filter((n) => n.kind === 'officeParking').map((n) => n.text),
+  };
+}
+
 /**
  * **The commercial trial.** Issue #10's proof: what a restaurant or a shop does
  * to the money, measured through the driver's own composition and nothing else.
@@ -730,6 +916,55 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
       console.log(label + '  rent ' + dollars(r.retailIncome).padStart(9) + '  ' + (r.open
         ? 'opened day ' + r.openedOnDay + ', +' + r.retailPopulation + ' people'
         : 'never opened, ' + r.retailPopulation + ' people'));
+    }
+    process.exit(0);
+  }
+  if (process.argv.includes('--services')) {
+    // `node harness/playtest.js --services [days]` - the issue #13 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 5);
+    const yn = (v) => (v === undefined ? ' - ' : v ? 'yes' : 'NO ');
+    console.log('RECYCLING. 3 stars, offices behind 4 real lifts. The gate flag the 3->4 and 4->5 rungs read, sampled the tick'
+      + ' after each daily check (1600 always clears it; 2000 needs <1,000 activity per center; 2566 needs <2,500).\n');
+    for (const [label, options] of [
+      ['no center                     ', { centers: 0, floors: 10 }],
+      ['1 center, NO service lift     ', { centers: 1, service: false, floors: 10 }],
+      ['1 center + service lift       ', { centers: 1, floors: 10 }],
+      ['28 floors, 1 center           ', { centers: 1, floors: 28 }],
+      ['28 floors, 2 centers          ', { centers: 2, floors: 28 }],
+    ]) {
+      const r = recyclingTrial({ ...options, days: Math.max(trialDays, 8) });
+      const last = r.perDay[r.perDay.length - 1];
+      console.log(label + ' activity ' + String(r.activity).padStart(5) + ', ' + r.working + ' working -> '
+        + (r.perCenter === null ? 'n/a' : String(r.perCenter).padStart(5) + ' per center')
+        + '   1600:' + yn(last.flags[1600]) + ' 2000:' + yn(last.flags[2000]) + ' 2566:' + yn(last.flags[2566])
+        + '   recycling still blocks 4 stars: ' + (r.recyclingBlocked ? 'YES' : 'no'));
+      const said = last.demands.filter((x) => /Recycling/.test(x));
+      if (said.length) console.log('    says: ' + said.join(' | '));
+      console.log('    the ladder still waits on: ' + r.blockers.join(' | '));
+    }
+    console.log('\nMEDICAL. 3 stars, ' + trialDays + ' days. set off = workers who left the office for the clinic, visits = '
+      + 'arrived in its queue, deepest = most waiting at once.\n');
+    for (const clinics of [0, 1]) {
+      const r = medicalTrial({ clinics, days: trialDays });
+      console.log(clinics ? 'WITH a medical center' : 'WITHOUT a medical center', '(' + r.workers + ' workers):  daily flag '
+        + (r.flag ? 'true' : 'FALSE') + ', ' + r.notices + ' notice(s), blocks 4 stars: ' + (r.blocked ? 'YES' : 'no'));
+      for (const p of r.perDay) {
+        console.log('   day ' + String(p.day).padStart(2) + '  set off ' + String(p.setOff).padStart(3) + '  visits '
+          + String(p.visits).padStart(3) + '  deepest ' + String(p.deepest).padStart(3) + '  flag '
+          + (p.flag ? 'true ' : 'FALSE') + '  ' + (p.demands.filter((x) => /Medical/.test(x)).join('') || '-'));
+      }
+    }
+    console.log('\nPARKING. 3 stars, ' + trialDays + ' days. A quarter of the office workers drive.\n');
+    for (const [label, options] of [
+      ['no garage                       ', { spaces: 0, ramp: false }],
+      ['8 spaces, NO ramp (blocked)     ', { spaces: 8, ramp: false }],
+      ['ramp + 8 spaces from day 0      ', { spaces: 8, ramp: true }],
+      ['ramp + 8 spaces built on day 3  ', { spaces: 8, ramp: true, buildOnDay: 3 }],
+      ['ramp + 32 spaces from day 0     ', { spaces: 32, ramp: true }],
+    ]) {
+      const r = parkingTrial({ ...options, days: trialDays + 1 });
+      console.log(label + ' drivers in tower ' + r.driversInTower + ', usable spaces ' + r.usable);
+      console.log('   ' + r.perDay.map((p) => 'd' + p.day + ':' + p.peakCars + 'cars' + (p.demanded ? ' DEMAND' : '')).join('  '));
     }
     process.exit(0);
   }
