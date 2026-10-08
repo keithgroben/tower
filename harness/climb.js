@@ -59,10 +59,11 @@ export function fingerprint(value) {
  * @param {string[]} [options.skip]
  * @param {boolean} [options.crowd]
  * @param {number|null} [options.stopAtStar] stop the first morning the tower reaches this star
+ * @param {Function|null} [options.tamper] called after every tick with the tower; only the tests pass one
  */
 export function climbTrial({
   days = 40, seed = 1, cash = STARTING_CASH, lifts = 'zoned', skip = [], crowd = false, crowdFrom = 3, stopAtStar = null,
-  carRatio = 7, maxOffices = Infinity, serviceLift = false, onDay = null,
+  carRatio = 7, maxOffices = Infinity, serviceLift = false, onDay = null, tamper = null,
 } = {}) {
   const world = newTowerWorld({ seed, cash });
   const { tower } = world;
@@ -93,6 +94,8 @@ export function climbTrial({
         demands: starBefore === 4 ? activeDemands(tower).length : 0,
       };
       scheduler.tick(tower);
+      // A TEST's hook, never the player's: take one requirement away from the tower (`test/climb.test.js`).
+      if (tamper) tamper(tower);
       const { dayTick } = tower.clock;
       if (dayTick === MORNING_TICK) climber.morning();
       if (dayTick === EVENING_TICK) climber.evening();

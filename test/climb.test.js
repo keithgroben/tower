@@ -127,6 +127,15 @@ export const tests = {
     }
   },
 
+  'the one gate the player cannot answer by building: the office-service evaluation, held away, holds 3 -> 4'() {
+    // The inspector comes by himself, so no policy can skip him; the test takes his verdict away (the one
+    // direct write to a gate in the suite's climb, and it is the test's) and the star must not come.
+    const held = climbTrial({ ...QUICK, days: 20, tamper: (tower) => { if (tower.starCount === 3) tower.gates.officeServiceOk = false; } });
+    assert(held.finalStar === 3, 'without the office-service evaluation: ' + days(held));
+    assert(/office-service evaluation/.test(starGateStatus(held.world.tower).blockers.join('|')), 'the bar names it');
+    assert(quick('zoned').starDay[4] <= 12, 'while the same tower, left alone, gets its fourth star by day 12');
+  },
+
   // ============================================================ knowing the bottleneck beats ignoring it
 
   'knowing the lifts beats ignoring them: the service lift opens 3 -> 4, the express to the 100th floor opens the wedding'() {

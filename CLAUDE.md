@@ -97,6 +97,9 @@ npm run dev                              # http://localhost:5174 — Vite, the p
 node harness/run.js tower <policy> 40 1  # one headless run: game, policy, days, seed
 node harness/sweep.js tower 60 5         # all policies x seeds -> out/<game>-sweep.csv
 node harness/tune.js tower <config.path> 1 2 3 4
+npm run climb                             # the scripted player, $2M, no stand-in: 1 star toward the Tower (~1 min)
+node harness/playtest.js --climb --compare   # zoned lifts vs ignoring them, same seed (the standing invariant)
+#   ...and see it in the page:  /src/games/tower/index.html?demo=climb  (README: "Watching the whole loop work")
 ```
 
 `sim/` and `harness/` stay zero-dependency, zero-build, Node 20+. `npm install`
