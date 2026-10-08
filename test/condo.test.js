@@ -645,4 +645,29 @@ export const tests = {
     assert(condos(back.world.tower)[0].occupants.length === 3, 'all three of them');
     assert(back.world.ledger.cash === world.tower.cash, 'and one balance, not two');
   },
+
+  // ------------------------------------------------ why condos churn (issue #1)
+
+  '⚠️ the 3-day condo churn is the noise rule, not a bug: a typical commute plus a noisy neighbour is a refund, and a quiet condo with the same commute is not'() {
+    // Measured with `node harness/playtest.js 60 1 --play`: 141 refunds, every one
+    // of them a condo with an office/shop/fast food on its floor within 30 tiles;
+    // 0 refunds for condos with no such neighbour. A "pink" stress of ~100 is
+    // ordinary; +60 noise takes it to 160, over the 150 "poor" line, and a poor
+    // grade on the 3-day pass refunds the sale (`CONDO.md` § Refund Trigger).
+    // The condo re-sells on the next pass (`CONDO.md` § Reactivation nuance).
+    const outcome = (noisy) => {
+      const { tower, object, residents } = towerWithCondo({ floor: 3 });
+      if (noisy) {
+        placeObject(tower, { family: FAMILY.office, floor: 3, left: object.right + 5, right: object.right + 10 },
+          () => createSimTripRecord());
+      }
+      object.unitStatus = CONDO_UNIT_STATUS.syncMarker;
+      stressResidents(residents, 100);
+      recomputeCondoOperationalStatus(tower, object, residents);
+      return { eval: object.evalLevel, refunded: revertCondoToUnsold(tower, object, residents, null) };
+    };
+    const loud = outcome(true), quiet = outcome(false);
+    assert(loud.eval === 0 && loud.refunded, 'stress 100 + noise 60 = 160 is poor, and a poor sold condo is refunded; got ' + JSON.stringify(loud));
+    assert(quiet.eval !== 0 && !quiet.refunded, 'the same commute with no noisy neighbour keeps its sale; got ' + JSON.stringify(quiet));
+  },
 };
