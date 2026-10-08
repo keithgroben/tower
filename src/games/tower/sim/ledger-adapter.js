@@ -213,6 +213,10 @@ export function chargeableItems(tower) {
   for (const object of tower.objects.values()) {
     const type = ECONOMY_TYPE_BY_CODE[object.type ?? object.family];
     if (!type) continue;
+    // A parking space is free to keep (`ECONOMY.md`: space -, ramp $10,000 a pass);
+    // the parking expense formula belongs to the LOBBY in play - see
+    // `applyPeriodicOperatingExpenses`. Offered, it would bill every space.
+    if (type === 'parkingSpace') continue;
     out.push({ type, floor: object.floor, leftTile: object.left, rightTile: object.right });
   }
   return out;

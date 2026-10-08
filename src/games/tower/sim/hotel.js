@@ -60,6 +60,7 @@ import {
   SLOT, acquireVenueSlot, minimumStayElapsed, releaseVenueSlot, selectVenue, venueOf,
 } from './commercial.js';
 import { emitsDistanceFeedback, shouldWaitForQueuedCarrier } from './routing.js';
+import { parkSuiteGuest, unparkSuiteGuest } from './parking.js';
 
 /**
  * Guest states, `specs/facility/HOTEL.md` § Key States and `specs/DEMAND.md`
@@ -512,9 +513,14 @@ export function hotelMiddaySweep(tower) {
  * the rest of the failing-route machinery already deals with them.
  * `spec/DEVIATIONS.md` A32.
  *
- * TODO(parity): `specs/facility/HOTEL.md` § header and the help file say an
- * occupied suite must also have a parking space. Parking is issue #13; this is
- * where a suite guest will have to ask for one.
+ * **The suite's car** (issue #13). `specs/facility/PARKING.md` § Demand Families
+ * names *"hotel suites (family `0x05`)"* among the consumers of parking, and the help
+ * file says an occupied suite must also have a parking space. The guests arrive with
+ * a car: it takes a space a ramp serves (`sim/parking.js` `parkSuiteGuest`), and a
+ * tower with none says *"Hotel Suite guests demand Parking"*. The booking is never
+ * refused over it - what the original does to a suite it cannot park for is not in
+ * the sources, and a penalty would be ours to invent. The car leaves at checkout.
+ * `spec/DEVIATIONS.md` A54.
  *
  * @returns {boolean} whether this call is the one that booked the room
  */
@@ -525,6 +531,7 @@ export function activateHotelRoom(tower, object, ctx) {
     : HOTEL_UNIT_STATUS.occupiedLate;
   object.activationTickCount = 0;
   object.dirty = true;
+  if (object.family === FAMILY.hotelSuite) parkSuiteGuest(tower, object);
   ctx?.onCheckIn?.(tower, object);
   return true;
 }
@@ -550,6 +557,7 @@ export function checkoutHotelRoom(tower, object, ctx) {
   object.occupiedFlag = false;
   object.activationTickCount = 0;
   object.dirty = true;
+  if (object.family === FAMILY.hotelSuite) unparkSuiteGuest(tower, object);
   recordHotelSale(tower);
   ctx?.onCheckout?.(tower, object);
   return true;

@@ -30,11 +30,14 @@
  * needs 3 stars, and 3→4 needs recycling. Each rung buys the tool the next rung
  * demands, which is why the population thresholds alone never let you skip one.
  *
- * **Part of this checklist cannot be satisfied in this build**, because
- * recycling, medical and metro do not exist as families yet (security does, since
- * issue #12 - it is what opens `2 -> 3`). The gates are implemented anyway and
- * refuse by *name*: `starGateStatus()` says "a recycling centre keeping up with
- * the tower" rather than silently failing. Dropping a gate to make the ladder
+ * **Part of this checklist cannot be satisfied in this build.** Security (issue
+ * #12) opens `2 -> 3`; recycling and medical (issue #13) are built and write their
+ * flags; the metro station and the **office-service evaluation** are not - the latter
+ * is the cathedral's guest arriving at an office (`specs/GAME-STATE.md` § Office
+ * Service Evaluation), and the cathedral is not here yet, so `3 -> 4` still cannot
+ * fire (`spec/DEVIATIONS.md` A57). The gates are implemented anyway and refuse by
+ * *name*: `starGateStatus()` says "a passed office-service evaluation" rather than
+ * silently failing. Dropping a gate to make the ladder
  * passable would be the worst available option — a tower that advances because a
  * requirement was skipped teaches the player something false, and `CLAUDE.md`
  * already keeps a list of metrics that improved while the thing they measured
@@ -77,8 +80,19 @@ export function createStarGates() {
     officePlaced: false,
     /** Latched when a metro station has ever been placed. Gates 4→5. */
     metroPlaced: false,
-    /** Written by the recycling system. Gates 3→4 and 4→5. */
+    /**
+     * Written by the recycling system (`sim/recycling.js`, issue #13): cleared at
+     * 1600 and set again at 2000 / 2566 if the tower's activity per working center is
+     * low enough. Gates 3→4 and 4→5.
+     */
     recyclingAdequate: false,
+    /**
+     * `specs/facility/MEDICAL.md` § Progression Gate, *"the daily 'office medical
+     * service ok' flag"*: latched true at each day start once the tower has more
+     * than two stars, cleared by the first office worker whose medical trip finds no
+     * clinic (`sim/medical.js`). Gates 3→4 and 4→5. `spec/DEVIATIONS.md` A52.
+     */
+    medicalServiceOk: false,
     /** Written by the office-service evaluation. Gates 3→4; reset on advance. */
     officeServiceOk: false,
     /** Set by the start-of-day rebuild once `star_count > 2`. See the header. */
@@ -166,7 +180,12 @@ export function notePlacement(tower, family) {
  */
 export function refreshStartOfDayGates(tower) {
   const gates = refreshPlacementGates(tower);
-  if (tower.starCount > 2) gates.routesViable = true;
+  if (tower.starCount > 2) {
+    gates.routesViable = true;
+    // `MEDICAL.md`: *"the flag is latched to `true` at the start of each simulated
+    // day, provided the tower is at star >= 3"* - the day's failed trips then clear it.
+    gates.medicalServiceOk = true;
+  }
   return gates;
 }
 
@@ -210,13 +229,16 @@ export const activityForStar = (star) => STAR_THRESHOLDS[star - 1] ?? Infinity;
  * player would use, because a refusal that does not say what to build is not a
  * refusal — it is a stall.
  *
- * TODO(parity): the reference *implementation* also requires an
- * `officeServiceOkMedical` flag on both the 3→4 and 4→5 transitions, and adds
- * office-service to 4→5 as well. `specs/GAME-STATE.md` § Star Advancement lists
- * neither: it puts "office-service evaluation passed" on 3→4 only and says
- * nothing about a medical variant anywhere in the spec set. Following the spec.
- * If the extra flags are real they make the top of the ladder strictly harder,
- * never easier, so this is the permissive reading — worth Keith's eye.
+ * TODO(parity): **the sources disagree about medical.** `specs/GAME-STATE.md` §
+ * Star Advancement lists no medical gate; `specs/facility/MEDICAL.md` § Progression
+ * Gate puts the daily "office medical service ok" flag on both `3 -> 4` and `4 -> 5`
+ * (*"advancement is blocked and the 'Medical Center demanded near Lobby' banner
+ * re-fires"*), the reference *implementation* requires it on both, and the original's
+ * own readme says the fourth star wants "recycling and medical demands met"
+ * (`SimTower-gameplay-analysis.md`). Three against one: the flag is a gate here
+ * (`medicalServiceOk`), written by `sim/medical.js`. The reference implementation
+ * additionally asks office-service of `4 -> 5`, which the spec does not - not added.
+ * `spec/DEVIATIONS.md` A52.
  */
 const QUALITATIVE_GATES = {
   1: [],
@@ -224,12 +246,14 @@ const QUALITATIVE_GATES = {
   3: [
     { flag: 'officePlaced', missing: 'an office', kind: 'office' },
     { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower', kind: 'recyclingCenter' },
+    { flag: 'medicalServiceOk', missing: 'a medical center for the office workers', kind: 'medical' },
     { flag: 'officeServiceOk', missing: 'a passed office-service evaluation', kind: null },
     { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null },
   ],
   4: [
     { flag: 'metroPlaced', missing: 'a metro station', kind: 'metroStation' },
     { flag: 'recyclingAdequate', missing: 'a recycling centre keeping up with the tower', kind: 'recyclingCenter' },
+    { flag: 'medicalServiceOk', missing: 'a medical center for the office workers', kind: 'medical' },
     { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null },
   ],
 };

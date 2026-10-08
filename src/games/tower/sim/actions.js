@@ -17,8 +17,8 @@
  * `check_construction_funds_available_for_floor_range`.
  */
 import {
-  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR, floorExists, isSkyLobbyFloor,
-  isStaffFamily, isUnitLet, placeObject, spanBlocked,
+  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, SERVICE_FACILITY_FAMILIES, TILES_PER_FLOOR,
+  floorExists, isSkyLobbyFloor, isStaffFamily, isUnitLet, placeObject, spanBlocked,
 } from './state.js';
 import {
   CARRIER_MODE, MAX_SERVED_SPAN, SCHEDULE_SLOTS, SHAFT_WIDTH, addCar, carrierSlotIndex, createCarrier,
@@ -40,6 +40,13 @@ import {
 import { HOTEL_WIDTH } from './hotel.js';
 import { HOUSEKEEPING_WIDTH } from './housekeeping.js';
 import { GUARD_STATE, SECURITY_WIDTH, securityObstruction } from './security.js';
+import { MEDICAL_WIDTH, finalizeMedicalCenter, medicalObstruction } from './medical.js';
+import { RECYCLING_WIDTH, placeRecycling, recyclingObstruction } from './recycling.js';
+import {
+  PARKING_RAMP_WIDTH, PARKING_SPACE_WIDTH, answerParkingDemand, finalizeParkingSpace, parkingRampObstruction,
+  parkingSpaceObstruction, rebuildParkingCoverage,
+} from './parking.js';
+import { clearDemand } from './demands.js';
 
 /**
  * What each buildable maps to. The palette is built from this, so it cannot
@@ -251,18 +258,76 @@ BUILDABLE.partyHall = {
 };
 
 /**
+ * **The three things the tower demands back** (issue #13), all three stars:
+ *
+ *  - the **medical center**, $500,000, at most ten (`sim/medical.js`). Above grade:
+ *    nothing in `specs/` says where it goes, and the office workers it serves are above
+ *    the ground - TODO(parity), `spec/DEVIATIONS.md` A51;
+ *  - the **recycling center**, $500,000 and $50,000 a pass (`specs/ECONOMY.md`), a
+ *    two-floor stack below grade (`specs/COMMANDS.md`), unbulldozable
+ *    (`demolishRefusal`), `sim/recycling.js`. `floor` is the LOWER floor;
+ *  - **parking**: a space at $3,000 and a ramp at $50,000 (`specs/ECONOMY.md`), both
+ *    below grade (`specs/COMMANDS.md`: *"parking-space, recycling-center, and parking
+ *    ramps must be below grade"*), `sim/parking.js`.
+ *
+ * The key is the construction-cost name so `starClause` can tell whether a blocker
+ * names something the palette can build (`isBuildable` in `ui/main.js`).
+ */
+BUILDABLE.medical = {
+  family: FAMILY.medical,
+  type: OBJECT_TYPE.medical,
+  cost: 'medical',
+  width: MEDICAL_WIDTH,
+  label: 'Medical Center',
+  aboveGrade: true,
+  finalize: finalizeMedicalCenter,
+};
+BUILDABLE.recyclingCenter = {
+  family: FAMILY.recycling,
+  type: OBJECT_TYPE.recyclingUpper,
+  cost: 'recyclingCenter',
+  width: RECYCLING_WIDTH,
+  label: 'Recycling Center',
+  belowGrade: true,
+  floors: 2,
+  recycling: true,
+};
+BUILDABLE.parkingSpace = {
+  family: FAMILY.parkingSpace,
+  type: OBJECT_TYPE.parkingSpace,
+  cost: 'parkingSpace',
+  width: PARKING_SPACE_WIDTH,
+  label: 'Parking Space',
+  belowGrade: true,
+  finalize: finalizeParkingSpace,
+};
+BUILDABLE.parkingRamp = {
+  family: FAMILY.parkingRamp,
+  type: OBJECT_TYPE.parkingRamp,
+  cost: 'parkingRamp',
+  width: PARKING_RAMP_WIDTH,
+  label: 'Parking Ramp',
+  belowGrade: true,
+};
+
+/**
  * Why this buildable cannot go on this floor, or null: the grade rule, for the
  * seam and the ghost alike. `aboveGrade` is `specs/COMMANDS.md`'s "must be above
  * grade (`floor > 0`)"; `belowGrade` is its "basement-only" (`floor < 0`). One
  * definition, because the ghost used to restate the first and the matrix in
  * `test/build.test.js` exists to catch the day they drift.
+ *
+ * A two-floor thing is below grade only if **both** its floors are: a recycling
+ * center clicked on B1 would put its upper half on the ground floor.
  */
 export function gradeReason(spec, floor) {
   if (spec.aboveGrade && floor <= GROUND_FLOOR) {
     return 'a ' + spec.label.toLowerCase() + ' has to go above the ground floor';
   }
-  if (spec.belowGrade && floor >= GROUND_FLOOR) {
-    return 'a ' + spec.label.toLowerCase() + ' has to go in the basement, below the ground floor';
+  const top = floor + (spec.floors ?? 1) - 1;
+  if (spec.belowGrade && top >= GROUND_FLOOR) {
+    return 'a ' + spec.label.toLowerCase() + ' has to go in the basement, below the ground floor'
+      + (top > floor && floor < GROUND_FLOOR ? ' (it is ' + (top - floor + 1) + ' floors tall - click its lower floor)' : '');
   }
   return null;
 }
@@ -275,12 +340,21 @@ export function gradeReason(spec, floor) {
  */
 export function placementObstruction(tower, spec, floor, left) {
   if (spec.entertainment) return entertainmentObstruction(tower, spec.entertainment, floor, left);
+  // A center is two floors, and every one after the first has to stand beside one.
+  if (spec.recycling) return recyclingObstruction(tower, floor, left);
   // The cap on security offices (`specs/COMMANDS.md`: 10 active placements).
   if (spec.family === FAMILY.security) {
     const full = securityObstruction(tower);
     if (full) return full;
   }
-  return spanBlocked(tower, floor, left, left + spec.width - 1) ? 'something is already built there' : null;
+  if (spanBlocked(tower, floor, left, left + spec.width - 1)) return 'something is already built there';
+  // Issue #13: the caps, and the ramp's way up to the lobby. After the ground check,
+  // so a ramp dropped on a shop says the shop is in the way and not that there is no
+  // lobby above it.
+  if (spec.family === FAMILY.medical) return medicalObstruction(tower);
+  if (spec.family === FAMILY.parkingSpace) return parkingSpaceObstruction(tower);
+  if (spec.family === FAMILY.parkingRamp) return parkingRampObstruction(tower, floor, left);
+  return null;
 }
 
 /** What a build costs: the facility, plus the floor tiles of every floor it stands on. */
@@ -557,7 +631,9 @@ const ACTIONS = {
 
     const placed = spec.entertainment
       ? placeEntertainment(tower, { kind: spec.entertainment, floor, left }, () => createSimTripRecord())
-      : placeObject(tower,
+      : spec.recycling
+        ? placeRecycling(tower, { floor, left }, () => createSimTripRecord())
+        : placeObject(tower,
         { family: spec.family, type: spec.type, floor, left, right, occupantState: spec.occupantState },
         () => createSimTripRecord(),
         spec.finalize);
@@ -568,6 +644,7 @@ const ACTIONS = {
     // Latch any star gate this placement satisfies, now rather than at the next
     // start of day — the reference sets these at placement.
     notePlacement(tower, spec.family);
+    afterServiceBuilt(tower, spec.family);
     // A sky lobby is a transfer point: the router needs to know the floor.
     if (spec.family === FAMILY.lobby && floor > GROUND_FLOOR) {
       tower.transferFloors ??= [];
@@ -828,6 +905,12 @@ const ACTIONS = {
     tower.objects.delete(objectId);
     tower.actors = tower.actors.filter((a) => a.objectId !== objectId);
     tower.routeTablesDirty = true;
+    // A garage changes shape when a space or a ramp goes: the ramps' reach is read
+    // from what stands, so it is rebuilt from what is left. (A clinic needs nothing:
+    // a worker bound for it finds it gone and says so - `sim/office.js`.)
+    if (object.family === FAMILY.parkingSpace || object.family === FAMILY.parkingRamp) {
+      rebuildParkingCoverage(tower);
+    }
     return { ok: true, freed: object };
   },
 
@@ -876,6 +959,21 @@ const ACTIONS = {
   },
 };
 
+/**
+ * What building a service facility answers (issue #13). A clinic answers the
+ * medical demand; a ramp or a space re-reads which spaces a ramp serves, and the
+ * parking demand is answered if a driver could park now; a recycling center answers
+ * the "needs a center" demand - whether it keeps up is the checkpoint's to say.
+ */
+function afterServiceBuilt(tower, family) {
+  if (family === FAMILY.medical) clearDemand(tower, 'medical');
+  if (family === FAMILY.recycling) clearDemand(tower, 'recycling');
+  if (family === FAMILY.parkingSpace || family === FAMILY.parkingRamp) {
+    rebuildParkingCoverage(tower);
+    answerParkingDemand(tower);
+  }
+}
+
 const nextCarrierId = (tower) =>
   tower.carriers.reduce((max, c) => Math.max(max, c.id), 0) + 1;
 
@@ -905,7 +1003,8 @@ const nextCarrierId = (tower) =>
  */
 export const hasTenant = (object) =>
   !COMMERCIAL_FAMILY_CODES.has(object.family) && !isStaffFamily(object.family)
-  && !isEntertainmentFamily(object.family) && isUnitLet(object);
+  && !isEntertainmentFamily(object.family) && !SERVICE_FACILITY_FAMILIES.has(object.family)
+  && isUnitLet(object);
 
 /**
  * Why this object cannot be demolished, or `null`. **The one definition** — the
@@ -933,6 +1032,10 @@ export function demolishRefusal(object) {
   if (object.family === FAMILY.lobby) return 'lobbies cannot be removed';
   if (object.family === FAMILY.housekeeping) return 'housekeeping cannot be bulldozed';
   if (object.family === FAMILY.security) return 'security offices cannot be bulldozed';
+  // Issue #13: *"Lobbies, housekeeping, security, recycling, the metro and the
+  // cathedral can't be bulldozed"* (the same help-file list). A clinic, a parking space
+  // and a ramp are not on it.
+  if (object.family === FAMILY.recycling) return 'recycling centers cannot be bulldozed';
   if (hasTenant(object)) return 'that unit is let — you cannot evict a tenant';
   return null;
 }

@@ -36,6 +36,8 @@ import {
 } from '../sim/ledger-adapter.js';
 import { refreshStartOfDayGates, tryAdvanceStar } from '../sim/progression.js';
 import { CLOSURE_TICK, REBUILD_TICK, RESTAURANT_CLOSURE_TICK } from '../sim/commercial.js';
+import { RECYCLING_CHECK, updateRecyclingState } from '../sim/recycling.js';
+import { rebuildParkingCoverage } from '../sim/parking.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -128,7 +130,11 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
       // reference puts it: `specs/GAME-STATE.md` § Gate Meanings has
       // `rebuild_path_seed_bucket_table()` setting `route_viable` — this same
       // start-of-day rebuild — which is why that gate latches a day late.
-      0: (t) => { rebuildRouteTables(t); refreshStartOfDayGates(t); },
+      //
+      // Issue #13: the ramps' reach is re-read at the start of the day too
+      // (`specs/COMMANDS.md`: *"parking ramps force a parking coverage and demand-history
+      // rebuild"*; `specs/TIME.md` § 0 step 3).
+      0: (t) => { rebuildRouteTables(t); refreshStartOfDayGates(t); rebuildParkingCoverage(t); },
       /**
        * `specs/facility/COMMERCIAL.md` § Capacity, the daily recompute. It
        * runs at 240 rather than 0 because 240 is also the tick every venue's
@@ -148,7 +154,12 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
        * food that nobody could reach loses its $3,000 — the commercial half of
        * "transport decides whether you have tenants".
        */
-      [CLOSURE_TICK]: (t) => runCommercialClosure(t),
+      //
+      // `specs/TIME.md` § 2000 puts the recycling tier-2 check on this same tick,
+      // AFTER the facility advance (step 2 to the sweep's step 1). It rides here
+      // rather than in `extraCheckpoints`, because this key wins over theirs - one
+      // body per tick - and a second body at 2000 would silently replace this one.
+      [CLOSURE_TICK]: (t) => { runCommercialClosure(t); updateRecyclingState(t, RECYCLING_CHECK.afternoon); },
       /**
        * `specs/TIME.md` § 2200, *"type-6 facility advance"*: the same sweep for
        * the restaurant, two hundred ticks later — the evening's diners become
