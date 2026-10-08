@@ -321,9 +321,10 @@ export const tests = {
 
   /**
    * Then it stops, honestly. `specs/GAME-STATE.md` § Star Advancement puts a
-   * security office on the 2→3 gate, and no family implements one — so the
-   * ladder stalls with the name of the thing that is missing rather than
-   * advancing because a requirement was skipped.
+   * security office on the 2→3 gate — so the ladder stalls with the name of the
+   * thing that is missing rather than advancing because a requirement was
+   * skipped. (Before issue #12 no family implemented one and this stall was
+   * permanent; `test/security.test.js` is the half that passes it.)
    */
   'and then stalls on a security office, by name'() {
     const tower = createTower({ seed: 1 });

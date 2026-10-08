@@ -416,6 +416,7 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
   const family = object?.family;
   if (family === FAMILY.lobby) return { name: 'lobby', animation: night ? 'night' : 'day' };
   if (family === FAMILY.housekeeping) return { name: 'housekeeping', animation: night ? 'night' : 'day' };
+  if (family === FAMILY.security) return { name: 'security', animation: night ? 'night' : 'day' };
   // The two entertainment venues, a sheet each. The half is the placed type; the
   // primary half (the one with the linked record) lights up while the venue's
   // day is running - a theater's upper floor while a show is on, a party hall's
@@ -657,6 +658,7 @@ export const SPRITE_USES = {
   condo: ['occupied-day', 'occupied-night', 'stressed'],
   hotel: ['booked-day', 'booked-night', 'poor-review'],
   housekeeping: ['day', 'night'],
+  security: ['day', 'night'],
   restaurant: ['day', 'night'],
   theater: ['upper', 'lower', 'showing'],
   'party-hall': ['upper', 'lower', 'party'],
@@ -1224,6 +1226,7 @@ export function makeRenderer(canvas, options = {}) {
     // rectangle, not a blank room.
     ctx.fillStyle = o.family === FAMILY.lobby ? '#2b3a4d'
       : o.family === FAMILY.housekeeping ? '#1f5560'
+      : o.family === FAMILY.security ? '#2a3f73'
       : let_ ? KIND_COLOR[o.family] ?? INFO : 'rgba(120,132,148,0.35)';
     ctx.fillRect(x, y, w, L.fh - 2);
 
@@ -1941,6 +1944,7 @@ export function makeRenderer(canvas, options = {}) {
       // amber for dirty (a housekeeper has until the 1600 pass), red for lost.
       ctx.fillStyle = o.family === FAMILY.lobby ? '#5aa9e6'
         : o.family === FAMILY.housekeeping ? '#2fb5a8'
+        : o.family === FAMILY.security ? '#5b7fd6'
         : isHotelInfested(o) ? BAD
         : isHotelRoomDirty(o) ? WARN
         : officeIsLet(o) ? KIND_COLOR[o.family] ?? INFO : 'rgba(140,150,165,0.55)';
