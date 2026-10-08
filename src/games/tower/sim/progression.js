@@ -332,10 +332,21 @@ export function tryAdvanceStar(tower) {
  * star level > 2", and `specs/facility/MEDICAL.md`'s note about an unlockable
  * entry — so the rest is the implementation's reading of the menu, not a
  * binary-verified table.
+ *
+ * ⚠️ **The twin room and the suite are corrected from 2 stars to 3** (issue #8,
+ * `spec/DEVIATIONS.md` A27). The reference implementation lists all three hotel
+ * rooms at 2, but the original game's own help file says otherwise, in its
+ * build-menu text: *"Single Hotel Room - Two Stars, $20,000"*, *"Twin Hotel Room
+ * - Three Stars, $50,000"*, *"Hotel Suite - Three Stars, $100,000"* — and again
+ * in its unlock list (Two Stars: Single Hotel Room; Three Stars: Twin Hotel Room,
+ * Hotel Suite). The price a player is shown and the star that unlocks it are the
+ * game's own, so they win over the implementation's reading.
  */
 export const STAR_REQUIREMENT = {
   lobby: 1, floorTile: 1, stairs: 1, elevatorStandard: 1, office: 1, fastFood: 1, condo: 1,
-  elevatorService: 2, hotelSingle: 2, hotelTwin: 2, hotelSuite: 2, housekeeping: 2, security: 2,
+  elevatorService: 2, hotelSingle: 2, housekeeping: 2, security: 2,
+  // The twin and the suite are 3 stars, not 2 — see the note above.
+  hotelTwin: 3, hotelSuite: 3,
   escalator: 3, elevatorExpress: 3, restaurant: 3, retail: 3, partyHall: 3, movieTheater: 3,
   parkingSpace: 3, parkingRamp: 3, recyclingCenter: 3, medical: 3,
   metroStation: 4,

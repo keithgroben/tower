@@ -26,7 +26,11 @@ import { commercialArrival, commercialFamilyHandler } from '../sim/commercial.js
 import {
   CONDO_RESET_TICK, condoArrival, condoDailyReset, condoFamilyHandler,
 } from '../sim/condo.js';
-import { condoCashflowHooks, officeCashflowHooks } from '../sim/ledger-adapter.js';
+import {
+  HOTEL_SALE_RESET_TICK, HOTEL_SWEEP_TICK, hotelArrival, hotelDailyReset, hotelFamilyHandler,
+  hotelMiddaySweep, hotelSaleCountReset,
+} from '../sim/hotel.js';
+import { condoCashflowHooks, hotelCashflowHooks, officeCashflowHooks } from '../sim/ledger-adapter.js';
 import { resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
   CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
@@ -114,6 +118,7 @@ export function makeDriver(world, { observe } = {}) {
   // own `cash`, which is the number the HUD draws — one balance, not two.
   const cashflow = officeCashflowHooks(tower);
   const condoCashflow = condoCashflowHooks(tower);
+  const hotelCashflow = hotelCashflowHooks(tower);
   const price = makeDelayPricer(tower);
 
   // The observers wrap, they do not replace. A `route` that forgot to return
@@ -129,7 +134,27 @@ export function makeDriver(world, { observe } = {}) {
     price(delay, actor);
   };
 
+  // One handler serves all three room families; the family only decides how many
+  // guests the room holds and which payout row it is paid from.
+  const hotelHandler = hotelFamilyHandler({
+    resolveRoute,
+    onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    // **The check-in and the payment, and the payment is the only one that is
+    // money.** `sim/hotel.js` calls `onCheckIn` the instant the first guest
+    // reaches the room (population `+1` / `+2`) and `onCheckout` when the last
+    // guest's route to the lobby is accepted (the stay's payout, population back
+    // out). Unwired, a hotel fills and empties for nothing.
+    onCheckIn: hotelCashflow.onCheckIn,
+    onCheckout: hotelCashflow.onCheckout,
+  });
+  // The arrival that books a room needs the same hooks the dispatch does: a lift
+  // delivers the guest, and the carrier's callback has no `ctx` of its own.
+  const hotelArrives = (actor, floor) => hotelArrival(tower, actor, floor, hotelCashflow);
+
   const scheduler = makeTowerScheduler(tower, {
+    [FAMILY.hotelSingle]: hotelHandler,
+    [FAMILY.hotelTwin]: hotelHandler,
+    [FAMILY.hotelSuite]: hotelHandler,
     [FAMILY.office]: officeFamilyHandler({
       resolveRoute,
       // Every delay the router reports is priced by the stress pipeline, which
@@ -172,13 +197,28 @@ export function makeDriver(world, { observe } = {}) {
     // The arrival handlers are called `(actor, floor)`; the condo's needs its
     // object to step the countdown, and only the tower can answer that.
     [FAMILY.condo]: (actor, floor) => condoArrival(tower, actor, floor),
+    [FAMILY.hotelSingle]: hotelArrives,
+    [FAMILY.hotelTwin]: hotelArrives,
+    [FAMILY.hotelSuite]: hotelArrives,
   }, applyRoutingDelay, {
     // `specs/TIME.md` § 2500. Sold condos clamp back to the sync sentinel and
     // every resident goes back to its band's starting state — which is what
     // puts a refunded condo's residents back on the sale path. Without it a
     // refunded condo runs yesterday's errands for ever and can never resell.
-    [CONDO_RESET_TICK]: condoDailyReset,
+    //
+    // The hotel rows of the same checkpoint share the tick: an occupied room is
+    // clamped to `0x10` and its guests go to checkout-ready, which is what
+    // carries a guest overnight. `extraCheckpoints` holds one body per tick, so
+    // the two families are chained here rather than the later one silently
+    // replacing the earlier.
+    [CONDO_RESET_TICK]: (t) => { condoDailyReset(t); hotelDailyReset(t); },
+    // `specs/TIME.md` § 1600: the hotel recompute-and-refresh, on the tick the
+    // check-in window opens. Issue #10 puts the restaurant rebuild on this tick
+    // too — chain it here, do not add a second key.
+    [HOTEL_SWEEP_TICK]: hotelMiddaySweep,
+    // § 1200: the day's checkout count (the newspaper trigger's input) resets.
+    [HOTEL_SALE_RESET_TICK]: hotelSaleCountReset,
   });
 
-  return { scheduler, applyRoutingDelay, cashflow, condoCashflow };
+  return { scheduler, applyRoutingDelay, cashflow, condoCashflow, hotelCashflow };
 }

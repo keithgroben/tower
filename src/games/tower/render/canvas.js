@@ -40,9 +40,10 @@ import { LINK_WIDTH as LINK_TILES } from '../sim/actions.js';
 import { clockTime } from '../sim/clock.js';
 import { CARRIER_MODE } from '../sim/elevators.js';
 import { COMMERCIAL_FAMILIES } from '../sim/commercial.js';
+import { isHotelRoomDirty } from '../sim/hotel.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, TILES_PER_FLOOR,
-  floorExists, floorLabel, isBasement, isInTransit, isSkyLobbyFloor, isUnitLet,
+  floorExists, floorLabel, isBasement, isHotelFamily, isInTransit, isSkyLobbyFloor, isUnitLet,
 } from '../sim/state.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import FEEL from './feel.js';
@@ -226,6 +227,13 @@ export function minimapContains(metrics, screenX, screenY) {
  */
 export function officeIsLet(object) {
   if (!object) return false;
+  // A hotel room is not *let*, it is *booked*: a guest is in the bed. Its
+  // `occupiedFlag` is the check-in latch, which is set on a vacant room (that is
+  // what lets the first guest try) and cleared on a dirty one — so reading it
+  // here would draw every empty-but-ready room as full and every checked-in room
+  // whose latch had been cleared by the daily refresh as empty. The band alone
+  // says whether somebody is sleeping there.
+  if (isHotelFamily(object.family)) return isUnitLet(object);
   return Boolean(object.occupiedFlag) && isUnitLet(object);
 }
 
@@ -240,6 +248,11 @@ export function officeIsLet(object) {
 export function objectStatusTag(object) {
   if (!object) return '';
   if (officeIsLet(object)) return '';
+  // A hotel room is never FOR RENT — it is let by the night — but it can be
+  // *dirty*, and that is the one thing about an empty room worth saying: the
+  // guest has gone, the money is banked, and the room will not earn again until
+  // somebody cleans it. Issue #9 owns the cleaning; this only tells the truth.
+  if (isHotelFamily(object.family)) return isHotelRoomDirty(object) ? 'DIRTY' : '';
   if (LEASABLE.has(object.family)) return 'FOR RENT';
   if (OWNED.has(object.family)) return 'FOR SALE';
   return '';                                   // a venue is open or closed
@@ -275,6 +288,15 @@ const OWNED = new Set([FAMILY.condo]);
  * built yet and nobody would have looked.
  */
 const TENANTED = new Set([...LEASABLE, ...OWNED]);
+
+/**
+ * Hotel rooms. Not in {@link TENANTED} on purpose: that set drives the
+ * *let* / *vacated* moment, and a hotel is booked and emptied every single day.
+ * Announcing LET over every room each evening and VACATED each morning would be
+ * a tower-wide strobe that teaches a player to ignore the one moment that
+ * matters. Hotel guests are still people with stress, so they get their dots.
+ */
+const HOTEL = new Set([FAMILY.hotelSingle, FAMILY.hotelTwin, FAMILY.hotelSuite]);
 
 /**
  * Families that own people but are never *let*.
@@ -383,6 +405,13 @@ export function queuePressure(count) {
 export function objectSprite(object, { night = false, stressed = false } = {}) {
   const family = object?.family;
   if (family === FAMILY.lobby) return { name: 'lobby', animation: night ? 'night' : 'day' };
+  if (HOTEL.has(family)) {
+    // Vacant, dirty or merely waiting for tonight: the empty shell. The furnished
+    // sheet's own `vacant` frame is not used, for the reason given for the office.
+    if (!officeIsLet(object)) return { name: 'room-empty', animation: 'hotel' };
+    if (stressed) return { name: 'hotel', animation: 'poor-review' };
+    return { name: 'hotel', animation: night ? 'booked-night' : 'booked-day' };
+  }
   if (!LEASABLE.has(family) && !OWNED.has(family) && !VENUE.has(family)) return null;
   // A venue is open or closed, never vacant — there is no lease for it to be
   // without, so it never draws the empty shell.
@@ -550,8 +579,9 @@ export const SPRITE_USES = {
   'lobby-wing': ['day', 'night'],
   office: ['occupied-day', 'occupied-night', 'stressed'],
   condo: ['occupied-day', 'occupied-night', 'stressed'],
+  hotel: ['booked-day', 'booked-night', 'poor-review'],
   shop: ['open-grocery', 'open-cafe', 'open-awning', 'closed-night'],
-  'room-empty': ['office', 'condo'],
+  'room-empty': ['office', 'condo', 'hotel'],
   'shaft-column': ['tile'],
   'stairs-segment': ['tile'],
   'escalator-segment': ['tile'],
@@ -559,6 +589,7 @@ export const SPRITE_USES = {
   'elevator-car-express': ['closed', 'open'],
   'person-worker': ['stand', 'fidget', 'wait', 'wait-annoyed'],
   'person-resident': ['stand', 'fidget', 'wait', 'wait-annoyed'],
+  'person-guest': ['stand', 'fidget', 'wait', 'wait-annoyed', 'luggage'],
   'sky-cloud': ['small', 'medium', 'large'],
   'sky-bird': ['fly'],
   'sky-plane': ['fly'],
@@ -577,11 +608,9 @@ export const SPRITE_USES = {
  * and adding the family that uses one forces its removal from here.
  */
 export const SPRITE_NOT_YET_DRAWN = {
-  hotel: 'no hotel family in sim/state.js — FAMILY has lobby/office/condo/fastFood/retail only',
   'basement-parking': 'parking is an object type nothing places yet (sim/economy.js prices it, sim/state.js has no family)',
   'basement-utility': 'same — no utility family',
   'palette-icons': 'no build palette in this shell; placement is seeded, not clicked',
-  'person-guest': 'drawn by the hotel family, which does not exist',
   placeholder: 'the loader fallback sheet, deliberately never drawn',
 };
 
@@ -603,8 +632,8 @@ export const SPRITE_UNUSED_ANIMATIONS = {
   office: { vacant: 'a vacant unit draws room-empty instead: this sheet\'s own vacant frame still has desks and figures in it, so an empty office looked exactly like a full one' },
   condo: { vacant: 'the furnished sheet\'s vacant frame is not empty enough to read as vacant — see office/vacant' },
   shop: { vacant: 'the furnished sheet\'s vacant frame is not empty enough to read as vacant — see office/vacant' },
+  hotel: { vacant: 'a vacant room draws room-empty/hotel instead — see office/vacant' },
   'room-empty': {
-    hotel: 'no hotel family in sim/state.js, so no hotel unit can be vacant',
     shop: 'a venue is open or closed, never vacant — it has no lease to be without, so it never draws the empty shell',
   },
   'elevator-car': { opening: 'the doors are open (dwell > 0) or closed; the sim has no intermediate door state to key a transition off' },
@@ -617,6 +646,10 @@ export const SPRITE_UNUSED_ANIMATIONS = {
     'walk-left': 'nobody walks; a local segment is crossed in one refresh stride — see person-worker/walk-left',
     'walk-right': 'nobody walks; a local segment is crossed in one refresh stride — see person-worker/walk-left',
     carrying: 'the errand states that would justify it belong to a family module that does not exist',
+  },
+  'person-guest': {
+    'walk-left': 'nobody walks; a local segment is crossed in one refresh stride — see person-worker/walk-left',
+    'walk-right': 'nobody walks; a local segment is crossed in one refresh stride — see person-worker/walk-left',
   },
 };
 
@@ -1133,6 +1166,9 @@ export function makeRenderer(canvas, options = {}) {
   const KIND_COLOR = {
     [FAMILY.office]: '#8ecae6',
     [FAMILY.condo]: '#06d6a0',
+    [FAMILY.hotelSingle]: '#b185db',
+    [FAMILY.hotelTwin]: '#b185db',
+    [FAMILY.hotelSuite]: '#b185db',
     [FAMILY.fastFood]: '#ffb703',
     [FAMILY.retail]: '#ffb703',
   };
@@ -1166,7 +1202,7 @@ export function makeRenderer(canvas, options = {}) {
    * worth showing go in the world, not in a sidebar.
    */
   function drawUnitSignals(L, o, tower) {
-    if (!TENANTED.has(o.family)) return;
+    if (!TENANTED.has(o.family) && !HOTEL.has(o.family)) return;
     const x = L.tileX(o.left);
     const y = L.floorY(o.floor);
     const w = (o.right - o.left + 1) * L.tw;
@@ -1184,6 +1220,10 @@ export function makeRenderer(canvas, options = {}) {
       return;
     }
 
+    // An empty hotel room has no guests to show: its people are in the lobby
+    // waiting for the evening, and dots under a vacant room would say somebody
+    // was home.
+    if (HOTEL.has(o.family) && !officeIsLet(o)) return;
     const occupants = occupantsOf(tower, o);
     if (!occupants.length) return;
     const r = Math.max(1.5, L.zoom);
@@ -1624,8 +1664,14 @@ export function makeRenderer(canvas, options = {}) {
       const pose = band === 'red' ? (beat ? 'wait-annoyed' : 'wait')
         : band === 'pink' ? (beat ? 'fidget' : 'wait')
           : (beat ? 'fidget' : 'stand');
-      const sheet = actor.family === FAMILY.condo ? 'person-resident' : 'person-worker';
-      if (sprites.drawSprite(ctx, { name: sheet, animation: pose, x, y: feetY - h, scale: L.zoom })) {
+      const sheet = actor.family === FAMILY.condo ? 'person-resident'
+        : HOTEL.has(actor.family) ? 'person-guest' : 'person-worker';
+      // A calm guest on the way up to check in is carrying a suitcase — the one
+      // frame the guest sheet has that the others do not. Stress still wins: a
+      // guest near the red band is shown fed up, bags or no bags.
+      const arriving = HOTEL.has(actor.family) && (actor.state & 0x3f) === 0x20;
+      const shown = arriving && band === 'black' ? 'luggage' : pose;
+      if (sprites.drawSprite(ctx, { name: sheet, animation: shown, x, y: feetY - h, scale: L.zoom })) {
         // A stress pip under the feet, because the figure's own colours belong
         // to the art and must not be tinted away.
         ctx.fillStyle = STRESS_COLORS[band];

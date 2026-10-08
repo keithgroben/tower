@@ -109,6 +109,22 @@ function towerWithEverything() {
     actor.accumulatedElapsed = 300;
   }
 
+  // Hotel rooms (issue #8), arranged to reach every frame the sheet has: a
+  // single left VACANT (the empty shell), a twin booked and furious (poor
+  // review), a suite booked and calm (booked day, and booked night at 2450).
+  // On F10, clear of the condos on F9 and the late placement on F8.
+  const HOTEL_FLOOR = 10;
+  const [single, twin, suite] = [
+    [FAMILY.hotelSingle, 54, 57], [FAMILY.hotelTwin, 60, 65], [FAMILY.hotelSuite, 68, 77],
+  ].map(([family, left, right]) => place(tower, { family, floor: HOTEL_FLOOR, left, right }, trips));
+  twin.unitStatus = 0;
+  suite.unitStatus = 0;
+  for (const actor of tower.actors) {
+    if (actor.objectId !== twin.id) continue;
+    actor.tripCount = 1;
+    actor.accumulatedElapsed = 300;      // the clamp: red band
+  }
+
   // An express shaft beside the standard one. Nothing places one in the game
   // yet, but the sheets are delivered and the carrier model supports it.
   const express = createCarrier({
@@ -135,6 +151,24 @@ function towerWithEverything() {
       actor.tripCount = 1;
       actor.accumulatedElapsed = bands[i];
     });
+  }
+
+  // Guests waiting for a lift, one per posture the guest sheet has. The single's
+  // guest is on the way UP to check in, calm, so it carries its suitcase; the
+  // suite's two are in the building, calm and fed up; the twin's is furious.
+  const guestOf = (room) => tower.actors.filter((a) => a.objectId === room.id);
+  const [arriving] = guestOf(single);
+  arriving.state = 0x60;                         // checking in, riding up
+  const [calm, edgy] = guestOf(suite);
+  const [furious] = guestOf(twin);
+  // Placement leaves every guest in 0x20 (waiting to check in), which is the
+  // suitcase pose. The suite's calm guest is already inside — in the room, on
+  // the way out for the evening — so it stands, rather than carrying bags.
+  calm.state = 0x41;
+  for (const [actor, band] of [[arriving, 0], [calm, 0], [edgy, 100], [furious, 300]]) {
+    actor.waitingFloor = HOTEL_FLOOR;
+    actor.tripCount = 1;
+    actor.accumulatedElapsed = band;
   }
 
   // Stairs and an escalator, so both link sheets are drawn (issue #5). Placed
@@ -323,6 +357,9 @@ export const tests = {
       'a let office': 'office/occupied-day',
       'a vacant office': 'room-empty/office',
       'a stressed office': 'office/stressed',
+      'a guest in the bed': 'hotel/booked-day',
+      'an empty, ready hotel room': 'room-empty/hotel',
+      'a guest with a suitcase': 'person-guest/luggage',
       'somebody waiting, fed up': 'person-worker/wait-annoyed',
       'somebody waiting, calm': 'person-worker/stand',
       'a lift car with its doors open': 'elevator-car/open',

@@ -15,8 +15,9 @@
  * restates the composition measures a copy, and reports confidently on a game
  * nobody is playing the day the two drift. So the composition moved instead.
  */
-import { FAMILY, isUnitLet, population } from '../src/games/tower/sim/state.js';
+import { FAMILY, isHotelFamily, isUnitLet, population } from '../src/games/tower/sim/state.js';
 import { isCondoSold } from '../src/games/tower/sim/condo.js';
+import { isHotelBooked, isHotelRoomDirty } from '../src/games/tower/sim/hotel.js';
 import { CONSTRUCTION_COST, RENT_TIERS } from '../src/games/tower/sim/economy.js';
 import { seedDemoWorld } from '../src/games/tower/ui/seed.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
@@ -32,6 +33,9 @@ export function readout(world) {
   let let_ = 0, leasable = 0;
   for (const o of tower.objects.values()) {
     if (o.occupants.length === 0) continue;
+    // A hotel room is booked by the night, not let — the HUD leaves it out for
+    // the same reason, and `hotelWatch` below reports it on its own line.
+    if (isHotelFamily(o.family)) continue;
     leasable++;
     // Per family: an office is let to `0x0f`, a condo is sold to `0x17`.
     if (o.occupiedFlag && isUnitLet(o)) let_++;
@@ -101,6 +105,39 @@ export function condoWatch(tower) {
 }
 
 /**
+ * **The hotel ledger, watched rather than inferred** — for the same reason as
+ * the condo's, and with a sharper reason still: a hotel's income is one payment
+ * per stay, banked in the morning on top of a tower's worth of rent, so a daily
+ * cash sample cannot see it at all.
+ *
+ * A check-in is `unit_status` entering the occupied band and a checkout is it
+ * leaving for the dirty one; `activateHotelRoom` and `checkoutHotelRoom` are the
+ * only two things that cross either edge, so a per-tick watch cannot miss a stay.
+ * The price is read at the moment of the event, from the table the sim pays out
+ * of.
+ */
+export function hotelWatch(tower) {
+  const seen = new Map();               // object id -> was a guest in residence last tick
+  const totals = { checkins: 0, checkouts: 0, earned: 0 };
+  const PRICE = { [FAMILY.hotelSingle]: 'hotelSingle', [FAMILY.hotelTwin]: 'hotelTwin', [FAMILY.hotelSuite]: 'hotelSuite' };
+
+  return {
+    totals,
+    sample() {
+      for (const object of tower.objects.values()) {
+        if (!isHotelFamily(object.family)) continue;
+        const booked = isHotelBooked(object);
+        const before = seen.get(object.id);
+        seen.set(object.id, booked);
+        if (before === undefined || before === booked) continue;
+        if (booked) totals.checkins++;
+        else { totals.checkouts++; totals.earned += RENT_TIERS[PRICE[object.family]][object.rentLevel] ?? 0; }
+      }
+    },
+  };
+}
+
+/**
  * A player, roughly.
  *
  * Not an optimiser — an impatient person with money. They extend the lift to
@@ -113,8 +150,34 @@ export function condoWatch(tower) {
  * If it never costs them, the game has no bottom, and "build more" is a button
  * that only ever prints money.
  */
-export function greedyBuilder(world, { condos = true } = {}) {
+export function greedyBuilder(world, { condos = true, hotels = true } = {}) {
   const { tower } = world;
+
+  /**
+   * A hotel next to an office is a hotel with a noise problem — offices are on
+   * its noise list and within 20 tiles it starts 60 points into a 150-point
+   * failure budget — so a player who has learned that, or lost money finding
+   * out, builds them on a floor of their own. This is the first floor with
+   * nothing but hotel rooms on it; if it is above the lift, tomorrow's step 1
+   * extends the lift to it, which is free.
+   */
+  const buildHotelRoom = () => {
+    if (tower.starCount < 2) return null;            // single rooms are a two-star tool
+    let top = 0;
+    for (const o of tower.objects.values()) if (o.floor > top) top = o.floor;
+    for (let floor = 1; floor <= top + 1; floor++) {
+      const mixed = [...tower.objects.values()].some((o) => o.floor === floor && !isHotelFamily(o.family));
+      if (mixed) continue;
+      for (let left = 0; left + BUILDABLE.hotelSingle.width <= 150; left += BUILDABLE.hotelSingle.width) {
+        const r = applyAction(world, { type: 'build', what: 'hotelSingle', floor, left });
+        if (r.ok) return 'built a hotel room on F' + floor;
+        if (/afford/.test(r.reason ?? '')) return null;
+      }
+    }
+    return null;
+  };
+  const hotelCount = () => [...tower.objects.values()].filter((o) => isHotelFamily(o.family)).length;
+
   return function act() {
     const lift = tower.carriers[0];
     if (!lift) return null;
@@ -127,6 +190,10 @@ export function greedyBuilder(world, { condos = true } = {}) {
       const r = applyAction(world, { type: 'extend_shaft', carrierId: lift.id, top: highest });
       if (r.ok) return 'extended the lift to F' + highest;
     }
+
+    // 1b. The moment hotels unlock, a dozen of them: they are the new toy, and
+    //     they are what puts people in the lifts in the evening.
+    if (hotels && hotelCount() < 12) { const did = buildHotelRoom(); if (did) return did; }
 
     // 2. A condo is the shiny expensive thing, so it is what an impatient
     //    person with money reaches for first. $80,000 out, $150,000 back the
@@ -153,6 +220,9 @@ export function greedyBuilder(world, { condos = true } = {}) {
         if (/afford/.test(r.reason ?? '')) return null;   // broke; wait for rent
       }
     }
+
+    // 4. Out of rooms to stack: a hotel, however many there are already.
+    if (hotels) { const did = buildHotelRoom(); if (did) return did; }
     return null;
   };
 }
@@ -165,10 +235,14 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   // `--offices-only` reproduces the plan this harness had before condos
   // existed, so the two runs are comparable line for line.
   const condos = !process.argv.includes('--offices-only');
+  // `--no-hotels` reproduces the plan this harness had before hotel rooms
+  // existed, which is what makes a before/after comparison line for line.
+  const hotels = !process.argv.includes('--no-hotels');
   const world = seedDemoWorld({ seed });
   const { scheduler } = makeDriver(world);
-  const act = plays ? greedyBuilder(world, { condos }) : () => null;
+  const act = plays ? greedyBuilder(world, { condos, hotels }) : () => null;
   const condoLedger = condoWatch(world.tower);
+  const hotelLedger = hotelWatch(world.tower);
 
   const money = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
   const pad = (s, n) => String(s).padStart(n);
@@ -192,7 +266,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     // game failing to move anybody, and it is exactly the shape of reading
     // that gets mistaken for a bug and then "fixed".
     const step = d === 0 ? TICKS_PER_DAY / 2 : TICKS_PER_DAY;
-    for (let t = 0; t < step; t++) { scheduler.tick(world.tower); condoLedger.sample(); }
+    for (let t = 0; t < step; t++) { scheduler.tick(world.tower); condoLedger.sample(); hotelLedger.sample(); }
     // The player acts once a day, at the start, the way somebody who checks in
     // each morning would. Several builds a day, because one office a day is a
     // pace no person keeps.
@@ -236,4 +310,27 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   console.log('\ncondos  ' + sold + '/' + built + ' sold · ' + c.sales + ' sale(s) '
     + money(c.earned) + ' · ' + c.refunds + ' refund(s) ' + money(-c.given)
     + ' · construction ' + money(-spent) + '  =  ' + money(net));
+
+  // Hotels, the same way: stated even when there are none. A guest checking in is
+  // the evening and a checkout is the morning, so a room that shows a check-in and
+  // no checkout is a guest the lifts could not get out again.
+  const h = hotelLedger.totals;
+  const rooms = { hotelSingle: 0, hotelTwin: 0, hotelSuite: 0 };
+  const nameOf = {
+    [FAMILY.hotelSingle]: 'hotelSingle', [FAMILY.hotelTwin]: 'hotelTwin', [FAMILY.hotelSuite]: 'hotelSuite',
+  };
+  let booked = 0, dirty = 0, spentOnRooms = 0;
+  for (const o of world.tower.objects.values()) {
+    if (!isHotelFamily(o.family)) continue;
+    const name = nameOf[o.family];
+    rooms[name]++;
+    if (isHotelBooked(o)) booked++;
+    if (isHotelRoomDirty(o)) dirty++;
+    spentOnRooms += CONSTRUCTION_COST[name] + BUILDABLE[name].width * CONSTRUCTION_COST.floorTile;
+  }
+  const total = rooms.hotelSingle + rooms.hotelTwin + rooms.hotelSuite;
+  console.log('hotels  ' + total + ' room(s) (' + rooms.hotelSingle + ' single, ' + rooms.hotelTwin + ' twin, '
+    + rooms.hotelSuite + ' suite) · ' + booked + ' booked, ' + dirty + ' dirty · ' + h.checkins
+    + ' check-in(s), ' + h.checkouts + ' checkout(s) ' + money(h.earned) + ' · construction '
+    + money(-spentOnRooms) + '  =  ' + money(h.earned - spentOnRooms));
 }

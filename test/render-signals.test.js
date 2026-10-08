@@ -110,6 +110,11 @@ export const tests = {
       retail: '',
       restaurant: '',
       lobby: '',         // infrastructure
+      // A hotel room is let by the night, never FOR RENT. It says DIRTY only
+      // after a checkout, which is covered by its own test below.
+      hotelSingle: '',
+      hotelTwin: '',
+      hotelSuite: '',
     };
     const tower = createTower({ seed: 1 });
     let left = 0;
