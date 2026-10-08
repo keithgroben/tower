@@ -90,6 +90,12 @@ function bareCathedral(seed = 1) {
   return tower;
 }
 
+/** Tick until the Tower rank (a week at most: a rank that never comes is a failure, not a hang). */
+function untilRank(tower, scheduler, limit = 2600 * 7) {
+  for (let n = 0; n < limit && tower.starCount !== TOWER_RANK; n++) scheduler.tick(tower);
+  assert(tower.starCount === TOWER_RANK, 'the Tower rank never came in ' + limit + ' ticks');
+}
+
 /** Service every guest once with the handler. */
 function pass(tower, handler) {
   for (const guest of cathedralGuests(tower)) handler(tower, guest);
@@ -537,7 +543,7 @@ export const tests = {
     const env = weddingTower();
     const { tower, scheduler } = env;
     tower.populationLedger.crowd = 15_000;
-    while (tower.starCount !== TOWER_RANK) scheduler.tick(tower);
+    untilRank(tower, scheduler);
     const finale = { ...tower.finale };
     for (let n = 0; n < 2600 * 8; n++) scheduler.tick(tower);              // three more weddings' worth of weekends
     assert(tower.starCount === TOWER_RANK, 'still the Tower rank');
@@ -580,7 +586,7 @@ export const tests = {
     assert(eventsReadout(tower).includes('WEDDING - '), 'the bar carries it: ' + eventsReadout(tower));
     // The banner.
     tower.populationLedger.crowd = 15_000;
-    while (tower.starCount !== TOWER_RANK) scheduler.tick(tower);
+    untilRank(tower, scheduler);
     const model = finaleModel(env.world);
     assert(model && model.title === 'Congratulations!' && model.body[0] === 'Your tower has been given a "Tower" Rating!', JSON.stringify(model));
     assert(model.key === finaleKeyOf(tower) && finaleModel(env.world, model.key) === null, 'dismissed means gone');
