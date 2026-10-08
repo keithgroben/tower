@@ -1731,7 +1731,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     const opt = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
     const quick = argv.includes('--quick') || argv.includes('--compare');
     const base = quick ? QUICK : { days: 130, crowd: false, crowdFrom: 3 };
-    const explicitDays = argv.find((a) => /^\d+$/.test(a));
+    const explicitDays = argv.find((a, i) => /^\d+$/.test(a) && !String(argv[i - 1]).startsWith('--'));
     const options = {
       ...base,
       days: Number(explicitDays ?? base.days),
