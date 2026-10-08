@@ -29,7 +29,8 @@
  * **its** refusal, so a disagreement surfaces as a visible sentence rather than
  * as a ghost that lied.
  */
-import { BUILDABLE, SHAFT_KIND, hasTenant, shaftObstruction } from '../sim/actions.js';
+import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, hasTenant, linkObstruction, shaftObstruction } from '../sim/actions.js';
+import { lockReason } from '../sim/progression.js';
 import {
   carCostForMode, chargeConstruction, payout, placementCost, CONSTRUCTION_COST, TYPE_CODES,
 } from '../sim/economy.js';
@@ -82,6 +83,14 @@ export const TOOLS = [
     kind,
     label: spec.label,
   })),
+  // Stairs and escalators: overlays that join a floor to the one above.
+  ...Object.entries(LINK_KIND).map(([kind, spec]) => ({
+    id: 'link-' + kind,
+    action: 'build_link',
+    kind,
+    label: spec.label,
+    width: LINK_WIDTH,
+  })),
   // Extending sits next to the shaft that made it necessary. It is the fix for
   // a stranded floor and it is free, so it should be the first thing a player
   // reaches for before paying $200,000 for a second lift.
@@ -91,7 +100,9 @@ export const TOOLS = [
   { id: 'demolish', action: 'demolish', label: 'Demolish' },
 ];
 
-TOOLS.forEach((tool, i) => { tool.key = String(i + 1); });
+// One keypress per tool, for the first nine. A tenth button would be "10",
+// which no single key press can send; those tools are reached by clicking.
+TOOLS.forEach((tool, i) => { if (i < 9) tool.key = String(i + 1); });
 
 export const toolById = (id) => TOOLS.find((t) => t.id === id) ?? null;
 
@@ -146,9 +157,14 @@ export function commandFor(tower, tool, target) {
       if (target.floor < carrier.bottomFloor) return { type: 'extend_shaft', carrierId: carrier.id, bottom: target.floor };
       return null;
     }
+    case 'build_link':
+      return { type: 'build_link', kind: tool.kind, floor: target.floor, left: snapLeft(target.tile, LINK_WIDTH) };
     case 'set_rent':
       return target.object ? { type: 'set_rent', objectId: target.object.id, tier: nextRentTier(target.object.rentLevel) } : null;
     case 'demolish':
+      // A link is an overlay standing ON a room, so pointing at one means the
+      // link; the room beneath is reached by demolishing the link first.
+      if (target.link) return { type: 'demolish_link', index: target.link.index };
       return target.object ? { type: 'demolish', objectId: target.object.id } : null;
     default:
       return null;
@@ -164,6 +180,7 @@ export function costOf(tower, command) {
     return placementCost(spec.cost, { tiles: spec.width, floor: command.floor, lobbyHeight: tower.lobbyHeight });
   }
   if (command.type === 'build_shaft') return CONSTRUCTION_COST[SHAFT_KIND[command.kind]?.cost] ?? 0;
+  if (command.type === 'build_link') return CONSTRUCTION_COST[LINK_KIND[command.kind]?.cost] ?? 0;
   if (command.type === 'add_car') return carCostForMode(tower.carriers.find((c) => c.id === command.carrierId)?.mode);
   return 0;
 }
@@ -196,6 +213,31 @@ export function preview(world, tool, target) {
   // The real affordability rule, run against a COPY so no money moves.
   // `chargeConstruction` only touches `cash`, so a shallow copy is enough.
   const affordable = chargeConstruction({ ...ledger }, cost).charged;
+
+  // A lock is a different answer from a price (`sim/actions.js` checks it first
+  // for the same reason), so the ghost says it before anything else.
+  const lockedOut = command.type === 'build' ? lockReason(tower, BUILDABLE[command.what].cost, BUILDABLE[command.what].label)
+    : command.type === 'build_shaft' ? lockReason(tower, SHAFT_KIND[command.kind].cost, SHAFT_KIND[command.kind].label)
+    : command.type === 'build_link' ? lockReason(tower, LINK_KIND[command.kind].cost, LINK_KIND[command.kind].label)
+    : null;
+  if (lockedOut) {
+    const f = command.type === 'build_link' ? { kind: 'link', floor: command.floor, left: command.left, right: command.left + LINK_WIDTH - 1 }
+      : { kind: 'room', floor: command.floor ?? 0, left: command.left ?? 0, right: command.left ?? 0 };
+    return refuse(lockedOut, { cost, footprint: command.type === 'build_shaft' ? null : f });
+  }
+
+  if (command.type === 'build_link') {
+    const footprint = { kind: 'link', floor: command.floor, left: command.left, right: command.left + LINK_WIDTH - 1 };
+    const stopped = linkObstruction(tower, command);
+    if (stopped) return refuse(stopped, { cost, footprint });
+    if (!affordable) return refuse(cannotAfford(cost, ledger), { cost, footprint });
+    return { ok: true, cost, footprint, command };
+  }
+
+  if (command.type === 'demolish_link') {
+    const s = tower.segments[command.index];
+    return { ok: true, cost: 0, footprint: { kind: 'link', floor: s.entryFloor, left: s.left, right: s.left + LINK_WIDTH - 1 }, command };
+  }
 
   if (command.type === 'build') {
     const spec = BUILDABLE[command.what];

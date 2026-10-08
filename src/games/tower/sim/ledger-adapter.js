@@ -234,7 +234,7 @@ export const chargeableCarriers = (tower) =>
  * count — so `linkExpense` reads it with no translation.
  */
 export const chargeableLinks = (tower) =>
-  (tower.segments ?? []).map((segment) => ({ modeAndSpan: segment.flags }));
+  (tower.segments ?? []).filter((segment) => segment && segment.active !== false).map((segment) => ({ modeAndSpan: segment.flags }));
 
 // ------------------------------------------------------- the family seams
 

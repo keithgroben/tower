@@ -36,6 +36,7 @@
  * floor for validity with `< 0` — `−1` is B1, a real floor (`CLAUDE.md`, the
  * sentinel section). `floorExists()` is the check.
  */
+import { LINK_WIDTH as LINK_TILES } from '../sim/actions.js';
 import { clockTime } from '../sim/clock.js';
 import { CARRIER_MODE } from '../sim/elevators.js';
 import { COMMERCIAL_FAMILIES } from '../sim/commercial.js';
@@ -552,6 +553,8 @@ export const SPRITE_USES = {
   shop: ['open-grocery', 'open-cafe', 'open-awning', 'closed-night'],
   'room-empty': ['office', 'condo'],
   'shaft-column': ['tile'],
+  'stairs-segment': ['tile'],
+  'escalator-segment': ['tile'],
   'elevator-car': ['closed', 'open'],
   'elevator-car-express': ['closed', 'open'],
   'person-worker': ['stand', 'fidget', 'wait', 'wait-annoyed'],
@@ -577,8 +580,6 @@ export const SPRITE_NOT_YET_DRAWN = {
   hotel: 'no hotel family in sim/state.js — FAMILY has lobby/office/condo/fastFood/retail only',
   'basement-parking': 'parking is an object type nothing places yet (sim/economy.js prices it, sim/state.js has no family)',
   'basement-utility': 'same — no utility family',
-  'stairs-segment': 'sim/routing.js models segments, but nothing constructs one yet',
-  'escalator-segment': 'same as stairs-segment',
   'palette-icons': 'no build palette in this shell; placement is seeded, not clicked',
   'person-guest': 'drawn by the hotel family, which does not exist',
   placeholder: 'the loader fallback sheet, deliberately never drawn',
@@ -849,6 +850,7 @@ export function makeRenderer(canvas, options = {}) {
     // drawing the column first let a 54-tile lobby paint straight over its own
     // doors — the shaft vanished on exactly the floor it matters most.
     for (const carrier of tower.carriers) drawShaft(L, carrier, visible);
+    drawLinks(L, tower, visible);
     drawConstruction(L);
     for (const carrier of tower.carriers) drawCars(L, carrier, dtMs);
     drawWaiting(L, tower, visible, byFloor);
@@ -1282,6 +1284,10 @@ export function makeRenderer(canvas, options = {}) {
         w: (f.right - f.left + 1) * L.tw, h: L.fh - 2,
       };
     }
+    if (f.kind === 'link') {
+      const top = L.floorY(f.floor + 1);
+      return { x: L.tileX(f.left), y: top, w: (f.right - f.left + 1) * L.tw, h: L.floorY(f.floor) + L.fh - top };
+    }
     if (f.kind === 'shaft') {
       const top = L.floorY(f.top);
       return { x: L.tileX(f.column), y: top, w: f.width * L.tw, h: L.floorY(f.bottom) + L.fh - top };
@@ -1472,6 +1478,24 @@ export function makeRenderer(canvas, options = {}) {
         ctx.font = '700 8px ui-monospace, monospace';
         ctx.fillText(String(p.count), x + w + 3, y + L.fh * 0.62);
       }
+    }
+  }
+
+  /**
+   * Stairs and escalators: one 48x32 art cell per floor (lower flight, then
+   * upper flight, the sheet's two frames), centred in the 8-tile footprint and
+   * drawn over the room it stands on.
+   */
+  function drawLinks(L, tower, visible) {
+    const cellW = ART_CELL_TILES * L.tw;
+    for (const segment of tower.segments ?? []) {
+      if (!segment?.active) continue;
+      const name = segment.kind === 'stairs' ? 'stairs-segment' : 'escalator-segment';
+      const x = L.tileX(segment.left) + (LINK_TILES * L.tw - cellW) / 2;
+      const top = segment.entryFloor + 1;
+      if (top < visible.low || segment.entryFloor > visible.high) continue;
+      sprites.drawSprite(ctx, { name, animation: 'tile', frame: 0, x, y: L.floorY(segment.entryFloor), scale: L.zoom });
+      sprites.drawSprite(ctx, { name, animation: 'tile', frame: 1, x, y: L.floorY(top), scale: L.zoom });
     }
   }
 
@@ -1805,6 +1829,22 @@ export function makeRenderer(canvas, options = {}) {
     return null;
   }
 
+  /** The stairs or escalator under the pointer, as `{ index, segment }`, or null. */
+  function linkAt(tower, px, py) {
+    const floor = floorAt(px, py);
+    const tile = tileAt(px);
+    if (floor === null || tile === null) return null;
+    const list = tower.segments ?? [];
+    for (let index = 0; index < list.length; index++) {
+      const s = list[index];
+      if (!s?.active) continue;
+      if ((floor === s.entryFloor || floor === s.entryFloor + 1) && tile >= s.left && tile < s.left + LINK_TILES) {
+        return { index, segment: s };
+      }
+    }
+    return null;
+  }
+
   function dragBy(dx, dy) {
     camera.x -= dx / camera.zoom;
     camera.y -= dy / camera.zoom;
@@ -1873,7 +1913,7 @@ export function makeRenderer(canvas, options = {}) {
 
   return {
     draw, resize, layout, setGhost,
-    floorAt, tileAt, objectAt, carrierAt, carrierColumnAt,
+    floorAt, tileAt, objectAt, linkAt, carrierAt, carrierColumnAt,
     dragBy, setZoom, zoomBy, goTo, frameLobby, minimapAt, minimapJump,
     /** The sky, so a check can put something in the air on demand rather than
      *  waiting out a rate meant to make surprises rare. */

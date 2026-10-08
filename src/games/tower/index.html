@@ -152,12 +152,17 @@
   #palette {
     position: absolute;
     left: 12px;
-    top: 50%;
-    transform: translateY(-50%);
+    top: 92px;
+    /* Scroll rather than run into the footer: the palette grows with every
+       family the sim learns to build (twenty-odd by the end). */
+    max-height: calc(100% - 92px - 56px);
+    overflow-y: auto;
+    scrollbar-width: thin;
     display: flex;
     flex-direction: column;
     gap: 4px;
   }
+  #palette button b:empty { display: none; }
   #palette button {
     display: flex;
     align-items: baseline;

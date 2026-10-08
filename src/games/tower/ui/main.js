@@ -260,6 +260,7 @@ const targetAt = (px, py) => ({
   floor: renderer.floorAt(px, py),
   tile: renderer.tileAt(px),
   object: renderer.objectAt(tower, px, py),
+  link: renderer.linkAt(tower, px, py),
   carrier: renderer.carrierAt(tower, px, py),
   // The shaft in this column whatever floor the pointer is on — extending
   // means pointing at empty sky ABOVE a lift, where the floor-bounded pick
@@ -530,12 +531,12 @@ function buildPalette() {
   for (const tool of TOOLS) {
     const button = document.createElement('button');
     button.dataset.tool = tool.id;
-    button.title = tool.label + '  (' + tool.key + ')';
+    button.title = tool.key ? tool.label + '  (' + tool.key + ')' : tool.label;
     // No price on the button. What a thing costs depends on the floor it lands
     // on — an office is $40,000 plus its tiles — so a number here would
     // disagree with the ghost, and a price that changes when you point at it is
     // worse than one that only appears when you do.
-    button.innerHTML = '<b>' + tool.key + '</b> ' + tool.label;
+    button.innerHTML = '<b>' + (tool.key ?? '') + '</b> ' + tool.label;
     button.addEventListener('click', () => selectTool(activeTool?.id === tool.id ? null : tool));
     bar.appendChild(button);
   }

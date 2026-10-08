@@ -17,7 +17,7 @@
  * `check_construction_funds_available_for_floor_range`.
  */
 import {
-  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, floorExists, isUnitLet,
+  COMMERCIAL_FAMILY_CODES, FAMILY, GROUND_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR, floorExists, isUnitLet,
   placeObject, spanBlocked,
 } from './state.js';
 import {
@@ -25,6 +25,7 @@ import {
 } from './elevators.js';
 import { CONSTRUCTION_COST, carCostForMode, chargeConstruction, placementCost } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
+import { MAX_SEGMENTS, createSegment, segmentTopFloor } from './routing.js';
 import { createSimTripRecord } from './stress.js';
 import { FAST_FOOD_WIDTH, finalizeCommercialVenue } from './commercial.js';
 
@@ -92,6 +93,93 @@ export const SHAFT_KIND = {
 };
 
 const refuse = (reason) => ({ ok: false, reason });
+
+// ------------------------------------------------------------ stairs & escalators
+
+/**
+ * Stairs and escalators are **overlays**, not rooms: `specs/COMMANDS.md` calls
+ * them "multifloor special-link overlays, not shaft objects". One link joins a
+ * floor to the floor above it, standing on top of what is already built.
+ *
+ * `cost` keys into `CONSTRUCTION_COST` and `STAR_REQUIREMENT` (stairs 1 star,
+ * $5,000; escalator 3 stars, $20,000). There is no floor-tile charge, because
+ * nothing new is built under a link.
+ */
+export const LINK_KIND = {
+  stairs: { kind: 'stairs', cost: 'stairs', label: 'Stairs' },
+  escalator: { kind: 'escalator', cost: 'escalator', label: 'Escalator' },
+};
+
+/** Tiles a link occupies at each landing. `specs/COMMANDS.md`: "the requested 8-tile footprint". */
+export const LINK_WIDTH = 8;
+
+/**
+ * Families an **escalator** may stand on at either landing. `specs/COMMANDS.md`:
+ * *"empty, restaurant, retail, fast food, party hall (upper), party hall
+ * (lower), lobby, cinema (upper), cinema (lower), single hotel room"* — the
+ * help file says it plainly: "only on commercial or public areas". Stairs skip
+ * this check. Families that do not exist yet (party hall, cinema, hotel) join
+ * this set when they land (issues #8 and #11).
+ */
+export const ESCALATOR_UNDERLAY = new Set([FAMILY.lobby, FAMILY.restaurant, FAMILY.retail, FAMILY.fastFood]);
+
+/** A link's footprint: the same 8 tiles on its lower floor and the floor above. */
+export const linkFootprint = ({ floor, left }) => ({
+  left, right: left + LINK_WIDTH - 1, bottom: floor, top: floor + 1,
+});
+
+/**
+ * Why this link cannot go here, or null. Pure, so the ghost asks the sim
+ * rather than restating the rules (the shaft check works the same way).
+ *
+ * TODO(parity): `COMMANDS.md` says the top landing needs the footprint to fit
+ * "with a 2-tile left inset" and narrow geometry is a stepped two-half shape.
+ * Neither is recovered precisely enough to implement, so both landings use the
+ * plain 8 tiles and overlap is tested on the bounding rectangle. Recorded in
+ * `spec/DEVIATIONS.md` as A23.
+ */
+export function linkObstruction(tower, { kind, floor, left }) {
+  const spec = LINK_KIND[kind];
+  if (!spec) return 'there is no "' + kind + '" to build';
+  if (!Number.isInteger(floor) || !Number.isInteger(left)) return 'point at a floor';
+  const box = linkFootprint({ floor, left });
+  if (!floorExists(box.bottom) || !floorExists(box.top)) return 'that link leaves the tower';
+  if (box.left < 0 || box.right >= TILES_PER_FLOOR) return 'that link leaves the lot';
+
+  for (const landing of [box.bottom, box.top]) {
+    const covering = [];
+    for (let tile = box.left; tile <= box.right; tile++) {
+      const under = [...tower.objects.values()].find((o) => o.floor === landing && o.left <= tile && o.right >= tile);
+      if (!under) return 'both ends of ' + (kind === 'stairs' ? 'stairs' : 'an escalator') + ' need floor under them — nothing is built there on floor ' + landing;
+      covering.push(under);
+    }
+    if (kind === 'escalator') {
+      const bad = covering.find((o) => !ESCALATOR_UNDERLAY.has(o.family));
+      if (bad) return 'escalators go only in shops, restaurants and lobbies';
+    }
+  }
+
+  // A link and a lift cannot share ground (help file: "Elevators and stairs
+  // cannot be placed over each other").
+  for (const carrier of tower.carriers) {
+    const other = shaftClearance({
+      mode: carrier.mode, bottom: carrier.bottomFloor, top: carrier.topFloor, column: carrier.column,
+    });
+    if (other.bottom > box.top || other.top < box.bottom) continue;
+    if (other.left > box.right || other.right < box.left) continue;
+    return 'cannot place over other transportation';
+  }
+  for (const segment of tower.segments ?? []) {
+    if (!segment?.active) continue;
+    const there = linkFootprint({ floor: segment.entryFloor, left: segment.left });
+    if (there.bottom > box.top || there.top < box.bottom) continue;
+    if (there.left > box.right || there.right < box.left) continue;
+    return 'cannot place over other transportation';
+  }
+  const live = (tower.segments ?? []).filter((s) => s?.active).length;
+  if (live >= MAX_SEGMENTS) return 'no more stairs or escalators available (the limit is ' + MAX_SEGMENTS + ')';
+  return null;
+}
 
 /**
  * A shaft's clearance rectangle. `specs/COMMANDS.md` § Elevator placement
@@ -319,6 +407,45 @@ const ACTIONS = {
     resizeCarrierSlots(carrier, newBottom, newTop);
     tower.routeTablesDirty = true;
     return { ok: true, cost: 0, bottom: newBottom, top: newTop };
+  },
+
+  /**
+   * Stairs or an escalator from `floor` to `floor + 1`. An overlay: nothing is
+   * built under it and it is **free of floor charges**.
+   */
+  build_link({ tower, ledger }, { kind, floor, left }) {
+    const spec = LINK_KIND[kind];
+    if (!spec) return refuse('there is no "' + kind + '" to build');
+    const locked = lockReason(tower, spec.cost, spec.label);
+    if (locked) return refuse(locked);
+    const stopped = linkObstruction(tower, { kind, floor, left });
+    if (stopped) return refuse(stopped);
+
+    const cost = CONSTRUCTION_COST[spec.cost];
+    const paid = chargeConstruction(ledger, cost);
+    if (!paid.charged) {
+      return refuse('that costs $' + cost.toLocaleString('en-US')
+        + ' and you have $' + ledger.cash.toLocaleString('en-US'));
+    }
+    const segment = createSegment({ kind, column: left + LINK_WIDTH / 2, entryFloor: floor, floorsSpanned: 1 });
+    segment.left = left;
+    tower.segments ??= [];
+    // Reuse a bulldozed slot first: a route token names a segment by its index,
+    // so removing from the middle of the array would re-point trips in flight.
+    const free = tower.segments.findIndex((s) => !s?.active);
+    const index = free >= 0 ? free : tower.segments.length;
+    tower.segments[index] = segment;
+    tower.routeTablesDirty = true;
+    return { ok: true, cost, index, segment };
+  },
+
+  /** Bulldoze a link. Free, and the slot is kept (see `build_link`). */
+  demolish_link({ tower }, { index }) {
+    const segment = tower.segments?.[index];
+    if (!segment?.active) return refuse('nothing there');
+    segment.active = false;
+    tower.routeTablesDirty = true;
+    return { ok: true, freed: segment };
   },
 
   /** Add a car to an existing shaft. The one purchase that scales a route. */
