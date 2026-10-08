@@ -563,14 +563,19 @@ export const tests = {
       assert(built.has(what), 'the script never built a ' + what + ' - built: ' + [...built]);
     }
     const early = r.perDay[1];
-    assert(early.star === 3 && early.hud.includes('2 hotel suites') && early.hud.includes('a favorable VIP stay (VIP visits are not in this build yet)'),
+    assert(early.star === 3 && early.hud.includes('2 hotel suites') && early.hud.includes('a favorable VIP stay'),
       'at three stars the bar names the lot: ' + early.hud);
     assert(r.perDay.some((d) => d.star === 4 && d.hud.includes('every demand answered (Office workers demand Parking)')),
       'at four stars the bar says the tower still wants parking');
     assert(r.perDay.some((d) => d.star === 5 && d.hud.startsWith('Next: Tower - ')), 'and at five it asks for the Tower rank');
     // The stand-ins were set, and only those.
-    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,officeServiceOk,vipStayFavorable,weddingGuestsArrived',
+    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,officeServiceOk,weddingGuestsArrived',
       'stand-ins: ' + Object.keys(r.flagsSetOn));
+    // ...and the VIP is not one of them (issue #16): a real visitor booked a real suite, rode the
+    // real lifts and was pleased, which is what opened 3 -> 4.
+    const vip = r.world.tower.events.history.filter((h) => h.kind === 'vip').map((h) => h.outcome);
+    assert(vip.includes('booked') && vip.includes('arrived') && vip.at(-1) === 'comfortable',
+      'the VIP earned the gate himself: ' + vip);
     // ...and the metro station was BUILT, by the script, through the seam, not flagged.
     assert(built.has('metro station') && r.metroPlacedDay !== null && r.metroPlacedDay < five.day,
       'the script built the station before the fifth star: ' + r.metroPlacedDay);

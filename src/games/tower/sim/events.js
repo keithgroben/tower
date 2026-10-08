@@ -156,8 +156,8 @@ export const FIRE_MIN_STARS = 3;
 // -------------------------------------------------------------------- the VIP
 
 /**
- * **A VIP is booked on the morning's check (240), arrives when the evening's check-in window
- * opens (1600), sleeps in the suite, and rides down after tick 400 the next day.**
+ * **A VIP is booked at one o'clock (1200), arrives when the evening's check-in window opens
+ * (1600), sleeps in the suite, and rides down after tick 400 the next day.**
  *
  * None of this is in `specs/`. `EVENTS.md` § VIP / Special Visitor Event is the metro
  * station's display toggle, says outright that it *"does not feed the star gate or route
@@ -168,6 +168,7 @@ export const FIRE_MIN_STARS = 3;
  * rest - when, how long, what counts as happy - is chosen here, in one place, and recorded as
  * `spec/DEVIATIONS.md` A66.
  */
+export const VIP_BOOK_TICK = 1200;
 export const VIP_ARRIVAL_TICK = 1600;
 /** The next morning, after the night's resets and the hotel's own checkout rush. */
 export const VIP_CHECKOUT_FROM_TICK = 400;
@@ -499,15 +500,14 @@ function openDecision(tower, kind, cost) {
 
 /**
  * **Checkpoint 240.** `TIME.md` § 240: the fire check first, then the bomb's - *"`fire` before
- * `bomb` at `240`"* - and then the day's VIP booking, which the reference has no counterpart
- * for (A66). Called after the commercial and entertainment rebuilds the same tick runs.
+ * `bomb` at `240`"*. Called after the commercial and entertainment rebuilds the same tick runs.
+ * (The VIP is booked later in the day, by `eventsTick` at `VIP_BOOK_TICK`.)
  */
 export function runDailyEvents(tower) {
   const day = tower.clock.dayCounter;
   const started = [];
   if (isFireDay(day) && tryStartFire(tower)) started.push('fire');
   if (isBombDay(day) && tryStartBomb(tower)) started.push('bomb');
-  if (tryBookVip(tower)) started.push('vip');
   return started;
 }
 
@@ -851,6 +851,9 @@ function endFire(tower, fire) {
  * with nothing live costs one property read.
  */
 export function eventsTick(tower) {
+  // The VIP is booked at one o'clock, once the morning's checkouts have been cleaned: a suite is
+  // only free to give once the hotel has turned it round, and at 240 it never is.
+  if (tower.clock.dayTick === VIP_BOOK_TICK) tryBookVip(tower);
   const events = tower.events;
   if (!events) return;
   if (events.decision) settleDecision(tower);
@@ -898,7 +901,7 @@ export function vipBlocker(tower) {
 }
 
 /**
- * The morning's booking: a VIP reserves a suite on a named floor. The suite is held (nobody
+ * The afternoon's booking: a VIP reserves a suite on a named floor. The suite is held (nobody
  * else checks in) until the stay is over.
  *
  * @returns {boolean} whether a VIP was booked

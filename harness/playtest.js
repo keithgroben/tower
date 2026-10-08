@@ -499,7 +499,7 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
  *    ~250 (1,500 people) and the point here is the gates, not the head-count. It is
  *    counted exactly like any other bucket - recycling sizes itself to it - so the centers
  *    the script builds are real and the trial still fails if there are too few.
- *  - **`vipStayFavorable`** (issue #16), **`officeServiceOk`**, **`cathedralPlaced`** and the
+ *  - **`officeServiceOk`**, **`cathedralPlaced`** and the
  *    wedding's **`weddingGuestsArrived`** (issue #17): set by the script the morning after
  *    the rung they belong to opens, on the first weekend morning for the wedding. Each is
  *    the exact flag its issue will write. (**`metroPlaced`** was one until issue #15: the
@@ -564,7 +564,12 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
       }
       if (d.kind === 'hotelSuite') {
         for (let i = count(FAMILY.hotelSuite); i < HOTEL_SUITES_FOR_FOUR_STARS; i++) {
-          tryBuild({ type: 'build', what: 'hotelSuite', floor: floors + 1, left: i * (BUILDABLE.hotelSuite.width + 1) }, 'hotelSuite');
+          tryBuild({ type: 'build', what: 'hotelSuite', floor: floors + 1, left: 12 + i * (BUILDABLE.hotelSuite.width + 1) }, 'hotelSuite');
+        }
+        // A suite is only a suite while somebody turns it round (issue #9), and the VIP (issue #16)
+        // will only be given one that is clean: housekeeping beside them, reached by the service lift.
+        if (count(FAMILY.housekeeping) === 0 && count(FAMILY.hotelSuite) > 0) {
+          tryBuild({ type: 'build', what: 'housekeeping', floor: floors + 1, left: 40 }, 'housekeeping');
         }
       }
     }
@@ -584,7 +589,9 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
       // Recycling: a service lift to the basement, then enough centers for the activity
       // the next rung asks for (the duty tier is activity per working center, < 2,500).
       if (!serviceLift) {
-        serviceLift = tryBuild({ type: 'build_shaft', kind: 'service', bottom: -3, top: 2, column: 4 }, 'service lift');
+        // From the recycling centers' basement to the suites' floor: the same lift takes the plants'
+        // waste out and the housekeepers up.
+        serviceLift = tryBuild({ type: 'build_shaft', kind: 'service', bottom: -3, top: floors + 1, column: 4 }, 'service lift');
       }
       const want = Math.min(6, Math.ceil((STAR_THRESHOLDS[star - 1] ?? 15_000) / 2400));
       for (let i = count(FAMILY.recycling) / 2; serviceLift && i < want; i++) {
@@ -609,7 +616,9 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
       gates[flag] = value;
       flagsSetOn[flag] = tower.clock.dayCounter;
     };
-    if (star === 3 && gates.suitePlaced) { set('vipStayFavorable'); set('officeServiceOk'); }
+    // The VIP is no stand-in any more (issue #16): a real visitor books one of the two suites the
+    // script built, rides the real lifts, and `sim/events.js` writes the gate when he is pleased.
+    if (star === 3 && gates.suitePlaced) set('officeServiceOk');
     if (star === 5) set('cathedralPlaced');
   };
 
@@ -640,7 +649,7 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
     });
   }
   const last = perDay[perDay.length - 1];
-  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, metroPlacedDay, hud: last.hud };
+  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, metroPlacedDay, hud: last.hud, world };
 }
 
 // ---------------------------------------------------------------------------
