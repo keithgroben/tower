@@ -220,6 +220,90 @@
   }
   #liftpanel[hidden], #theaterpanel[hidden], #eventdialog[hidden], #finale[hidden] { display: none; }
 
+  /* ------------------------------ the windows and map views (issue #18) */
+
+  /* The Finance, Facility and Tenant windows are the lift panel's cousins: the same panel, the same
+     buttons, the same place. They are never open together, and each one holds the clock while it is. */
+  #financewindow, #facilitywindow, #tenantwindow {
+    position: absolute;
+    left: 140px; top: 92px;
+    width: 410px;
+    max-width: calc(100% - 152px);
+    max-height: calc(100% - 92px - 56px);
+    overflow-y: auto;
+    padding: 10px 12px;
+    background: rgba(18, 24, 32, 0.96);
+    border: 1px solid #2c3948;
+    border-radius: 4px;
+    font: 600 11px var(--mono);
+    color: #9fb3c8;
+    user-select: text;
+  }
+  #financewindow[hidden], #facilitywindow[hidden], #tenantwindow[hidden], #viewkey[hidden] { display: none; }
+  #financewindow button, #facilitywindow button, #tenantwindow button {
+    font: inherit; color: inherit; cursor: pointer;
+    background: #1b2430; border: 1px solid #2c3948; border-radius: 3px; padding: 3px 6px;
+  }
+  #financewindow button:hover:not(:disabled), #facilitywindow button:hover:not(:disabled), #tenantwindow button:hover:not(:disabled) {
+    color: var(--ink); border-color: #3d4d60;
+  }
+  #financewindow button:disabled, #facilitywindow button:disabled, #tenantwindow button:disabled { opacity: 0.45; cursor: default; }
+  /* A narrow screen gets the whole width: the palette is behind the window while it is open and is
+     back the moment it closes (Escape, the cross, or pressing Edit). */
+  @media (max-width: 560px) {
+    #financewindow, #facilitywindow, #tenantwindow { left: 12px; right: 12px; width: auto; max-width: none; top: 120px; max-height: calc(100% - 120px - 56px); }
+  }
+
+  .fw-sub { color: #7d8b9c; margin-bottom: 8px; }
+  .fw-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+  .fw-tab.on { color: var(--bg) !important; background: var(--info) !important; border-color: var(--info) !important; }
+  .fw-row { display: flex; justify-content: space-between; gap: 12px; padding: 1px 0; color: var(--ink); }
+  .fw-row.neg span:last-child { color: var(--bad); }
+  .fw-row.fw-none { color: #56687d; }
+  .fw-row.fw-total { border-top: 1px solid #2c3948; margin-top: 2px; padding-top: 3px; color: #9fb3c8; }
+  .fw-row.fw-net { border-top: 2px solid #3d4d60; margin-top: 8px; padding-top: 4px; font-size: 13px; }
+  .fw-row.fw-net span:last-child { color: var(--good); }
+  .fw-row.fw-net.neg span:last-child { color: var(--bad); }
+  .fw-row.fw-base { color: #7d8b9c; }
+
+  .fw-evalrow { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .fw-bar { position: relative; flex: 1 1 auto; height: 12px; background: #0f151c; border: 1px solid #2c3948; border-radius: 2px; min-width: 90px; }
+  .fw-fill { position: absolute; left: 0; top: 0; bottom: 0; display: block; }
+  .fw-div { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); opacity: 0.8; }
+  .fw-evalword { white-space: nowrap; }
+  .fw-reason { color: var(--warn); margin-top: 3px; }
+  .fw-good { color: var(--good); margin-top: 3px; }
+  .fw-tiers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .fw-tier { display: flex !important; flex-direction: column; align-items: center; gap: 1px; padding: 5px 2px !important; }
+  .fw-tier.on { color: var(--bg) !important; background: var(--info) !important; border-color: var(--info) !important; }
+  .fw-tier small { font-size: 9px; opacity: 0.8; }
+  .fw-people { display: flex; flex-direction: column; gap: 3px; }
+  .fw-person { display: grid !important; grid-template-columns: 28px 1fr auto; gap: 6px; text-align: left; }
+  .fw-found { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
+  .fw-name {
+    flex: 1 1 auto; min-width: 0;
+    font: inherit; color: var(--ink); background: #0f151c; border: 1px solid #2c3948; border-radius: 3px; padding: 4px 6px;
+    user-select: text; -webkit-user-select: text;
+  }
+
+  /* The map bar: Edit / Eval / Pricing / Hotel / Finance, under the HUD at the right, clear of the minimap. */
+  #mapbar { position: absolute; top: 92px; right: 12px; display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; max-width: 52%; }
+  #mapbar button {
+    font: 700 11px var(--mono); color: #7d8b9c; background: rgba(27, 36, 48, 0.92);
+    border: 1px solid #2c3948; border-radius: 3px; padding: 4px 9px; cursor: pointer;
+  }
+  #mapbar button:hover:not(:disabled) { color: var(--ink); }
+  #mapbar button:disabled { opacity: 0.4; cursor: default; }
+  #mapbar button.on { color: var(--bg); background: var(--info); border-color: var(--info); }
+  /* What the colours mean, while a view is on. */
+  #viewkey {
+    position: absolute; top: 126px; right: 12px; display: flex; flex-direction: column; gap: 3px;
+    padding: 8px 10px; background: rgba(18, 24, 32, 0.94); border: 1px solid #2c3948; border-radius: 4px;
+    font: 600 11px var(--mono); color: #9fb3c8; pointer-events: none;
+  }
+  #viewkey b { color: var(--ink); margin-bottom: 2px; }
+  #viewkey i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+
   /* ----------------------------------------- the Tower rank (issue #17) */
 
   #finale {
@@ -373,6 +457,10 @@
 
   <div id="failure" hidden></div>
 
+  <!-- The map views and the Finance window (issue #18), built by ui/main.js from ui/overlays.js `mapBarModel`. -->
+  <div id="mapbar" role="toolbar" aria-label="map views"></div>
+  <div id="viewkey" hidden></div>
+
   <!-- The palette. Buttons are generated from the sim's own BUILDABLE and
        SHAFT_KIND, so this stays empty in the markup on purpose: a hand-written
        list here would be a second place to remember. -->
@@ -385,6 +473,12 @@
   <!-- The theater window (issue #11). Filled by ui/theater-panel.js when a theater
        is clicked with no tool in hand. -->
   <div id="theaterpanel" hidden></div>
+
+  <!-- The Finance, Facility and Tenant windows (issue #18). Filled by ui/finance-window.js,
+       ui/facility-window.js and ui/tenant-window.js; each holds the clock while it is open. -->
+  <div id="financewindow" hidden></div>
+  <div id="facilitywindow" hidden></div>
+  <div id="tenantwindow" hidden></div>
 
   <!-- The question a bomb or a fire asks (issue #16). Filled by ui/event-dialog.js while the
        sim has one open; the game does not run until it is answered. -->

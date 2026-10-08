@@ -39,6 +39,7 @@ import {
 } from './entertainment.js';
 import { HOTEL_WIDTH } from './hotel.js';
 import { rentRefusal } from './facility.js';
+import { nameFacility, namePerson } from './names.js';
 import { HOUSEKEEPING_WIDTH } from './housekeeping.js';
 import { GUARD_STATE, SECURITY_WIDTH, securityObstruction } from './security.js';
 import { MEDICAL_WIDTH, finalizeMedicalCenter, medicalObstruction } from './medical.js';
@@ -1051,6 +1052,20 @@ const ACTIONS = {
     object.rentLevel = tier;
     object.dirty = true;
     return { ok: true, tier };
+  },
+
+  /**
+   * **Name a person** (issue #18, the Tenant window): up to 20 people, 15 characters each, and an
+   * empty name takes the name away (the original's Delete). `sim/names.js` owns the rules and the
+   * original's refusals.
+   */
+  name_person({ tower }, { actorId, name }) {
+    return namePerson(tower, actorId, name);
+  },
+
+  /** **Name a facility** (issue #18, the Facility window's Rename): up to 20, same rules. */
+  name_facility({ tower }, { objectId, name }) {
+    return nameFacility(tower, objectId, name);
   },
 };
 

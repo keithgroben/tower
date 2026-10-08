@@ -613,6 +613,10 @@ export function createTower({ seed = 1, startingCash = 2000000 } = {}) {
     incomeLedger: {},
     expenseLedger: {},
     cycleBaseCash: startingCash,
+    /** Every other way cash moves, for the Finance window: construction, ransom, treasure... (`sim/economy.js`). */
+    otherLedger: {},
+    /** The names the player has given people and facilities (issue #18, `sim/names.js`). */
+    names: { people: {}, facilities: {} },
     starCount: 1,
     /** Placed objects, by id. */
     objects: new Map(),
