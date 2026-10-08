@@ -413,6 +413,21 @@
 
   /* An exception in a frame or a listener looks exactly like nothing
      happening. This makes it look like a failure. */
+  /* ?demo=climb (issue #19): what the page is doing and what is not the sim's, under the bar. */
+  #demo {
+    position: absolute;
+    left: 12px; right: 12px; bottom: 34px;
+    padding: 6px 10px;
+    background: rgba(14, 18, 28, 0.88);
+    border: 1px solid var(--accent, #6aa9ff);
+    color: var(--ink, #e8edf5);
+    border-radius: 3px;
+    font-size: 12px;
+    line-height: 1.35;
+    pointer-events: none;
+    z-index: 5;
+  }
+  #demo[hidden] { display: none; }
   #failure {
     position: absolute;
     left: 12px; right: 12px; top: 44px;
@@ -456,6 +471,7 @@
   </div>
 
   <div id="failure" hidden></div>
+  <div id="demo" hidden></div>
 
   <!-- The map views and the Finance window (issue #18), built by ui/main.js from ui/overlays.js `mapBarModel`. -->
   <div id="mapbar" role="toolbar" aria-label="map views"></div>
