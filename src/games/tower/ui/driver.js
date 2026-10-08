@@ -30,6 +30,7 @@ import {
   HOTEL_SALE_RESET_TICK, HOTEL_SWEEP_TICK, hotelArrival, hotelDailyReset, hotelFamilyHandler,
   hotelMiddaySweep, hotelSaleCountReset,
 } from '../sim/hotel.js';
+import { housekeepingArrival, housekeepingFamilyHandler } from '../sim/housekeeping.js';
 import { condoCashflowHooks, hotelCashflowHooks, officeCashflowHooks } from '../sim/ledger-adapter.js';
 import { resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
@@ -155,6 +156,17 @@ export function makeDriver(world, { observe } = {}) {
     [FAMILY.hotelSingle]: hotelHandler,
     [FAMILY.hotelTwin]: hotelHandler,
     [FAMILY.hotelSuite]: hotelHandler,
+    /**
+     * The six staff of every housekeeping facility. They route in housekeeping
+     * mode (stairs, then service elevators — `sim/housekeeping.js`), clean a dirty
+     * room on arrival, and never touch a ledger: no `onRent`, no `onCheckout`.
+     * The cleaning is `cleanHotelRoom`, which writes the room's own band; the
+     * 1600 sweep (below) is what takes the strike when nobody came.
+     */
+    [FAMILY.housekeeping]: housekeepingFamilyHandler({
+      resolveRoute,
+      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    }),
     [FAMILY.office]: officeFamilyHandler({
       resolveRoute,
       // Every delay the router reports is priced by the stress pipeline, which
@@ -200,6 +212,7 @@ export function makeDriver(world, { observe } = {}) {
     [FAMILY.hotelSingle]: hotelArrives,
     [FAMILY.hotelTwin]: hotelArrives,
     [FAMILY.hotelSuite]: hotelArrives,
+    [FAMILY.housekeeping]: (actor, floor) => housekeepingArrival(tower, actor, floor),
   }, applyRoutingDelay, {
     // `specs/TIME.md` § 2500. Sold condos clamp back to the sync sentinel and
     // every resident goes back to its band's starting state — which is what
@@ -212,9 +225,14 @@ export function makeDriver(world, { observe } = {}) {
     // the two families are chained here rather than the later one silently
     // replacing the earlier.
     [CONDO_RESET_TICK]: (t) => { condoDailyReset(t); hotelDailyReset(t); },
-    // `specs/TIME.md` § 1600: the hotel recompute-and-refresh, on the tick the
-    // check-in window opens. Issue #10 puts the restaurant rebuild on this tick
-    // too — chain it here, do not add a second key.
+    // `specs/TIME.md` § 1600: the hotel pass, on the tick the check-in window
+    // opens — spread the cockroaches, recompute each room and give a dirty one
+    // its strike, then refresh the latches (`hotelMiddaySweep` runs all three, in
+    // `HOTEL.md`'s order). Issue #10 puts the restaurant rebuild on this tick
+    // too: CHAIN it here, do not add a second key (`extraCheckpoints` holds one
+    // body per tick). `TIME.md` § 1600 lists the type-6 rebuild as step 1 and the
+    // hotel pass as steps 2-3, so the restaurant call goes BEFORE this one:
+    //   [HOTEL_SWEEP_TICK]: (t) => { restaurantRebuild(t); hotelMiddaySweep(t); },
     [HOTEL_SWEEP_TICK]: hotelMiddaySweep,
     // § 1200: the day's checkout count (the newspaper trigger's input) resets.
     [HOTEL_SALE_RESET_TICK]: hotelSaleCountReset,

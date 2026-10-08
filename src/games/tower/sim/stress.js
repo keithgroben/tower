@@ -60,6 +60,8 @@
  * Low 10 bits of `elapsed_packed`: the current leg's elapsed ticks.
  * `PEOPLE.md` § Per-Sim Trip Fields, offset `+0x0c`.
  */
+import { isStaff } from './state.js';
+
 export const ELAPSED_MASK = 0x3ff;
 
 /**
@@ -253,6 +255,17 @@ function storeElapsed(sim, value) {
 // ------------------------------------------------- the pipeline, in order
 
 /**
+ * **STAFF_NOTE — housekeeping has no stress.** `specs/PEOPLE.md` § Trip-Counter
+ * Functions (and the reference's `advanceSimTripCounters` / `addDelayToCurrentSim`):
+ * *"early-return for FAMILY_HOUSEKEEPING"*; `specs/ROUTING.md` § `emit_distance_feedback`
+ * Gating: *"housekeeping routes never contribute to stress"*. The four mutators
+ * below return untouched for a member of staff, so a housekeeper's record stays
+ * at zero trips for ever and can never be read as a tenant who is doing well —
+ * or badly. The guard lives here, in the writers, rather than in each caller:
+ * the carrier arrival callback reaches them without knowing a family.
+ */
+
+/**
  * **Route-start timestamp.** `PEOPLE.md` § Trip-Counter Functions, item 5: at
  * the end of `resolve_sim_route_between_floors`, `last_trip_tick = g_day_tick`.
  * This starts the clock for the next leg.
@@ -282,6 +295,7 @@ export function stampRouteStart(sim, dayTick) {
  * @returns {number} the stored elapsed ticks
  */
 export function rebaseSimElapsedFromClock(sim, dayTick) {
+  if (isStaff(sim)) return elapsedTicks(sim);       // see STAFF_NOTE
   // `last_trip_tick == 0` is both "cleared" and "stamped at tick 0", so a
   // rebase with no stamp charges the whole day tick and clamps to 300. That is
   // the reference's collision, reproduced rather than papered over.
@@ -319,6 +333,7 @@ export function accumulateElapsedDelayIntoCurrentSim(sim, dayTick, {
   lobbyHeight = 1,
   carrierMode = CARRIER_STANDARD,
 } = {}) {
+  if (isStaff(sim)) return elapsedTicks(sim);
   if (carrierMode === CARRIER_SERVICE) return elapsedTicks(sim);
 
   const raw = elapsedTicks(sim) + dayTick - sim.lastTripTick;
@@ -365,6 +380,7 @@ export function reduceElapsedForLobbyBoarding(elapsed, sourceFloor, lobbyHeight)
  * @returns {number} the stored elapsed ticks
  */
 export function addDelayToCurrentSim(sim, delayDelta) {
+  if (isStaff(sim)) return elapsedTicks(sim);
   const stored = storeElapsed(sim, elapsedTicks(sim) + delayDelta);
   sim.lastTripTick = 0;
   return stored;
@@ -390,6 +406,7 @@ export function addDelayToCurrentSim(sim, delayDelta) {
  * @returns {number} the new trip count
  */
 export function advanceSimTripCounters(sim) {
+  if (isStaff(sim)) return sim.tripCount;
   sim.tripCount = (sim.tripCount + 1) % TRIP_COUNT_WRAP;
   sim.accumulatedElapsed = (sim.accumulatedElapsed + elapsedTicks(sim)) % ACCUMULATED_WRAP;
   sim.lastTripTick = 0;

@@ -21,8 +21,11 @@ import { DAYPART_LABELS, calendarOf, formatClock } from '../sim/clock.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { starGateStatus } from '../sim/progression.js';
 import { BUILDABLE } from '../sim/actions.js';
-import { isHotelFamily } from '../sim/state.js';
-import { evictionNotice, starClause, starGlyph, stressReadout } from './readout.js';
+import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
+import { isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
+import {
+  evictionNotice, hotelHealthReadout, infestationNotice, starClause, starGlyph, stressReadout,
+} from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
 import { applyAction } from '../sim/actions.js';
@@ -125,6 +128,8 @@ let hudDueMs = 0;
 /** Previous frame's let count, so the HUD can react to a change rather than
  *  merely display one. `-1` so the first read is never mistaken for a move. */
 let lastLetCount = -1;
+/** Rooms the cockroaches held at the last read; `-1` until there has been one. */
+let lastInfested = -1;
 /** The last real stress reading, held across the three-day counter reset. */
 let lastStress = null;
 
@@ -354,6 +359,12 @@ function updateHover(px, py) {
     return;
   }
   const occupants = tower.actors.filter((a) => a && a.objectId === object.id);
+  // Staff have no lease and no stress; "6 occupants · worst stress 0" would read
+  // as a tenant who is doing perfectly.
+  if (isStaffFamily(object.family)) {
+    $('hover').textContent = `housekeeping · ${occupants.length} staff · cannot be bulldozed`;
+    return;
+  }
   const stress = occupants.map((a) => computeRuntimeTileStressAverage(a));
   const worst = stress.length ? Math.max(...stress) : 0;
   $('hover').textContent = occupants.length
@@ -399,8 +410,10 @@ function drawHud() {
   // "Leasable" is "owns occupants": `OCCUPANTS` in sim/state.js gives six to an
   // office and three to a condo and nothing to a lobby, so the table already
   // says which units can be let and this does not need a second list.
-  let let_ = 0, leasable = 0, tenants = 0, guests = 0;
+  let let_ = 0, leasable = 0, tenants = 0, guests = 0, dirty = 0, infested = 0;
   for (const object of tower.objects.values()) {
+    if (isHotelInfested(object)) infested++;
+    else if (isHotelRoomDirty(object)) dirty++;
     if (object.occupants.length === 0) continue;
     // A hotel room is not let, it is booked by the night. Counted in the lease
     // figure it empties every morning, and the next block would announce that
@@ -440,7 +453,24 @@ function drawHud() {
   // disagrees with the "36/42 let" sitting next to it on the same bar. An
   // accounting hole that reads as good news is the failure this repo keeps a
   // list of.
-  $('people').textContent = `${tenants} living here${guests ? ` · ${guests} guests` : ''} · ${tower.actors.length} people`;
+  // Staff work in the tower; they do not live in it. A housekeeper is counted on
+  // its own, and the people figure leaves them out — six actors a facility would
+  // otherwise read as six more people the star ladder never saw.
+  let staff = 0;
+  for (const actor of tower.actors) if (actor && isStaff(actor)) staff++;
+  $('people').textContent = `${tenants} living here${guests ? ` · ${guests} guests` : ''}`
+    + `${staff ? ` · ${staff} staff` : ''} · ${tower.actors.length - staff} people`;
+  // The hotel's health. Said in the world too (the room's own sign and mess); this
+  // is the count, for the rooms that are off-screen.
+  const hotels = hotelHealthReadout(dirty, infested);
+  $('hotels').hidden = !hotels;
+  $('hotels').textContent = hotels;
+  $('hotels').style.color = infested > 0 ? STRESS_COLORS.red : '';
+  if (lastInfested >= 0 && infested > lastInfested) {
+    const notice = infestationNotice(infested - lastInfested);
+    if (notice) say(notice, false);
+  }
+  lastInfested = infested;
   $('cash').textContent = '$' + ledger.cash.toLocaleString('en-US');
 
   // The loop's own number: the stress of a TYPICAL worker.

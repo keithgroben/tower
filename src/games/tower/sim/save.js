@@ -59,8 +59,16 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * (`hotelSaleCount`, `newspaperTrigger`). A v1 file would still load — it has
  * no hotels — but it would resume with the hotel star gates and population
  * figures of a different build, which is the case the version exists for.
+ *
+ * v3 (issue #9, housekeeping) adds a fourth family whose six staff carry their
+ * own state machine (`state` 0-4, `targetRoomId`, `targetFloor`,
+ * `postClaimCountdown`, `spawnFloor` as their home), and gives a hotel room's
+ * `activationTickCount` a meaning — the number of 1600 passes it has spent dirty,
+ * three of which infest it. A v2 file with a checked-out room in it would resume
+ * with that room's strikes at zero and nobody to clean it, which is a different
+ * game from the one that was saved.
  */
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

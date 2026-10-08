@@ -81,6 +81,38 @@ export function evictionNotice(lost) {
   return units + ' closed — the journeys their tenants made scored too badly to stay';
 }
 
+// ------------------------------------------------------------ infestations
+
+/**
+ * What to say when hotel rooms are lost to cockroaches.
+ *
+ * Like an eviction it is **not softened**: a room left dirty through three
+ * daily passes is gone for good, and the only cure is to demolish it
+ * (`specs/facility/HOTEL.md` § Cockroach Infestation). The sentence gives the
+ * cause for the same reason `evictionNotice` does — a loss you can explain is a
+ * lesson, and a room that turns red on its own is a bug report.
+ *
+ * @param gained how many more rooms are infested than a moment ago
+ * @returns a sentence, or `''` when nothing was lost
+ */
+export function infestationNotice(gained) {
+  if (!(gained > 0)) return '';
+  const rooms = gained === 1 ? '1 hotel room' : gained + ' hotel rooms';
+  return rooms + ' infested — left dirty for three days; only demolishing a room cures it';
+}
+
+/**
+ * The hotel's health, in the few words a bar has: how many rooms are waiting to
+ * be cleaned and how many are lost. Empty when both are zero, so a tower with no
+ * hotel (or a clean one) says nothing at all.
+ */
+export function hotelHealthReadout(dirty, infested) {
+  const parts = [];
+  if (dirty > 0) parts.push(dirty + ' dirty');
+  if (infested > 0) parts.push(infested + ' infested');
+  return parts.join(' · ');
+}
+
 // ------------------------------------------------------------------- stars
 
 /** `★★☆☆☆`. One glyph, per the brief — the clause beside it does the talking. */

@@ -29,17 +29,19 @@
  * guest who cannot leave and so never pays. That is the loop again: transport
  * decides who is staying.
  *
- * ## The dirty room, and what this file does NOT do about it
+ * ## The dirty room, and who cleans it
  *
  * Checkout leaves the room in the **turnover band** (`0x28`/`0x30`) with its
  * occupancy latch cleared. `HOTEL.md` § Cockroach Infestation: such a room is
  * only returned to service by a housekeeping claim, and left alone for three
- * daily passes it is infested for good. **Issue #9 owns all of that.** Here the
- * band is simply written, read with {@link isHotelRoomDirty}, and left — which
- * means that until housekeeping exists a room earns exactly one stay and then
- * stays dirty. That is the reference's rule (`FACILITIES.md` § occupied_flag:
- * the latch is not set again for a room above `0x27`), not a gap in this one.
- * `spec/DEVIATIONS.md` A29.
+ * daily passes it is infested for good. This file owns the **bands** and the
+ * 1600 pass that moves a room through them ({@link cleanHotelRoom},
+ * {@link handleExtendedVacancyExpiry}, {@link spreadInfestation}); the staff who
+ * walk to a dirty room and call {@link cleanHotelRoom} are `sim/housekeeping.js`
+ * (issue #9). With no housekeeper a room earns exactly one stay, goes dirty, and
+ * three daily passes later is infested — the reference's rule (`FACILITIES.md`
+ * § occupied_flag: the latch is not set again for a room above `0x27`).
+ * `spec/DEVIATIONS.md` A29, A35.
  */
 import {
   EVAL_UNSET, FAMILY, HOTEL_UNIT_STATUS, baseState, enterTransit, isHotelFamily, isInTransit,
@@ -120,28 +122,170 @@ export const isHotelVacant = (object) =>
   && object.unitStatus <= HOTEL_UNIT_STATUS.vacantMax;
 
 /**
- * **The dirty-room flag issue #9 consumes.** Checked out and waiting to be
+ * **The dirty-room flag housekeeping reads.** Checked out and waiting to be
  * cleaned: `unit_status` `0x28..0x37`.
  *
  * It is derived from the band rather than stored beside it, so the housekeeping
  * claimant's own test (*"a slot qualifies only when the room `unit_status` is
  * `0x28` or `0x30`"*) and this predicate can never disagree.
  *
- * **To clean a room** (issue #9): write it back into the vacant band (`0x18`
- * before daypart 4, `0x20` after). That is all it takes — the 1600 sweep then
- * scores the room, sees `unit_status <= 0x27` and re-latches it, which is what
- * `test/hotel.test.js` pins across a weekday and a weekend. Set `occupiedFlag`
- * as well if the cleaning happens after 1600 and the room should be open the
- * same evening (`HOTEL.md`: *"Housekeeping claims and clears that latch"*).
+ * **To clean a room** use {@link cleanHotelRoom}, which is the one writer.
  */
 export const isHotelRoomDirty = (object) =>
   isHotelFamily(object?.family)
   && object.unitStatus >= HOTEL_UNIT_STATUS.dirtyEarly
   && object.unitStatus <= HOTEL_UNIT_STATUS.dirtyMax;
 
-/** Infested: `0x38` and above. Written by nothing in this build; issue #9. */
+/** Infested: `0x38` and above. Written by {@link infestHotelRoom} and nothing else. */
 export const isHotelInfested = (object) =>
   isHotelFamily(object?.family) && object.unitStatus >= HOTEL_UNIT_STATUS.infestedEarly;
+
+// ------------------------------------------------- cleaning and cockroaches
+
+/**
+ * **A housekeeper has reached the room: clean it.**
+ *
+ * `HOUSEKEEPING.md` § Claim-completion writes and `HOTEL.md` § Occupancy Flag:
+ * the claim takes a turnover-band room (`0x28`/`0x30`) back into the vacant
+ * band — the same `0x18` before daypart 4 and `0x20` after that placement would
+ * have chosen (`activate_selected_vacant_unit`, 1158:02e2) — and sets the
+ * occupancy latch (*"set to `1` by the housekeeping helper ... at successful
+ * claim promotion"*). The activation counter is cleared with it: the three-strike
+ * count is a count of passes spent *dirty*.
+ *
+ * Only a **dirty** room is cleaned. The reference's `activate_selected_vacant_unit`
+ * bails on anything outside `0x28`/`0x30`, which is how a second housekeeper who
+ * walked to a room another had just cleaned finds nothing to do — and how an
+ * infested room, past the dirty band, is never touched: *"the only cure is
+ * destroying the room"*.
+ *
+ * The 1600 sweep scores the room and keeps or drops the latch as it always does;
+ * this only gets a clean room back to the starting line.
+ *
+ * @returns {boolean} whether this call is the one that cleaned it
+ */
+export function cleanHotelRoom(tower, object) {
+  if (!isHotelRoomDirty(object)) return false;
+  object.unitStatus = tower.clock.daypart < EVENING_DAYPART
+    ? HOTEL_UNIT_STATUS.vacantEarly
+    : HOTEL_UNIT_STATUS.vacantLate;
+  object.occupiedFlag = true;
+  object.activationTickCount = 0;
+  object.dirty = true;
+  return true;
+}
+
+/**
+ * Three dirty 1600 passes and the room is lost. `HOTEL.md` § Three-Strikes
+ * Expiry: *"when `activation_tick_count` reaches `3`"*.
+ */
+export const INFESTATION_STRIKES = 3;
+
+/**
+ * **Cockroaches.** The room goes to the infested band — `0x38` before daypart 4,
+ * `0x40` after — with its grade wiped and its latch off, and nothing in the sim
+ * ever writes it back. `HOTEL.md` § State Band Summary: *"infested | no — must
+ * destroy room"*.
+ *
+ * `spec/DEVIATIONS.md` A35 records the half-day value: `HOTEL.md` § Three-Strikes
+ * Expiry words it the other way round (`0x40` pre-day-4), against `TIME.md`
+ * § 1600 step 6 which toggles `0x38 -> 0x40` at the very checkpoint that writes
+ * it. Every consumer reads the band, so the choice is invisible; this build uses
+ * the convention of the other bands — early value before daypart 4.
+ */
+export function infestHotelRoom(tower, object) {
+  object.unitStatus = tower.clock.daypart < EVENING_DAYPART
+    ? HOTEL_UNIT_STATUS.infestedEarly
+    : HOTEL_UNIT_STATUS.infestedLate;
+  object.evalLevel = EVAL_UNSET;            // operational_score = 0xff
+  object.occupiedFlag = false;              // pairing_pending_flag = 0
+  object.dirty = true;
+  return true;
+}
+
+/**
+ * `handle_extended_vacancy_expiry`, `HOTEL.md` § Three-Strikes Expiry, for one
+ * room. Only a room past the vacant band is examined (`unit_status > 0x27`), and
+ * one already infested has nothing left to lose.
+ *
+ *  - latch set — a housekeeper has claimed it: the room is safe, and the grade,
+ *    the counter and the latch are cleared;
+ *  - latch clear: the counter goes up one, and at {@link INFESTATION_STRIKES} the
+ *    room is infested.
+ *
+ * ⚠️ In this build the first branch is unreachable from play: checkout clears the
+ * latch, the 1600 refresh skips dirty rooms and so leaves it clear, and a
+ * housekeeper's claim moves the room *out* of the band this function looks at.
+ * It is here because the reference has it, and a test reaches it by setting the
+ * latch by hand.
+ *
+ * @returns {'safe'|'strike'|'infested'|null} what happened, or null if the room
+ *   was not examined
+ */
+export function handleExtendedVacancyExpiry(tower, object) {
+  if (!isHotelFamily(object?.family)) return null;
+  if (object.unitStatus <= HOTEL_UNIT_STATUS.vacantMax) return null;
+  if (isHotelInfested(object)) return null;
+
+  if (object.occupiedFlag) {
+    object.evalLevel = 0;                    // "clears eval_level"
+    object.activationTickCount = 0;
+    object.occupiedFlag = false;
+    return 'safe';
+  }
+  object.activationTickCount += 1;
+  if (object.activationTickCount < INFESTATION_STRIKES) return 'strike';
+  infestHotelRoom(tower, object);
+  return 'infested';
+}
+
+/**
+ * `update_hotel_pair_stay_states`, `HOTEL.md` § Spread: **the infection moves to
+ * the room on either side**, once a day, before the day's expiry check.
+ *
+ * The neighbours are the previous and next hotel room *placed on the same floor*
+ * (`left` order). An office between two rooms stops it, which is the one
+ * architectural defence the reference leaves.
+ *
+ * Three readings the spec leaves open, all in `spec/DEVIATIONS.md` A35:
+ *
+ *  - **One hop a day.** The source list is taken before anything is infected, so
+ *    a room infected today infects nobody until tomorrow. The reference's scan
+ *    ascends the floor and infects the *next* slot, which it then visits, so read
+ *    literally one pass runs along a whole row — against the same section's own
+ *    *"a newly infested room does not spread to its neighbors until the following
+ *    day"*.
+ *  - **A guest in the bed is left alone.** Infecting a booked room would write it
+ *    out of the occupied band with its guests inside it: the stay could never be
+ *    paid and the population ledger would keep two people nobody can check out.
+ *    It is infected after they leave.
+ *  - "Adjacent" is the next room in floor order, not a touching tile.
+ *
+ * @returns {number} rooms newly infested
+ */
+export function spreadInfestation(tower) {
+  // Every object on the floor, not just the hotel rooms: an office between two
+  // rooms is the neighbour, and it is not a hotel, so nothing crosses it.
+  const byFloor = new Map();
+  for (const object of tower.objects.values()) {
+    const row = byFloor.get(object.floor);
+    if (row) row.push(object); else byFloor.set(object.floor, [object]);
+  }
+  const sources = [];
+  for (const row of byFloor.values()) {
+    row.sort((a, b) => a.left - b.left);
+    row.forEach((room, i) => { if (isHotelInfested(room)) sources.push({ row, i }); });
+  }
+  let spread = 0;
+  for (const { row, i } of sources) {
+    for (const neighbour of [row[i - 1], row[i + 1]]) {
+      if (!isHotelFamily(neighbour?.family) || isHotelInfested(neighbour) || isHotelBooked(neighbour)) continue;
+      infestHotelRoom(tower, neighbour);
+      spread++;
+    }
+  }
+  return spread;
+}
 
 /**
  * Step the stay counter, **inside the occupied band only**.
@@ -293,28 +437,44 @@ export function hotelRooms(tower) {
 export const HOTEL_SWEEP_TICK = 1600;
 
 /**
- * Checkpoint 1600 — `specs/TIME.md` § 1600 steps 3 and 6, the hotel rows.
+ * Checkpoint 1600 — `specs/TIME.md` § 1600 steps 2 and 3, the hotel rows.
  *
- * *"hotel operational update: for each hotel room:
- * `recompute_object_operational_status`; `handle_extended_vacancy_expiry`. Then
- * for each: `refresh_occupied_flag_and_trip_counters`."* Two passes, in that
- * order, because the refresh's donor search reads grades the first pass wrote.
- * The expiry step in the middle is issue #9's (cockroaches).
+ * In the order `HOTEL.md` § Execution Order At Checkpoint `0x640` gives:
  *
- * A room in the dirty band (`unit_status >= 0x28`) is skipped by the second
- * pass and **keeps the latch it has** — in `HOTEL.md`'s words the reference's
- * own pass *"keeps its current `occupied_flag`"* — so a dirty room stays shut.
+ *   1. **spread** existing infestations ({@link spreadInfestation}) — before the
+ *      expiry check, which is why a room infested today waits a day to spread;
+ *   2. for each room, **recompute** its grade and then run the **three-strikes
+ *      expiry** ({@link handleExtendedVacancyExpiry}) — *"for each hotel room:
+ *      `recompute_object_operational_status`; `handle_extended_vacancy_expiry`"*;
+ *   3. then for each room, **refresh** the latch and the trip counters, which
+ *      reads grades the second step wrote (the donor search).
+ *
+ * A room in the dirty band (`unit_status >= 0x28`) is skipped by the last pass
+ * and **keeps the latch it has** — in `HOTEL.md`'s words the reference's own pass
+ * *"keeps its current `occupied_flag`"* — so a dirty room stays shut, and the
+ * strike that step 2 gave it is the only thing that happens to it today.
  *
  * 1600 is also where the evening starts: this runs on the very tick the
  * check-in window opens, so a room built during the day is eligible tonight.
  *
- * @returns {{scored: number, carried: number, closed: number}}
+ * Housekeeping staff stop claiming at tick 1500 (`HOUSEKEEPING.md` § state `3`),
+ * so by the time this runs a room is either clean or about to take a strike.
+ *
+ * @returns {{scored: number, carried: number, closed: number,
+ *   spread: number, struck: number, infested: number}}
  */
 export function hotelMiddaySweep(tower) {
-  const rooms = hotelRooms(tower);
-  for (const { object, occupants } of rooms) recomputeHotelOperationalStatus(tower, object, occupants);
+  const report = { scored: 0, carried: 0, closed: 0, spread: 0, struck: 0, infested: 0 };
+  report.spread = spreadInfestation(tower);
 
-  const report = { scored: 0, carried: 0, closed: 0 };
+  const rooms = hotelRooms(tower);
+  for (const { object, occupants } of rooms) {
+    recomputeHotelOperationalStatus(tower, object, occupants);
+    const verdict = handleExtendedVacancyExpiry(tower, object);
+    if (verdict === 'strike') report.struck++;
+    else if (verdict === 'infested') report.infested++;
+  }
+
   for (const { object, occupants } of rooms) {
     if (object.unitStatus >= HOTEL_UNIT_STATUS.dirtyEarly) continue;
     const outcome = refreshHotelOccupiedFlag(tower, object, occupants);

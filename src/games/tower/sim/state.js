@@ -76,6 +76,7 @@ export const OBJECT_TYPE = {
   restaurant: 6,
   retail: 10,
   fastFood: 0x0c,
+  housekeeping: 0x0f,
 };
 
 export const FAMILY = {
@@ -111,7 +112,19 @@ export const FAMILY = {
   restaurant: 6,
   retail: 10,
   fastFood: 0x0c,
+  /**
+   * The housekeeping helper, `specs/facility/HOUSEKEEPING.md` § Family `0x0f`
+   * (`FACILITIES.md` § Type codes: 15 / 0x0F). The placed facility and its six
+   * staff carry the same code, as the guests of a hotel room do.
+   */
+  housekeeping: 0x0f,
 };
+
+/** Families whose actors are **staff**: they work the tower, they do not live in it. */
+export const STAFF_FAMILY_CODES = new Set([FAMILY.housekeeping]);
+export const isStaffFamily = (family) => STAFF_FAMILY_CODES.has(family);
+/** Is this actor a member of staff? Staff are not population and have no stress. */
+export const isStaff = (actor) => isStaffFamily(actor?.family);
 
 /**
  * How many runtime actors a placed object owns. `specs/DATA-MODEL.md`
@@ -137,6 +150,13 @@ export const OCCUPANTS = {
   [FAMILY.office]: 6,
   [FAMILY.condo]: 3,
   [FAMILY.fastFood]: 48,
+  // Housekeeping: **six staff** per facility. `specs/PEOPLE.md` § Family `0x0f`
+  // ("One per hotel room entity slot"), the reference implementation's
+  // `processHousekeepingSim` (*"For housekeeping (pop=6) ... each of the 6 HK
+  // helpers in a tile services a distinct `floor % 6` residue"*) and the original
+  // game's own manual ("6 staff") agree. They are placed with the facility, not
+  // hired later, exactly as an office's workers are.
+  [FAMILY.housekeeping]: 6,
 };
 
 /**
@@ -171,6 +191,13 @@ export const POPULATION_CONTRIBUTION = {
   [FAMILY.retail]: 10,
   [FAMILY.restaurant]: 0,
   [FAMILY.fastFood]: 0,
+  // **Staff are not population.** Six actors, no people: `specs/PEOPLE.md` § Family
+  // `0x0f` calls the helper *"not a persistent occupant"*, nothing in
+  // `specs/ECONOMY.md` § Ledgers adds a housekeeper to a population bucket, and
+  // the original's star ladder counts tenants. An explicit `0`, not an absent
+  // key: `population()` falls back to `OCCUPANTS` for a missing entry, which would
+  // count the six staff as residents. `spec/DEVIATIONS.md` A33.
+  [FAMILY.housekeeping]: 0,
 };
 
 /** Families whose population is gated on a linked venue record rather than a lease. */
@@ -248,7 +275,7 @@ export const CONDO_UNIT_STATUS = {
  *
  *   occupied / open        `0x00..0x17`   a guest is checked in
  *   vacant / available     `0x18..0x27`   ready for tonight's guest
- *   checked out / dirty    `0x28..0x37`   **needs housekeeping** (issue #9)
+ *   checked out / dirty    `0x28..0x37`   **needs housekeeping** (`sim/housekeeping.js`)
  *   infested               `0x38..0x40`   cockroaches; only demolition cures it
  *
  * The `0x00`/`0x08` (and `0x18`/`0x20`, `0x28`/`0x30`, `0x38`/`0x40`) pairs are
@@ -278,7 +305,7 @@ export const HOTEL_UNIT_STATUS = {
   dirtyEarly: 0x28,
   dirtyLate: 0x30,
   dirtyMax: 0x37,
-  /** `0x38` / `0x40`. Nothing in this build reaches it; issue #9 owns it. */
+  /** `0x38` / `0x40`. Written by `infestHotelRoom` and never written back. */
   infestedEarly: 0x38,
   infestedLate: 0x40,
 };

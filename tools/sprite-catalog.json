@@ -641,5 +641,56 @@
         "frames": 1
       }
     ]
+  },
+  "housekeeping": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "day",
+        "frames": 1
+      },
+      {
+        "name": "night",
+        "frames": 1
+      }
+    ]
+  },
+  "room-status": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "dirty",
+        "frames": 1
+      },
+      {
+        "name": "infested",
+        "frames": 2,
+        "speed": "idle"
+      }
+    ]
+  },
+  "person-staff": {
+    "frameW": 16,
+    "frameH": 16,
+    "fit": "contain",
+    "states": [
+      {
+        "name": "stand",
+        "frames": 1
+      },
+      {
+        "name": "wait",
+        "frames": 1
+      },
+      {
+        "name": "clean",
+        "frames": 2,
+        "speed": "idle"
+      }
+    ]
   }
 }

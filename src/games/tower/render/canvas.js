@@ -40,7 +40,8 @@ import { LINK_WIDTH as LINK_TILES } from '../sim/actions.js';
 import { clockTime } from '../sim/clock.js';
 import { CARRIER_MODE } from '../sim/elevators.js';
 import { COMMERCIAL_FAMILIES } from '../sim/commercial.js';
-import { isHotelRoomDirty } from '../sim/hotel.js';
+import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
+import { HK_STATE } from '../sim/housekeeping.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, TILES_PER_FLOOR,
   floorExists, floorLabel, isBasement, isHotelFamily, isInTransit, isSkyLobbyFloor, isUnitLet,
@@ -251,8 +252,13 @@ export function objectStatusTag(object) {
   // A hotel room is never FOR RENT — it is let by the night — but it can be
   // *dirty*, and that is the one thing about an empty room worth saying: the
   // guest has gone, the money is banked, and the room will not earn again until
-  // somebody cleans it. Issue #9 owns the cleaning; this only tells the truth.
-  if (isHotelFamily(object.family)) return isHotelRoomDirty(object) ? 'DIRTY' : '';
+  // somebody cleans it (`sim/housekeeping.js`). And past dirty it can be
+  // *infested*, which is the louder word because it is the one nothing cures:
+  // the room is lost until it is demolished.
+  if (isHotelFamily(object.family)) {
+    if (isHotelInfested(object)) return 'INFESTED';
+    return isHotelRoomDirty(object) ? 'DIRTY' : '';
+  }
   if (LEASABLE.has(object.family)) return 'FOR RENT';
   if (OWNED.has(object.family)) return 'FOR SALE';
   return '';                                   // a venue is open or closed
@@ -405,6 +411,7 @@ export function queuePressure(count) {
 export function objectSprite(object, { night = false, stressed = false } = {}) {
   const family = object?.family;
   if (family === FAMILY.lobby) return { name: 'lobby', animation: night ? 'night' : 'day' };
+  if (family === FAMILY.housekeeping) return { name: 'housekeeping', animation: night ? 'night' : 'day' };
   if (HOTEL.has(family)) {
     // Vacant, dirty or merely waiting for tonight: the empty shell. The furnished
     // sheet's own `vacant` frame is not used, for the reason given for the office.
@@ -427,6 +434,23 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
   const name = family === FAMILY.condo ? 'condo' : 'office';
   if (stressed) return { name, animation: 'stressed' };
   return { name, animation: night ? 'occupied-night' : 'occupied-day' };
+}
+
+/**
+ * What is drawn **over** a room's own art, or `null`. A hotel room that has been
+ * checked out of and not yet cleaned shows its mess; one the cockroaches have
+ * taken shows them, crawling. Both sit on the empty-room shell — a dirty room is
+ * never booked, and an infested one never will be — so the overlay is a sheet of
+ * its own rather than a frame of `hotel`, which would have to repaint the bed.
+ *
+ * Derived from the band alone, as `objectStatusTag` is, so the sprite and the
+ * word cannot disagree about whether a room is dirty.
+ */
+export function objectOverlay(object) {
+  if (!isHotelFamily(object?.family)) return null;
+  if (isHotelInfested(object)) return { name: 'room-status', animation: 'infested' };
+  if (isHotelRoomDirty(object)) return { name: 'room-status', animation: 'dirty' };
+  return null;
 }
 
 // ------------------------------------------------------- the rent moment
@@ -580,6 +604,8 @@ export const SPRITE_USES = {
   office: ['occupied-day', 'occupied-night', 'stressed'],
   condo: ['occupied-day', 'occupied-night', 'stressed'],
   hotel: ['booked-day', 'booked-night', 'poor-review'],
+  housekeeping: ['day', 'night'],
+  'room-status': ['dirty', 'infested'],
   shop: ['open-grocery', 'open-cafe', 'open-awning', 'closed-night'],
   'room-empty': ['office', 'condo', 'hotel'],
   'shaft-column': ['tile'],
@@ -590,6 +616,7 @@ export const SPRITE_USES = {
   'person-worker': ['stand', 'fidget', 'wait', 'wait-annoyed'],
   'person-resident': ['stand', 'fidget', 'wait', 'wait-annoyed'],
   'person-guest': ['stand', 'fidget', 'wait', 'wait-annoyed', 'luggage'],
+  'person-staff': ['stand', 'wait', 'clean'],
   'sky-cloud': ['small', 'medium', 'large'],
   'sky-bird': ['fly'],
   'sky-plane': ['fly'],
@@ -887,6 +914,7 @@ export function makeRenderer(canvas, options = {}) {
     drawConstruction(L);
     for (const carrier of tower.carriers) drawCars(L, carrier, dtMs);
     drawWaiting(L, tower, visible, byFloor);
+    drawStaffAtWork(L, tower);
     for (const o of tower.objects.values()) drawUnitSignals(L, o, tower);
     // Last of the world passes, and it has to stay last: the whole point is
     // that nothing draws over it.
@@ -1140,6 +1168,7 @@ export function makeRenderer(canvas, options = {}) {
     // sheet can always be missing, and an unfinished subject must cost a
     // rectangle, not a blank room.
     ctx.fillStyle = o.family === FAMILY.lobby ? '#2b3a4d'
+      : o.family === FAMILY.housekeeping ? '#1f5560'
       : let_ ? KIND_COLOR[o.family] ?? INFO : 'rgba(120,132,148,0.35)';
     ctx.fillRect(x, y, w, L.fh - 2);
 
@@ -1151,6 +1180,13 @@ export function makeRenderer(canvas, options = {}) {
       const cellW = ART_CELL_TILES * L.tw;
       for (let cx = x; cx < x + w; cx += cellW) {
         sprites.drawSprite(ctx, { ...art, x: cx, y, scale: L.zoom, phaseMs: idPhase(o.id) });
+      }
+      // The mess, or the swarm, on top of the empty shell.
+      const overlay = objectOverlay(o);
+      if (overlay) {
+        for (let cx = x; cx < x + w; cx += cellW) {
+          sprites.drawSprite(ctx, { ...overlay, x: cx, y, scale: L.zoom, phaseMs: idPhase(o.id) });
+        }
       }
       // A multi-cell lobby gets wings on its ends, which is what turns a row of
       // identical doors into one entrance.
@@ -1651,6 +1687,27 @@ export function makeRenderer(canvas, options = {}) {
 
   const anchorTileOf = (tower, actor) => tower.objects.get(actor.objectId)?.left ?? 0;
 
+  /**
+   * A housekeeper who has reached a room and is seeing to it, standing in the
+   * room with the mop. That is the moment `sim/housekeeping.js` calls the
+   * **rest**: the room is clean the instant they arrive and they linger four
+   * turns, which is long enough to be seen and is the only time one is drawn
+   * anywhere but in a lift queue — the stairs are crossed in a single stride and
+   * there is nothing to watch.
+   */
+  function drawStaffAtWork(L, tower) {
+    for (const actor of tower.actors) {
+      if (!actor || actor.family !== FAMILY.housekeeping || actor.state !== HK_STATE.rest) continue;
+      const room = tower.objects.get(actor.targetRoomId);
+      if (!room) continue;
+      const x = L.tileX(room.left) + ((room.right - room.left + 1) * L.tw) / 2 - 8 * L.zoom
+        + ((actor.occupantIndex % 3) - 1) * 6 * L.zoom;
+      const y = L.floorY(room.floor) + L.fh - 2 - 16 * L.zoom;
+      if (x + 16 * L.zoom < 0 || x > W || y + 16 * L.zoom < 0 || y > H) continue;
+      sprites.drawSprite(ctx, { name: 'person-staff', animation: 'clean', x, y, scale: L.zoom, phaseMs: idPhase(actor.id) });
+    }
+  }
+
   function drawWaitingFigure(L, actor, x, feetY) {
     const score = actorStress(actor);
     const band = stressBand(score);
@@ -1664,6 +1721,16 @@ export function makeRenderer(canvas, options = {}) {
       const pose = band === 'red' ? (beat ? 'wait-annoyed' : 'wait')
         : band === 'pink' ? (beat ? 'fidget' : 'wait')
           : (beat ? 'fidget' : 'stand');
+      // Staff carry no stress and have no posture of annoyance to show: a
+      // housekeeper in a queue stands, or shifts the linen from one arm to the
+      // other. The pip below the feet is always the calm colour.
+      if (actor.family === FAMILY.housekeeping) {
+        if (sprites.drawSprite(ctx, { name: 'person-staff', animation: beat ? 'wait' : 'stand', x, y: feetY - h, scale: L.zoom })) {
+          ctx.fillStyle = STRESS_COLORS.black;
+          ctx.fillRect(x + 2 * L.zoom, feetY - 1, Math.max(2, 12 * L.zoom - 4), Math.max(1, L.zoom));
+          return;
+        }
+      }
       const sheet = actor.family === FAMILY.condo ? 'person-resident'
         : HOTEL.has(actor.family) ? 'person-guest' : 'person-worker';
       // A calm guest on the way up to check in is carrying a suitcase — the one
@@ -1791,7 +1858,12 @@ export function makeRenderer(canvas, options = {}) {
     };
     for (const o of tower.objects.values()) {
       const [x, w] = span(o);
+      // A room with something wrong with it is the one thing the strip is for:
+      // amber for dirty (a housekeeper has until the 1600 pass), red for lost.
       ctx.fillStyle = o.family === FAMILY.lobby ? '#5aa9e6'
+        : o.family === FAMILY.housekeeping ? '#2fb5a8'
+        : isHotelInfested(o) ? BAD
+        : isHotelRoomDirty(o) ? WARN
         : officeIsLet(o) ? KIND_COLOR[o.family] ?? INFO : 'rgba(140,150,165,0.55)';
       ctx.fillRect(x, minimapRowY(m, o.floor), w, m.rowH);
     }

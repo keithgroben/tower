@@ -17,13 +17,15 @@
  */
 import { FAMILY, isHotelFamily, isUnitLet, population } from '../src/games/tower/sim/state.js';
 import { isCondoSold } from '../src/games/tower/sim/condo.js';
-import { isHotelBooked, isHotelRoomDirty } from '../src/games/tower/sim/hotel.js';
+import { isHotelBooked, isHotelInfested, isHotelRoomDirty } from '../src/games/tower/sim/hotel.js';
+import { rebuildRouteTables } from '../src/games/tower/sim/routing.js';
 import { CONSTRUCTION_COST, RENT_TIERS } from '../src/games/tower/sim/economy.js';
-import { seedDemoWorld } from '../src/games/tower/ui/seed.js';
+import { newTowerWorld, seedDemoWorld } from '../src/games/tower/ui/seed.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../src/games/tower/sim/stress.js';
 import { BUILDABLE, applyAction } from '../src/games/tower/sim/actions.js';
 import { starGateStatus, towerActivity } from '../src/games/tower/sim/progression.js';
+import { CARRIER_MODE } from '../src/games/tower/sim/elevators.js';
 
 const TICKS_PER_DAY = 2600;
 
@@ -118,7 +120,8 @@ export function condoWatch(tower) {
  */
 export function hotelWatch(tower) {
   const seen = new Map();               // object id -> was a guest in residence last tick
-  const totals = { checkins: 0, checkouts: 0, earned: 0 };
+  const bands = new Map();              // object id -> 'dirty' | 'infested' | 'other', last tick
+  const totals = { checkins: 0, checkouts: 0, earned: 0, cleaned: 0, infestations: 0, firstInfestedDay: null };
   const PRICE = { [FAMILY.hotelSingle]: 'hotelSingle', [FAMILY.hotelTwin]: 'hotelTwin', [FAMILY.hotelSuite]: 'hotelSuite' };
 
   return {
@@ -126,6 +129,20 @@ export function hotelWatch(tower) {
     sample() {
       for (const object of tower.objects.values()) {
         if (!isHotelFamily(object.family)) continue;
+
+        // The two edges housekeeping (issue #9) owns: dirty -> clean is a room
+        // somebody walked to and cleaned, and anything -> infested is a room lost.
+        // `cleanHotelRoom` and `infestHotelRoom` are the only writers of either, so
+        // a per-tick watch cannot miss one.
+        const band = isHotelInfested(object) ? 'infested' : isHotelRoomDirty(object) ? 'dirty' : 'other';
+        const lastBand = bands.get(object.id);
+        bands.set(object.id, band);
+        if (lastBand === 'dirty' && band === 'other') totals.cleaned++;
+        if (band === 'infested' && lastBand !== undefined && lastBand !== 'infested') {
+          totals.infestations++;
+          totals.firstInfestedDay ??= tower.clock.dayCounter;
+        }
+
         const booked = isHotelBooked(object);
         const before = seen.get(object.id);
         seen.set(object.id, booked);
@@ -150,7 +167,7 @@ export function hotelWatch(tower) {
  * If it never costs them, the game has no bottom, and "build more" is a button
  * that only ever prints money.
  */
-export function greedyBuilder(world, { condos = true, hotels = true } = {}) {
+export function greedyBuilder(world, { condos = true, hotels = true, housekeeping = true } = {}) {
   const { tower } = world;
 
   /**
@@ -178,6 +195,46 @@ export function greedyBuilder(world, { condos = true, hotels = true } = {}) {
   };
   const hotelCount = () => [...tower.objects.values()].filter((o) => isHotelFamily(o.family)).length;
 
+  /**
+   * **A player who has read the manual.** Hotels need housekeeping, housekeeping
+   * needs a way to the rooms that is not the guests' lift, and one facility's six
+   * staff clean about a dozen rooms a day on a floor. So: a service elevator that
+   * reaches the highest hotel floor, and a facility for every dozen rooms.
+   * `housekeeping: false` is the player who has not (`--no-housekeeping`), and
+   * what happens to their hotel is the point of the trial below.
+   */
+  const buildHousekeeping = () => {
+    if (tower.starCount < 2) return null;
+    const rooms = hotelCount();
+    if (rooms === 0) return null;
+    let topHotel = 0;
+    for (const o of tower.objects.values()) if (isHotelFamily(o.family) && o.floor > topHotel) topHotel = o.floor;
+
+    let service = tower.carriers.find((c) => c.mode === CARRIER_MODE.SERVICE);
+    if (!service) {
+      for (let column = 0; column <= 146 && !service; column++) {
+        const r = applyAction(world, { type: 'build_shaft', kind: 'service', bottom: 0, top: topHotel, column });
+        if (r.ok) { service = r.carrier; return 'built a service elevator at column ' + column; }
+        if (/afford/.test(r.reason ?? '')) return null;
+      }
+      return null;
+    }
+    if (service.topFloor < topHotel) {
+      const r = applyAction(world, { type: 'extend_shaft', carrierId: service.id, top: topHotel });
+      if (r.ok) return 'extended the service elevator to F' + topHotel;
+    }
+    const facilities = [...tower.objects.values()].filter((o) => o.family === FAMILY.housekeeping).length;
+    if (facilities >= Math.ceil(rooms / 12)) return null;
+    for (let floor = 1; floor <= service.topFloor; floor++) {
+      for (let left = 0; left + BUILDABLE.housekeeping.width <= 150; left += 5) {
+        const r = applyAction(world, { type: 'build', what: 'housekeeping', floor, left });
+        if (r.ok) return 'built housekeeping on F' + floor;
+        if (/afford/.test(r.reason ?? '')) return null;
+      }
+    }
+    return null;
+  };
+
   return function act() {
     const lift = tower.carriers[0];
     if (!lift) return null;
@@ -194,6 +251,10 @@ export function greedyBuilder(world, { condos = true, hotels = true } = {}) {
     // 1b. The moment hotels unlock, a dozen of them: they are the new toy, and
     //     they are what puts people in the lifts in the evening.
     if (hotels && hotelCount() < 12) { const did = buildHotelRoom(); if (did) return did; }
+
+    // 1c. ...and the staff to keep them. Before anything else once hotels exist:
+    //     a room left dirty three days is a room lost.
+    if (hotels && housekeeping) { const did = buildHousekeeping(); if (did) return did; }
 
     // 2. A condo is the shiny expensive thing, so it is what an impatient
     //    person with money reaches for first. $80,000 out, $150,000 back the
@@ -227,8 +288,92 @@ export function greedyBuilder(world, { condos = true, hotels = true } = {}) {
   };
 }
 
+/**
+ * **The housekeeping trial: too few staff, and enough.** Issue #9's proof.
+ *
+ * One hotel floor of single rooms, a guest lift and a service elevator, and `n`
+ * housekeeping facilities; then `days` of the game through the driver's own
+ * composition. Nothing is scripted — no room's band is written, no member of staff
+ * is moved. Guests check in each evening and out each morning, the staff walk to
+ * the dirty rooms by service elevator and clean them (or do not get to), and the
+ * 1600 pass gives a room still dirty its strike.
+ *
+ * **Why one floor.** A facility's six staff each look after one residue of the
+ * floor number modulo six, so one floor is served by exactly one of a facility's
+ * staff and the floor's capacity is what that one person can get through before
+ * tick 1500 — about eighteen rooms. That makes "too few housekeepers for the
+ * rooms" a plain count: twenty-two rooms is more than one facility can do and
+ * fewer than two can.
+ *
+ * Returns the numbers; the CLI below prints them and `test/housekeeping.test.js`
+ * asserts on the same function, so the harness and the test cannot disagree about
+ * what was run.
+ *
+ * @returns {{facilities:number, rooms:number, days:number, checkins:number,
+ *   checkouts:number, cleaned:number, infestations:number,
+ *   firstInfestedDay:number|null, dirtyAtEnd:number, infestedAtEnd:number,
+ *   earned:number, perDay:string[]}}
+ */
+export function housekeepingTrial({ facilities, rooms = 22, days = 10, seed = 1, floor = 8 } = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  tower.starCount = 3;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('housekeeping trial: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  must(applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: 0, top: floor + 1, column: 40 }), 'the guest lift');
+  must(applyAction(world, { type: 'build_shaft', kind: 'service', bottom: 0, top: floor + 1, column: 52 }), 'the service elevator');
+  const built = [];
+  for (let i = 0; i < rooms; i++) {
+    built.push(must(applyAction(world, { type: 'build', what: 'hotelSingle', floor, left: 60 + i * 4 }), 'room ' + i).object);
+  }
+  for (let k = 0; k < facilities; k++) {
+    must(applyAction(world, { type: 'build', what: 'housekeeping', floor: 1, left: 70 + k * 16 }), 'housekeeping ' + k);
+  }
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+  const watch = hotelWatch(tower);
+
+  const perDay = [];
+  for (let d = 0; d < days; d++) {
+    for (let t = 0; t < TICKS_PER_DAY; t++) { scheduler.tick(tower); watch.sample(); }
+    perDay.push('d' + tower.clock.dayCounter + ' ' + built.filter(isHotelRoomDirty).length + 'd/'
+      + built.filter(isHotelInfested).length + 'i');
+  }
+  return {
+    facilities, rooms, days,
+    checkins: watch.totals.checkins,
+    checkouts: watch.totals.checkouts,
+    cleaned: watch.totals.cleaned,
+    infestations: watch.totals.infestations,
+    firstInfestedDay: watch.totals.firstInfestedDay,
+    dirtyAtEnd: built.filter(isHotelRoomDirty).length,
+    infestedAtEnd: built.filter(isHotelInfested).length,
+    earned: watch.totals.earned,
+    perDay,
+  };
+}
+
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   || process.argv[1]?.endsWith('playtest.js')) {
+  if (process.argv.includes('--housekeeping')) {
+    // `node harness/playtest.js --housekeeping [days]` - the issue #9 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 10);
+    const dollars = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
+    console.log('housekeeping trial: 22 single rooms on one floor (F8), a guest lift, a service elevator, '
+      + trialDays + ' days. NdMi = rooms dirty / infested at the end of that day.\n');
+    console.log('facilities  staff  stays paid  cleaned  infested  first outbreak  income      dirty/infested by day');
+    console.log('-'.repeat(118));
+    for (const n of [0, 1, 2, 3]) {
+      const r = housekeepingTrial({ facilities: n, days: trialDays });
+      console.log(String(n).padStart(10) + String(n * 6).padStart(7) + String(r.checkouts).padStart(12)
+        + String(r.cleaned).padStart(9) + String(r.infestedAtEnd + '/' + r.rooms).padStart(10)
+        + String(r.firstInfestedDay === null ? '-' : 'day ' + r.firstInfestedDay).padStart(16)
+        + dollars(r.earned).padStart(10) + '   ' + r.perDay.join(' '));
+    }
+    process.exit(0);
+  }
   const days = Number(process.argv[2] ?? 14);
   const seed = Number(process.argv[3] ?? 1);
   const plays = process.argv.includes('--play');
@@ -238,9 +383,11 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   // `--no-hotels` reproduces the plan this harness had before hotel rooms
   // existed, which is what makes a before/after comparison line for line.
   const hotels = !process.argv.includes('--no-hotels');
+  // `--no-housekeeping` is the player who built hotels and never read the manual.
+  const housekeeping = !process.argv.includes('--no-housekeeping');
   const world = seedDemoWorld({ seed });
   const { scheduler } = makeDriver(world);
-  const act = plays ? greedyBuilder(world, { condos, hotels }) : () => null;
+  const act = plays ? greedyBuilder(world, { condos, hotels, housekeeping }) : () => null;
   const condoLedger = condoWatch(world.tower);
   const hotelLedger = hotelWatch(world.tower);
 
@@ -319,18 +466,23 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   const nameOf = {
     [FAMILY.hotelSingle]: 'hotelSingle', [FAMILY.hotelTwin]: 'hotelTwin', [FAMILY.hotelSuite]: 'hotelSuite',
   };
-  let booked = 0, dirty = 0, spentOnRooms = 0;
+  let booked = 0, dirty = 0, infested = 0, facilities = 0, spentOnRooms = 0;
   for (const o of world.tower.objects.values()) {
+    if (o.family === FAMILY.housekeeping) facilities++;
     if (!isHotelFamily(o.family)) continue;
     const name = nameOf[o.family];
     rooms[name]++;
     if (isHotelBooked(o)) booked++;
     if (isHotelRoomDirty(o)) dirty++;
+    if (isHotelInfested(o)) infested++;
     spentOnRooms += CONSTRUCTION_COST[name] + BUILDABLE[name].width * CONSTRUCTION_COST.floorTile;
   }
   const total = rooms.hotelSingle + rooms.hotelTwin + rooms.hotelSuite;
   console.log('hotels  ' + total + ' room(s) (' + rooms.hotelSingle + ' single, ' + rooms.hotelTwin + ' twin, '
-    + rooms.hotelSuite + ' suite) · ' + booked + ' booked, ' + dirty + ' dirty · ' + h.checkins
+    + rooms.hotelSuite + ' suite) · ' + booked + ' booked, ' + dirty + ' dirty, ' + infested + ' infested · ' + h.checkins
     + ' check-in(s), ' + h.checkouts + ' checkout(s) ' + money(h.earned) + ' · construction '
     + money(-spentOnRooms) + '  =  ' + money(h.earned - spentOnRooms));
+  console.log('housekeeping  ' + facilities + ' facilit' + (facilities === 1 ? 'y' : 'ies') + ' (' + facilities * 6
+    + ' staff) · ' + h.cleaned + ' room(s) cleaned · ' + h.infestations + ' infested'
+    + (h.firstInfestedDay === null ? '' : ' (first on day ' + h.firstInfestedDay + ')'));
 }

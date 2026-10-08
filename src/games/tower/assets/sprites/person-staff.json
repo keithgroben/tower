@@ -1,0 +1,19 @@
+{
+  "frameW": 16,
+  "frameH": 16,
+  "animations": {
+    "stand": {
+      "col": 0,
+      "frames": 1
+    },
+    "wait": {
+      "col": 1,
+      "frames": 1
+    },
+    "clean": {
+      "col": 2,
+      "frames": 2,
+      "speed": "idle"
+    }
+  }
+}
