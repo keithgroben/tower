@@ -228,7 +228,9 @@ export function activateWeddingGuests(tower) {
  */
 export function sendWeddingGuestsHome(tower) {
   if (!hasCathedral(tower)) return 0;
-  for (const o of cathedralObjects(tower)) { o.aux = AUX.idle; o.dirty = true; }
+  // The reference clears every slice. The gilding the Tower rank gave (aux 2) is kept (A77): a rank that
+  // lasted until lunch would be no finish.
+  for (const o of cathedralObjects(tower)) { if (o.aux !== AUX.crowned) { o.aux = AUX.idle; o.dirty = true; } }
   let sent = 0;
   for (const guest of cathedralGuests(tower)) {
     if (guest.state !== GUEST_STATE.arrived) continue;
