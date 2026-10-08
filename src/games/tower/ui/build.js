@@ -29,7 +29,7 @@
  * **its** refusal, so a disagreement surfaces as a visible sentence rather than
  * as a ghost that lied.
  */
-import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, hasTenant, linkObstruction, shaftObstruction } from '../sim/actions.js';
+import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, hasTenant, linkObstruction, lobbyFloorReason, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
 import { lockReason } from '../sim/progression.js';
 import {
   carCostForMode, chargeConstruction, payout, placementCost, CONSTRUCTION_COST, TYPE_CODES,
@@ -251,6 +251,8 @@ export function preview(world, tool, target) {
     if (spec.aboveGrade && command.floor <= GROUND_FLOOR) {
       return refuse('a ' + spec.label.toLowerCase() + ' has to go above the ground floor', { cost, footprint });
     }
+    const wrongFloor = lobbyFloorReason(spec.family, command.floor);
+    if (wrongFloor) return refuse(wrongFloor, { cost, footprint });
     if (spanBlocked(tower, command.floor, command.left, right)) {
       return refuse('something is already built there', { cost, footprint });
     }
@@ -264,13 +266,8 @@ export function preview(world, tool, target) {
     const column = Math.max(0, Math.min(TILES_PER_FLOOR - width, command.column));
     const footprint = { kind: 'shaft', column, width, bottom: command.bottom, top: command.top };
     command.column = column;
-    if (!floorExists(command.bottom) || !floorExists(command.top)) {
-      return refuse('that shaft leaves the tower', { cost, footprint });
-    }
-    if (command.top <= command.bottom) return refuse('a shaft has to serve more than one floor', { cost, footprint });
-    if (command.top - command.bottom + 1 > MAX_SERVED_SPAN) {
-      return refuse('a shaft serves at most ' + MAX_SERVED_SPAN + ' floors — use a sky lobby', { cost, footprint });
-    }
+    const badSpan = shaftSpanReason(spec.mode, command.bottom, command.top);
+    if (badSpan) return refuse(badSpan, { cost, footprint });
     if (!affordable) return refuse(cannotAfford(cost, ledger), { cost, footprint });
     // The clearance rule, asked of the sim rather than restated. It used to be
     // a *note* — "passes through 12 rooms" — because `sim/actions.js` permitted

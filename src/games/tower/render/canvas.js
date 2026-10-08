@@ -1454,7 +1454,8 @@ export function makeRenderer(canvas, options = {}) {
     const cellW = ART_CELL_TILES * L.tw;
     for (let f = low; f <= high; f++) {
       const y = L.floorY(f);
-      ctx.fillStyle = carrier.mode === CARRIER_MODE.EXPRESS ? '#241b33' : '#12181f';
+      ctx.fillStyle = carrier.mode === CARRIER_MODE.EXPRESS ? '#241b33'
+        : carrier.mode === CARRIER_MODE.SERVICE ? '#2a1a1a' : '#12181f';   // violet express, red service, as the original's elevator view
       ctx.fillRect(x, y, w, L.fh);
       ctx.save();
       ctx.beginPath();
