@@ -32,10 +32,10 @@ import { advanceSimTripCounters, rebaseSimElapsedFromClock } from '../sim/stress
 import { makeCarrierContext, rebuildRouteTables } from '../sim/routing.js';
 import { LEDGER_CHECKPOINT_TICK } from '../sim/economy.js';
 import {
-  runCommercialClosure, runCommercialRebuild, runTowerLedgerCheckpoint,
+  restaurantClosure, runCommercialClosure, runCommercialRebuild, runTowerLedgerCheckpoint,
 } from '../sim/ledger-adapter.js';
 import { refreshStartOfDayGates, tryAdvanceStar } from '../sim/progression.js';
-import { CLOSURE_TICK, REBUILD_TICK } from '../sim/commercial.js';
+import { CLOSURE_TICK, REBUILD_TICK, RESTAURANT_CLOSURE_TICK } from '../sim/commercial.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -145,6 +145,14 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
        * "transport decides whether you have tenants".
        */
       [CLOSURE_TICK]: (t) => runCommercialClosure(t),
+      /**
+       * `specs/TIME.md` § 2200, *"type-6 facility advance"*: the same sweep for
+       * the restaurant, two hundred ticks later — the evening's diners become
+       * the evening's money. Its rebuild is at 1600 and rides in
+       * `ui/driver.js`'s `extraCheckpoints`, chained ahead of the hotel pass
+       * that owns that tick.
+       */
+      [RESTAURANT_CLOSURE_TICK]: (t) => restaurantClosure(t),
       // § 2533: ledger rollover, cashflow activation, periodic expenses — plus
       // the daily operational recompute that runs inside its object sweep.
       //

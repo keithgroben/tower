@@ -149,6 +149,11 @@ export const OCCUPANTS = {
   [FAMILY.hotelSuite]: 2,
   [FAMILY.office]: 6,
   [FAMILY.condo]: 3,
+  // All three commercial venues own 48 customer sims. `COMMERCIAL.md` § Role:
+  // *"restaurant (6): 48 sim slots ... retail (10): 48 ... fast food (12): 48"*
+  // (`spec/DEVIATIONS.md` A15).
+  [FAMILY.restaurant]: 48,
+  [FAMILY.retail]: 48,
   [FAMILY.fastFood]: 48,
   // Housekeeping: **six staff** per facility. `specs/PEOPLE.md` § Family `0x0f`
   // ("One per hotel room entity slot"), the reference implementation's

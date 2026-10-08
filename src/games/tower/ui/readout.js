@@ -15,6 +15,9 @@
  */
 import { stressBand } from '../sim/stress.js';
 import { MAX_STAR } from '../sim/progression.js';
+import { VENUE, VISITOR_BANDS, closurePayout, venueOf } from '../sim/commercial.js';
+import { RENT_TIERS } from '../sim/economy.js';
+import { FAMILY } from '../sim/state.js';
 
 // ------------------------------------------------------------------ stress
 
@@ -182,4 +185,39 @@ export function starClause(status, buildable = null) {
   // cases that differ. The fix is `kind` on the blocker; this is what the bar
   // says honestly until then.
   return 'next: ' + text;
+}
+
+// ------------------------------------------------------------------- venues
+
+const money = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
+
+/**
+ * The line under the pointer for a restaurant, a fast food or a shop, or `''`
+ * for anything that is not one.
+ *
+ * It states the thing a venue's owner is actually asking: **what is today worth,
+ * and how far off the next band am I.** A restaurant is paid once, at closing,
+ * and the lowest band is a LOSS, so "23 diners" alone reads as a number and not
+ * as "you are about to pay $6,000 for the privilege" - which is what it is.
+ * Computed from the same `closurePayout` the closing sweep pays out of.
+ */
+export function venueReadout(object) {
+  const record = venueOf(object);
+  if (!record) return '';
+  const name = object.family === FAMILY.restaurant ? 'restaurant'
+    : object.family === FAMILY.retail ? 'shop' : 'fast food';
+
+  if (object.family === FAMILY.retail) {
+    if (record.availability === VENUE.dormant) {
+      return name + ' · unrented - it opens when its first customer reaches it';
+    }
+    return name + ' · open · rent ' + money(RENT_TIERS.retail[object.rentLevel] ?? 0) + ' a quarter · +10 people';
+  }
+
+  const visitors = record.acquireCount;
+  const pays = closurePayout(object.family, visitors);
+  const next = VISITOR_BANDS.find((band) => visitors < band);
+  const people = object.family === FAMILY.restaurant ? 'diners' : 'customers';
+  return name + ' · ' + visitors + ' ' + people + ' today · closing pays ' + money(pays)
+    + (next === undefined ? '' : ' · ' + next + ' pays ' + money(closurePayout(object.family, next)));
 }

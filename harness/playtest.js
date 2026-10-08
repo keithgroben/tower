@@ -15,17 +15,22 @@
  * restates the composition measures a copy, and reports confidently on a game
  * nobody is playing the day the two drift. So the composition moved instead.
  */
-import { FAMILY, isHotelFamily, isUnitLet, population } from '../src/games/tower/sim/state.js';
+import { COMMERCIAL_FAMILY_CODES, FAMILY, isHotelFamily, isUnitLet, population } from '../src/games/tower/sim/state.js';
 import { isCondoSold } from '../src/games/tower/sim/condo.js';
 import { isHotelBooked, isHotelInfested, isHotelRoomDirty } from '../src/games/tower/sim/hotel.js';
 import { rebuildRouteTables } from '../src/games/tower/sim/routing.js';
-import { CONSTRUCTION_COST, RENT_TIERS } from '../src/games/tower/sim/economy.js';
+import {
+  CONSTRUCTION_COST, LEDGER_CHECKPOINT_TICK, RENT_TIERS, isCashflowDay,
+} from '../src/games/tower/sim/economy.js';
 import { newTowerWorld, seedDemoWorld } from '../src/games/tower/ui/seed.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../src/games/tower/sim/stress.js';
 import { BUILDABLE, applyAction } from '../src/games/tower/sim/actions.js';
 import { starGateStatus, towerActivity } from '../src/games/tower/sim/progression.js';
 import { CARRIER_MODE } from '../src/games/tower/sim/elevators.js';
+import {
+  CLOSURE_TICK, RESTAURANT_CLOSURE_TICK, closurePayout, venueOf,
+} from '../src/games/tower/sim/commercial.js';
 
 const TICKS_PER_DAY = 2600;
 
@@ -38,6 +43,8 @@ export function readout(world) {
     // A hotel room is booked by the night, not let — the HUD leaves it out for
     // the same reason, and `hotelWatch` below reports it on its own line.
     if (isHotelFamily(o.family)) continue;
+    // ...and neither is a venue: it has customers, not a lease (the HUD's cut).
+    if (COMMERCIAL_FAMILY_CODES.has(o.family)) continue;
     leasable++;
     // Per family: an office is let to `0x0f`, a condo is sold to `0x17`.
     if (o.occupiedFlag && isUnitLet(o)) let_++;
@@ -355,8 +362,157 @@ export function housekeepingTrial({ facilities, rooms = 22, days = 10, seed = 1,
   };
 }
 
+/**
+ * **The commercial trial.** Issue #10's proof: what a restaurant or a shop does
+ * to the money, measured through the driver's own composition and nothing else.
+ *
+ * Nothing is scripted: no visitor count is written, no shop is opened by hand.
+ * A venue's own 48 customers decide when to go (the gate's dice), the router
+ * decides whether they can, and the closure sweep prices the day. The numbers
+ * read are the ones the sim produced:
+ *
+ *  - **restaurant / fastFood** - each day's visitors are read off the venue's
+ *    record the tick before its closure sweep (2200 for a restaurant, 2000 for a
+ *    fast food), and the payout is the CASH that tick moved, not a lookup of the
+ *    payout table (`expected` is the lookup, kept beside it so a disagreement is
+ *    visible);
+ *  - **retail** - the rent is every positive step of the `retail` income bucket
+ *    (the 3-day rollover clears it, which is a negative step and ignored), and
+ *    the `+10` is read off the population ledger.
+ *
+ * `hotelRooms` single rooms on a floor of their own feed a restaurant (a hotel
+ * guest's evening trip is to the restaurant bucket, `sim/hotel.js`); `lift:
+ * false` leaves the venue's floor with no way up, which is the control.
+ *
+ * Returns the numbers; the CLI below prints them and `test/commercial.test.js`
+ * asserts on the same function, so the harness and the test cannot disagree about
+ * what was run.
+ */
+export function commercialTrial({
+  kind, days = 9, seed = 1, lift = true, hotelRooms = 0, rentTier = 1,
+} = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  tower.starCount = 3;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('commercial trial: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  const VENUE_FLOOR = 1;
+  const HOTEL_FLOOR = 2;
+  const ROOMS_PER_FLOOR = 20;
+  const topFloor = HOTEL_FLOOR + Math.ceil(hotelRooms / ROOMS_PER_FLOOR) - 1;
+  if (lift) {
+    must(applyAction(world, {
+      type: 'build_shaft', kind: 'standard', bottom: 0, top: hotelRooms ? topFloor : VENUE_FLOOR, column: 40,
+    }), 'the lift');
+  }
+  if (hotelRooms) {
+    // A hotel left to its own devices is lost to cockroaches in three days
+    // (issue #9), and a lost room has no guest to eat. So the player who builds
+    // rooms to feed a restaurant has read the manual: a service elevator and a
+    // facility for every dozen rooms.
+    must(applyAction(world, {
+      type: 'build_shaft', kind: 'service', bottom: 0, top: topFloor, column: 132,
+    }), 'the service elevator');
+  }
+  const venue = must(applyAction(world, { type: 'build', what: kind, floor: VENUE_FLOOR, left: 60 }), kind).object;
+  if (rentTier !== 1) must(applyAction(world, { type: 'set_rent', objectId: venue.id, tier: rentTier }), 'the rent tier');
+  for (let i = 0; i < hotelRooms; i++) {
+    must(applyAction(world, {
+      type: 'build', what: 'hotelSingle',
+      floor: HOTEL_FLOOR + Math.floor(i / ROOMS_PER_FLOOR), left: 46 + (i % ROOMS_PER_FLOOR) * 4,
+    }), 'room ' + i);
+  }
+  if (hotelRooms) {
+    for (let k = 0; k < Math.ceil(hotelRooms / 12); k++) {
+      must(applyAction(world, { type: 'build', what: 'housekeeping', floor: 1, left: 90 + k * 15 }), 'housekeeping ' + k);
+    }
+  }
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+
+  const closeTick = kind === 'restaurant' ? RESTAURANT_CLOSURE_TICK : CLOSURE_TICK;
+  const perDay = [];
+  let visitsBefore = 0, cashBefore = 0, retailIncome = 0, lastRetailBucket = 0, openedOnDay = null;
+  let peakRetailPopulation = 0;
+  for (let d = 0; d < days; d++) {
+    for (let t = 0; t < TICKS_PER_DAY; t++) {
+      if (tower.clock.dayTick === closeTick - 1) {
+        visitsBefore = venueOf(venue).acquireCount;
+        cashBefore = tower.cash;
+      }
+      scheduler.tick(tower);
+      if (tower.clock.dayTick === closeTick && kind !== 'retail') {
+        perDay.push({
+          day: tower.clock.dayCounter, visitors: visitsBefore, closure: tower.cash - cashBefore,
+          expected: closurePayout(venue.family, visitsBefore), capacity: venueOf(venue).activeCapacityLimit,
+        });
+      }
+      // The 3-day rollover clears the bucket and the same tick's activation pays
+      // into it, so a bucket that ends where it started is not "no income" - and
+      // is exactly what a tier-2 shop does (the same $10,000 in, the same out).
+      // The rollover is a tick, not a value: checkpoint 2533 on a cashflow day.
+      if (tower.clock.dayTick === LEDGER_CHECKPOINT_TICK && isCashflowDay(tower.clock.dayCounter)) {
+        lastRetailBucket = 0;
+      }
+      const bucket = tower.incomeLedger?.retail ?? 0;
+      if (bucket > lastRetailBucket) retailIncome += bucket - lastRetailBucket;
+      lastRetailBucket = bucket;
+      peakRetailPopulation = Math.max(peakRetailPopulation, tower.populationLedger?.retail ?? 0);
+      if (kind === 'retail' && openedOnDay === null && venueOf(venue).availability !== 0xff) {
+        openedOnDay = tower.clock.dayCounter;
+      }
+    }
+  }
+  return {
+    kind, days, lift, hotelRooms, rentTier, perDay,
+    closureTotal: perDay.reduce((sum, p) => sum + p.closure, 0),
+    retailIncome, openedOnDay,
+    open: kind === 'retail' ? venueOf(venue).availability !== 0xff : null,
+    retailPopulation: tower.populationLedger?.retail ?? 0,
+    peakRetailPopulation,
+    hudPopulation: population(tower),
+    world, venue,
+  };
+}
+
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   || process.argv[1]?.endsWith('playtest.js')) {
+  if (process.argv.includes('--commercial')) {
+    // `node harness/playtest.js --commercial [days]` - the issue #10 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 12);
+    const dollars = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
+    console.log('commercial trial: one venue on F1, a lift, ' + trialDays + ' days, nothing scripted.'
+      + ' dN: visitors -> what the closing sweep PAID.\n');
+    const cases = [
+      ['restaurant, lift          ', { kind: 'restaurant' }],
+      ['restaurant, NO lift       ', { kind: 'restaurant', lift: false }],
+      ['restaurant + 12 hotel rms ', { kind: 'restaurant', hotelRooms: 12 }],
+      ['fast food, lift           ', { kind: 'fastFood' }],
+    ];
+    for (const [label, options] of cases) {
+      const r = commercialTrial({ ...options, days: trialDays });
+      const wins = r.perDay.filter((p) => p.closure > 0).length;
+      console.log(label + ' net ' + dollars(r.closureTotal).padStart(9) + '  (' + wins + ' paying day(s) of '
+        + r.perDay.length + ')');
+      console.log('   ' + r.perDay.map((p) => 'd' + p.day + ':' + p.visitors + 'v ' + dollars(p.closure)).join('  '));
+    }
+    console.log('\nretail shop: rent = every payment into the retail bucket; people = the +10 on the ledger.\n');
+    for (const [label, options] of [
+      ['shop, tier 0 ($20,000)', { kind: 'retail', rentTier: 0 }],
+      ['shop, tier 1 ($15,000)', { kind: 'retail', rentTier: 1 }],
+      ['shop, tier 2 ($10,000)', { kind: 'retail', rentTier: 2 }],
+      ['shop, tier 3 ($4,000) ', { kind: 'retail', rentTier: 3 }],
+      ['shop, NO lift         ', { kind: 'retail', lift: false }],
+    ]) {
+      const r = commercialTrial({ ...options, days: trialDays });
+      console.log(label + '  rent ' + dollars(r.retailIncome).padStart(9) + '  ' + (r.open
+        ? 'opened day ' + r.openedOnDay + ', +' + r.retailPopulation + ' people'
+        : 'never opened, ' + r.retailPopulation + ' people'));
+    }
+    process.exit(0);
+  }
   if (process.argv.includes('--housekeeping')) {
     // `node harness/playtest.js --housekeeping [days]` - the issue #9 proof.
     const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 10);

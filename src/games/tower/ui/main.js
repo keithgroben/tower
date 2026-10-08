@@ -22,9 +22,9 @@ import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { starGateStatus } from '../sim/progression.js';
 import { BUILDABLE } from '../sim/actions.js';
 import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
-import { isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
+import { COMMERCIAL_FAMILY_CODES, isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
 import {
-  evictionNotice, hotelHealthReadout, infestationNotice, starClause, starGlyph, stressReadout,
+  evictionNotice, hotelHealthReadout, infestationNotice, starClause, starGlyph, stressReadout, venueReadout,
 } from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -359,6 +359,10 @@ function updateHover(px, py) {
     return;
   }
   const occupants = tower.actors.filter((a) => a && a.objectId === object.id);
+  // A venue's 48 are customers who may come, not people who live here, and the
+  // line worth saying about it is what its day is worth.
+  const venueLine = venueReadout(object);
+  if (venueLine) { $('hover').textContent = venueLine; return; }
   // Staff have no lease and no stress; "6 occupants · worst stress 0" would read
   // as a tenant who is doing perfectly.
   if (isStaffFamily(object.family)) {
@@ -423,6 +427,10 @@ function drawHud() {
       if (officeIsLet(object)) guests += object.occupants.length;
       continue;
     }
+    // A venue has customers, not tenants: it is never let and never for rent, so
+    // counting it makes the lease figure ("36/43 let") a denominator that grows
+    // with every restaurant and can never be met. `hasTenant` makes the same cut.
+    if (COMMERCIAL_FAMILY_CODES.has(object.family)) continue;
     leasable++;
     if (!officeIsLet(object)) continue;
     let_++;

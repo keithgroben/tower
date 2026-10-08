@@ -40,7 +40,9 @@
  */
 import { makeRng } from './rng.js';
 import { ledgerFor } from './ledger-adapter.js';
-import { createActor, createObject, isHotelFamily, isUnitLet, population } from './state.js';
+import {
+  COMMERCIAL_FAMILY_CODES, createActor, createObject, isHotelFamily, isUnitLet, population,
+} from './state.js';
 
 export const SAVE_SCHEMA = 'tower-save/v1';
 
@@ -67,8 +69,16 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * three of which infest it. A v2 file with a checked-out room in it would resume
  * with that room's strikes at zero and nobody to clean it, which is a different
  * game from the one that was saved.
+ *
+ * v4 (issue #10, restaurant and retail shop) gives two more families their 48
+ * customers each, makes a shop's record start **dormant** (unrented until its
+ * first customer arrives, `availability` `0xff`) with a `cycleVisits` count, and
+ * changes which seed column sets a venue's day: the ACTIVE phase's, capped by
+ * that phase's own limit, with the column stamped on the record (`activePhase`).
+ * A v3 file's shops would resume as record-less or already-open shops with no
+ * cycle history, and its fast food would read the wrong seed on a weekend.
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,
@@ -132,6 +142,8 @@ export function summarise({ tower, ledger }) {
     // A hotel room is booked by the night, not let: counting it would show
     // "40/60 let" in the save list in the morning and "60/60" in the evening.
     if (isHotelFamily(o.family)) continue;
+    // Nor is a venue: it has customers, not a lease (the HUD makes the same cut).
+    if (COMMERCIAL_FAMILY_CODES.has(o.family)) continue;
     leasable++;
     // Per family: a sold condo's band runs to 0x17, an office's to 0x0f.
     if (o.occupiedFlag && isUnitLet(o)) let_++;

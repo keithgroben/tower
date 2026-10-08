@@ -31,7 +31,9 @@ import {
   hotelMiddaySweep, hotelSaleCountReset,
 } from '../sim/hotel.js';
 import { housekeepingArrival, housekeepingFamilyHandler } from '../sim/housekeeping.js';
-import { condoCashflowHooks, hotelCashflowHooks, officeCashflowHooks } from '../sim/ledger-adapter.js';
+import {
+  condoCashflowHooks, hotelCashflowHooks, officeCashflowHooks, restaurantRebuild, retailCashflowHooks,
+} from '../sim/ledger-adapter.js';
 import { resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
   CARRIER_SERVICE, accumulateElapsedDelayIntoCurrentSim, applyDistancePenalty,
@@ -120,6 +122,7 @@ export function makeDriver(world, { observe } = {}) {
   const cashflow = officeCashflowHooks(tower);
   const condoCashflow = condoCashflowHooks(tower);
   const hotelCashflow = hotelCashflowHooks(tower);
+  const retailCashflow = retailCashflowHooks(tower);
   const price = makeDelayPricer(tower);
 
   // The observers wrap, they do not replace. A `route` that forgot to return
@@ -151,6 +154,15 @@ export function makeDriver(world, { observe } = {}) {
   // The arrival that books a room needs the same hooks the dispatch does: a lift
   // delivers the guest, and the carrier's callback has no `ctx` of its own.
   const hotelArrives = (actor, floor) => hotelArrival(tower, actor, floor, hotelCashflow);
+
+  // One handler for the three commercial families. The shop's rent moment rides
+  // in `ctx` so a fast food and a restaurant, which have no lease, simply never
+  // call it.
+  const venueHandler = commercialFamilyHandler({
+    resolveRoute,
+    onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    onOpen: retailCashflow.onOpen,
+  });
 
   const scheduler = makeTowerScheduler(tower, {
     [FAMILY.hotelSingle]: hotelHandler,
@@ -188,10 +200,17 @@ export function makeDriver(world, { observe } = {}) {
      * No `onRent` — a venue is not let. Its money is the daily closure payout
      * in `sim/ledger-adapter.js`, keyed on the day's visitor count.
      */
-    [FAMILY.fastFood]: commercialFamilyHandler({
-      resolveRoute,
-      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
-    }),
+    [FAMILY.fastFood]: venueHandler,
+    /**
+     * The other two commercial venues are the **same machine** — `COMMERCIAL.md`
+     * § Role gives all three 48 customers and one linked record, and
+     * `commercialGate` splits restaurant from fast food on the placed type. The
+     * restaurant's customers come at dinner, a shop's through the day; a shop
+     * additionally takes `onOpen`, the moment its first customer arrives
+     * (`retailCashflowHooks`).
+     */
+    [FAMILY.restaurant]: venueHandler,
+    [FAMILY.retail]: venueHandler,
     // **The sale moment, and the only one.** `sim/condo.js` calls `onSale` the
     // instant a resident's trip out of the building resolves; the hook banks
     // the whole $150,000 and puts three people on the population ledger. There
@@ -206,6 +225,8 @@ export function makeDriver(world, { observe } = {}) {
   }, {
     [FAMILY.office]: officeArrival,
     [FAMILY.fastFood]: commercialArrival,
+    [FAMILY.restaurant]: commercialArrival,
+    [FAMILY.retail]: commercialArrival,
     // The arrival handlers are called `(actor, floor)`; the condo's needs its
     // object to step the countdown, and only the tower can answer that.
     [FAMILY.condo]: (actor, floor) => condoArrival(tower, actor, floor),
@@ -229,11 +250,14 @@ export function makeDriver(world, { observe } = {}) {
     // opens — spread the cockroaches, recompute each room and give a dirty one
     // its strike, then refresh the latches (`hotelMiddaySweep` runs all three, in
     // `HOTEL.md`'s order). Issue #10 puts the restaurant rebuild on this tick
-    // too: CHAIN it here, do not add a second key (`extraCheckpoints` holds one
-    // body per tick). `TIME.md` § 1600 lists the type-6 rebuild as step 1 and the
-    // hotel pass as steps 2-3, so the restaurant call goes BEFORE this one:
-    //   [HOTEL_SWEEP_TICK]: (t) => { restaurantRebuild(t); hotelMiddaySweep(t); },
-    [HOTEL_SWEEP_TICK]: hotelMiddaySweep,
+    // too: CHAINED here, because `extraCheckpoints` holds one body per tick and a
+    // second key would silently replace this one. `TIME.md` § 1600 lists the
+    // type-6 rebuild as step 1 and the hotel pass as steps 2-3, so the restaurant
+    // call goes BEFORE the hotel's: the restaurants reopen and write the evening's
+    // capacity, and only then do the hotel guests start choosing one. (Issue #11's
+    // entertainment midday cycle, § 1600 step 7, goes AFTER the hotel pass in this
+    // same body.)
+    [HOTEL_SWEEP_TICK]: (t) => { restaurantRebuild(t); hotelMiddaySweep(t); },
     // § 1200: the day's checkout count (the newspaper trigger's input) resets.
     [HOTEL_SALE_RESET_TICK]: hotelSaleCountReset,
   });

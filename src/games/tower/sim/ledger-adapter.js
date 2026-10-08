@@ -49,7 +49,10 @@
 import { CARRIER_MODE } from './elevators.js';
 import { FAMILY, isUnitLet } from './state.js';
 import { deactivateIfFailing, offices, recomputeOfficeOperationalStatus } from './office.js';
-import { closeCommercialVenues, rebuildCommercialVenues } from './commercial.js';
+import {
+  closeCommercialVenues, closeIdleRetailShop, rebuildCommercialVenues,
+  recomputeRetailOperationalStatus, resetRetailCycle, retailShops,
+} from './commercial.js';
 import { condos, recomputeCondoOperationalStatus, revertCondoToUnsold } from './condo.js';
 import { resetFacilitySimTripCounters } from './stress.js';
 import {
@@ -167,6 +170,13 @@ export function cashflowUnitFor(object, occupants = []) {
      * `revertCondoToUnsold` refuse the refund it is standing in front of.
      */
     get operational() { return isUnitLet(object) && object.occupiedFlag === true; },
+    /**
+     * `COMMERCIAL.md` § Retail Income Timing: a shop whose linked venue record is
+     * dormant is not open, and `activate_family_cashflow_if_operational` skips it
+     * (`economy.js` reads this). Only a shop's record can be dormant, so every
+     * other family answers `false` and is unaffected.
+     */
+    get dormant() { return object.venue?.availability === 0xff; },
     set operational(value) { object.occupiedFlag = value; },
     get evalLevel() { return object.evalLevel; },
     set evalLevel(value) { object.evalLevel = value; },
@@ -363,6 +373,31 @@ const HOTEL_BUCKET = {
   [FAMILY.hotelSuite]: 'hotelSuite',
 };
 
+/**
+ * The two moments a **shop** moves money outside the 3-day sweep: it opens, and
+ * it is let go. `specs/facility/COMMERCIAL.md` § Retail Income Timing.
+ *
+ * Opening is *"first open ... adds `+10` to the primary family ledger"* and
+ * `activate_retail_shop_cashflow`, which starts the recurring stream — paid here
+ * through the same once-per-cycle guarded helper an office's reopen uses, so a
+ * shop that opens on a cashflow day is paid once, not twice. Closing is the
+ * exact reverse (`reverseCashflowOnDeactivation`: the payout out of cash and the
+ * `10` out of the ledger).
+ */
+export function retailCashflowHooks(tower) {
+  const ledger = ledgerFor(tower);
+  return {
+    onOpen(_tower, object) {
+      const unit = cashflowUnitFor(object);
+      ledger.population.retail += POPULATION_BY_FAMILY.retail;
+      activateFamilyCashflowIfOperational(ledger, unit, tower.clock.dayCounter);
+    },
+    onClose(_tower, object) {
+      reverseCashflowOnDeactivation(ledger, cashflowUnitFor(object));
+    },
+  };
+}
+
 // ------------------------------------------------- the commercial day
 
 /**
@@ -381,9 +416,9 @@ const HOTEL_BUCKET = {
  * population contributed by one active unit"* and a venue's is not a per-unit
  * constant — it is however many people came today.
  */
-export function runCommercialRebuild(tower) {
+export function runCommercialRebuild(tower, families = null) {
   const ledger = ledgerFor(tower);
-  const { rebuilt, visitors } = rebuildCommercialVenues(tower);
+  const { rebuilt, visitors } = rebuildCommercialVenues(tower, families);
   for (const [family, count] of Object.entries(visitors)) {
     const bucket = BUCKET_BY_FAMILY[family];
     if (!bucket) continue;
@@ -401,12 +436,32 @@ export function runCommercialRebuild(tower) {
  * accrues income for non-retail commercial types"*, and the lowest band is a
  * real loss — `addIncome` takes the negative and the cash goes down.
  */
-export function runCommercialClosure(tower) {
+export function runCommercialClosure(tower, families = null) {
   const ledger = ledgerFor(tower);
   return closeCommercialVenues(tower, {
     onIncome: (object, dollars) => addIncome(ledger, BUCKET_BY_FAMILY[object.family], dollars),
-  });
+  }, families);
 }
+
+/** The restaurant is the one commercial type with its own clock: `TIME.md` § 1600 and § 2200. */
+const RESTAURANTS = new Set([FAMILY.restaurant]);
+
+/**
+ * **Checkpoint 1600, step 1** — *"rebuild type-6 facility records: clear
+ * family-6 population ledger bucket; sweep venue table"* (`specs/TIME.md`
+ * § 1600). `ui/driver.js` chains it ahead of the hotel pass, which is where the
+ * spec puts it. It reopens every restaurant for the evening, writes the day's
+ * capacity, and replaces the `restaurant` population bucket with yesterday's
+ * diners — empty when there are no restaurants, which is the *clear*.
+ */
+export const restaurantRebuild = (tower) => runCommercialRebuild(tower, RESTAURANTS);
+
+/**
+ * **Checkpoint 2200** — *"type-6 facility advance"* (`specs/TIME.md` § 2200):
+ * the restaurant's closure sweep. The evening's diners become the evening's
+ * money, and the venue closes to new customers. A quiet restaurant LOSES here.
+ */
+export const restaurantClosure = (tower) => runCommercialClosure(tower, RESTAURANTS);
 
 // ------------------------------------------------------- checkpoint 2533
 
@@ -422,6 +477,14 @@ export function runCommercialClosure(tower) {
  * that never happened.
  */
 const CASHFLOW_FAMILIES = [
+  {
+    // A shop's rent, `COMMERCIAL.md` § Priced Family Row. It has no tenants to
+    // score, so the daily recompute only raises the bootstrap flag, and the
+    // closure is for a shop nobody could reach.
+    units: retailShops,
+    recompute: recomputeRetailOperationalStatus,
+    close: (tower, object, _occupants, hooks) => closeIdleRetailShop(tower, object, hooks.retail),
+  },
   {
     units: offices,
     recompute: recomputeOfficeOperationalStatus,
@@ -498,7 +561,11 @@ const CASHFLOW_FAMILIES = [
  */
 export function runTowerLedgerCheckpoint(tower) {
   const ledger = ledgerFor(tower);
-  const hooks = { office: officeCashflowHooks(tower), condo: condoCashflowHooks(tower) };
+  const hooks = {
+    office: officeCashflowHooks(tower),
+    condo: condoCashflowHooks(tower),
+    retail: retailCashflowHooks(tower),
+  };
   const dayCounter = tower.clock.dayCounter;
   const cashflow = isCashflowDay(dayCounter);
 
@@ -539,6 +606,8 @@ export function runTowerLedgerCheckpoint(tower) {
   // offices ("re-set every 3 days for offices/condos/retail"), and a refunded
   // condo that kept its history could never grade its way back to a sale.
   if (cashflow) for (const unit of units) resetFacilitySimTripCounters(unit.occupants);
+  // ...and a shop's cycle of customers is spent the same way.
+  if (cashflow) resetRetailCycle(tower);
 
   return report;
 }

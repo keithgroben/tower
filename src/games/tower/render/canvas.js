@@ -38,8 +38,9 @@
  */
 import { LINK_WIDTH as LINK_TILES } from '../sim/actions.js';
 import { clockTime } from '../sim/clock.js';
+import { RENT_TIERS } from '../sim/economy.js';
 import { CARRIER_MODE } from '../sim/elevators.js';
-import { COMMERCIAL_FAMILIES } from '../sim/commercial.js';
+import { COMMERCIAL_FAMILIES, VENUE as VENUE_STATE, closurePayout, venueOf } from '../sim/commercial.js';
 import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
 import { HK_STATE } from '../sim/housekeeping.js';
 import {
@@ -427,7 +428,15 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
     return { name: 'room-empty', animation: shell[family] };
   }
   if (VENUE.has(family)) {
-    if (night) return { name: 'shop', animation: 'closed-night' };
+    // The restaurant has a sheet of its own: it is the dinner venue, lit when the
+    // shop fronts are shuttering for the night.
+    if (family === FAMILY.restaurant) return { name: 'restaurant', animation: night ? 'night' : 'day' };
+    // A shop nobody has rented yet is a shuttered front, not a trading one.
+    // `COMMERCIAL.md` § Capacity "Visible status": the dormant linked record is
+    // the "closed/unrented" retail ordinal.
+    if (night || venueOf(object)?.availability === VENUE_STATE.dormant) {
+      return { name: 'shop', animation: 'closed-night' };
+    }
     const fronts = ['open-grocery', 'open-cafe', 'open-awning'];
     return { name: 'shop', animation: fronts[object.id % fronts.length] };
   }
@@ -435,6 +444,32 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
   if (stressed) return { name, animation: 'stressed' };
   return { name, animation: night ? 'occupied-night' : 'occupied-day' };
 }
+
+/**
+ * The money sign over a commercial venue, or `null`. `CLAUDE.md`: numbers worth
+ * showing go in the world.
+ *
+ * A restaurant or a fast food is paid once, at closing, on the day's visitors, and
+ * **a quiet day costs money** - so the sign is what the day would pay if it
+ * closed now: `23 · -$6k` in red until the 25th customer turns it green. A shop is
+ * paid rent, not per visit: `UNRENTED` until its first customer arrives, then its
+ * rent for the quarter. Derived from the same `closurePayout` the sim pays out of,
+ * so the sign cannot promise a figure the closing sweep will not pay.
+ */
+export function venueSignal(object) {
+  const record = venueOf(object);
+  if (!record) return null;
+  const money = (n) => (n < 0 ? '-' : '') + '$' + Math.round(Math.abs(n) / 1000) + 'k';
+  if (object.family === FAMILY.retail) {
+    if (record.availability === VENUE_STATE.dormant) return { text: 'UNRENTED', tone: 'warn' };
+    return { text: money(RETAIL_RENT[object.rentLevel] ?? 0) + '/qtr', tone: 'good' };
+  }
+  const pays = closurePayout(object.family, record.acquireCount);
+  return { text: record.acquireCount + ' · ' + money(pays), tone: pays < 0 ? 'bad' : 'good' };
+}
+
+/** `specs/facility/COMMERCIAL.md` § Priced Family Row, for the sign only. */
+const RETAIL_RENT = RENT_TIERS.retail;
 
 /**
  * What is drawn **over** a room's own art, or `null`. A hotel room that has been
@@ -605,6 +640,7 @@ export const SPRITE_USES = {
   condo: ['occupied-day', 'occupied-night', 'stressed'],
   hotel: ['booked-day', 'booked-night', 'poor-review'],
   housekeeping: ['day', 'night'],
+  restaurant: ['day', 'night'],
   'room-status': ['dirty', 'infested'],
   shop: ['open-grocery', 'open-cafe', 'open-awning', 'closed-night'],
   'room-empty': ['office', 'condo', 'hotel'],
@@ -1206,6 +1242,7 @@ export function makeRenderer(canvas, options = {}) {
     [FAMILY.hotelTwin]: '#b185db',
     [FAMILY.hotelSuite]: '#b185db',
     [FAMILY.fastFood]: '#ffb703',
+    [FAMILY.restaurant]: '#e76f51',
     [FAMILY.retail]: '#ffb703',
   };
 
@@ -1238,6 +1275,7 @@ export function makeRenderer(canvas, options = {}) {
    * worth showing go in the world, not in a sidebar.
    */
   function drawUnitSignals(L, o, tower) {
+    if (VENUE.has(o.family)) return void drawVenueSignal(L, o);
     if (!TENANTED.has(o.family) && !HOTEL.has(o.family)) return;
     const x = L.tileX(o.left);
     const y = L.floorY(o.floor);
@@ -1281,6 +1319,23 @@ export function makeRenderer(canvas, options = {}) {
       }
       dotX += gap;
     }
+  }
+
+  /** A venue's money sign: see {@link venueSignal}. */
+  function drawVenueSignal(L, o) {
+    const x = L.tileX(o.left);
+    const y = L.floorY(o.floor);
+    const w = (o.right - o.left + 1) * L.tw;
+    if (x + w < 0 || x > W || y + L.fh < 0 || y > H) return;
+    if (L.fh < 14) return;
+    const signal = venueSignal(o);
+    if (!signal) return;
+    ctx.fillStyle = 'rgba(11,15,20,0.72)';
+    ctx.fillRect(x + 1, y + 2, w - 2, Math.min(11, L.fh * 0.4));
+    ctx.fillStyle = signal.tone === 'bad' ? BAD : signal.tone === 'good' ? GOOD : WARN;
+    ctx.textAlign = 'center';
+    ctx.font = '700 8px ui-monospace, monospace';
+    ctx.fillText(signal.text, x + w / 2, y + Math.min(10, L.fh * 0.36));
   }
 
   // ---------------------------------------------------------- the ghost

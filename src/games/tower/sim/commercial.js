@@ -109,6 +109,14 @@ export const VENUE_SIM_SLOTS = 48;
 export const FAST_FOOD_WIDTH = 16;
 
 /**
+ * TODO(parity): same source, same gap as {@link FAST_FOOD_WIDTH}: the reference
+ * *implementation's* unscaled `TILE_WIDTHS` (restaurant 24, retail 12), because
+ * no file under `specs/` states either. `spec/DEVIATIONS.md` A36.
+ */
+export const RESTAURANT_WIDTH = 24;
+export const RETAIL_WIDTH = 12;
+
+/**
  * `COMMERCIAL.md` § Availability. `-1` is the reference's "invalid or stale"
  * and is deliberately **not** modelled as a number here: our floors are
  * logical, `-1` is B1, and a sentinel that can be mistaken for real data is the
@@ -208,12 +216,16 @@ export const VENUE_STATE = {
  * venues start with `active_capacity_limit = 10` and `yesterday_visit_count =
  * 10`"*.
  */
-export function createVenueRecord({ activePhase = 'a' } = {}) {
+export function createVenueRecord({ activePhase = 'a', dormant = false } = {}) {
   const seeds = { a: CAPACITY_FLOOR, b: CAPACITY_FLOOR, override: CAPACITY_FLOOR };
   seeds[activePhase] = 0;
   return {
     kind: 'commercial_venue',
-    availability: VENUE.available,
+    // A shop is placed **unrented**, and a rented one is how it earns: see
+    // {@link openRetailShop}. A restaurant and a fast food have no lease and are
+    // open from the first tick. `COMMERCIAL.md` § Visible status: *"linked
+    // `availability_state = 0xff` uses the 'closed/unrented' retail ordinal"*.
+    availability: dormant ? VENUE.dormant : VENUE.available,
     /** Today's ceiling on visitors. Recomputed daily from the phase-A seed. */
     activeCapacityLimit: CAPACITY_FLOOR,
     /** Ticks down as customers commit to a visit. The gate reads it. */
@@ -231,6 +243,18 @@ export function createVenueRecord({ activePhase = 'a' } = {}) {
     seeds,
     /** Performance grade 0..3 from the day's visitors. See {@link venueDerivedState}. */
     derivedState: 0,
+    /**
+     * The seed column today's rebuild chose. Stamped there so a customer who
+     * gets home after tick 2300 — when the day counter has already moved on and
+     * `activePhaseOf` would answer for tomorrow — still grows the column the day
+     * was played under.
+     */
+    activePhase,
+    /**
+     * Visits committed since the last 3-day check. A shop that nobody could
+     * reach in a whole cycle is closed by it ({@link closeIdleRetailShop}).
+     */
+    cycleVisits: 0,
   };
 }
 
@@ -244,7 +268,10 @@ export function createVenueRecord({ activePhase = 'a' } = {}) {
  */
 export function finalizeCommercialVenue(tower, object) {
   if (!COMMERCIAL_FAMILIES.has(object.family)) return object;
-  object.venue = createVenueRecord({ activePhase: activePhaseOf(tower) });
+  object.venue = createVenueRecord({
+    activePhase: activePhaseOf(tower),
+    dormant: object.family === FAMILY.retail,
+  });
   return object;
 }
 
@@ -316,6 +343,9 @@ export const closurePayout = (family, visitors) =>
 export const facilityProgressOverride = (dayCounter, starCount) =>
   dayCounter % 8 === 4 && starCount < 4;
 
+/** Index into {@link CAPACITY_CAPS}: `[phase A, phase B, override]`. */
+export const PHASE_INDEX = { a: 0, b: 1, override: 2 };
+
 /** Which seed column today writes to: override, then calendar phase B, else A. */
 export function activePhaseOf(tower) {
   const { dayCounter = 0, calendarPhase = false } = tower?.clock ?? {};
@@ -325,13 +355,28 @@ export function activePhaseOf(tower) {
 
 /**
  * The daily capacity recompute, `COMMERCIAL.md` § Capacity. Fast food and
- * retail only; restaurants have their own midday pass.
+ * retail at tick 240 by default; restaurants are rebuilt by their own midday
+ * pass at 1600 (`TIME.md` § 1600 step 1) — the caller names the families.
  *
- * ⚠️ **Capacity comes from the phase-A seed whatever the active phase is**, and
- * the active phase is the one that gets cleared. It reads like a bug and it is
- * the reference's: the seed a day's customers grow is the active column, and
- * only phase A is ever spent. Under *faithful first* it stays, and it is why a
- * calendar-phase day cannot cash in the growth it earns.
+ * ## Capacity comes from the ACTIVE phase's seed, capped by that phase's limit
+ *
+ * `COMMERCIAL.md` § Capacity, steps 2-3: *"choose the active capacity seed from:
+ * phase A when `calendar_phase_flag == 0`; phase B when `!= 0`; override when
+ * `facility_progress_override` is active ... cap the chosen seed by the venue
+ * type's tuning limit"*, and the table gives **three** limits — 35 / 50 / 25 for a
+ * restaurant or fast food, 25 / 30 / 18 for a shop. That is what makes a weekend
+ * bring more customers (phase B, 50) and an override day fewer (25).
+ *
+ * Until issue #10 this read the phase-A seed whatever the day was, on the
+ * strength of the reference *implementation*'s comment *"capacity always from
+ * phaseASeed"*. That makes the phase-B and override limits unreachable — the
+ * 50 and the 25 could never bind — which contradicts the table it is reading, so
+ * the spec's sentence wins. `spec/DEVIATIONS.md` A37. A weekday is unchanged:
+ * the active phase IS A.
+ *
+ * The active seed is cleared after it is read (§ Capacity: *"the currently
+ * active phase seed is immediately cleared so the next recompute repopulates
+ * it"*), and the day's returning customers repopulate it — which is the loop.
  *
  * Step 7 — *"add the previous day's visit count into the population ledger"* —
  * comes back in `visitors`, keyed by family, as a **total rather than a delta**.
@@ -358,8 +403,9 @@ export function rebuildCommercialVenues(tower, families = null) {
 
     // Steps 2-5: seed -> cap -> floor -> write, plus the negative gate marker.
     const caps = CAPACITY_CAPS[object.family];
-    let capacity = record.seeds.a;
-    if (caps && capacity > caps[0]) capacity = caps[0];
+    let capacity = record.seeds[phase];
+    const limit = caps?.[PHASE_INDEX[phase]];
+    if (limit !== undefined && capacity > limit) capacity = limit;
     if (capacity < CAPACITY_FLOOR) capacity = CAPACITY_FLOOR;
     record.activeCapacityLimit = capacity;
     record.remainingCapacity = capacity;
@@ -376,6 +422,7 @@ export function rebuildCommercialVenues(tower, families = null) {
     record.currentPopulation = 0;
 
     record.seeds[phase] = 0;
+    record.activePhase = phase;
     rebuilt++;
   }
   return { rebuilt, visitors };
@@ -407,6 +454,92 @@ export function closeCommercialVenues(tower, { onIncome } = {}, families = null)
   return closed;
 }
 
+// ------------------------------------------------------------- the shop's lease
+
+/**
+ * **A shop is rented the way an office is: by somebody getting there.**
+ *
+ * `COMMERCIAL.md` § Retail Income Timing: *"first open marks the linked venue
+ * record available, marks the retail span dirty, adds `+10` to the primary
+ * family ledger"*, and the money is `activate_retail_shop_cashflow` — the priced
+ * row, $20k / $15k / $10k / $4k by tier, a **recurring** stream rather than a
+ * visit fee. The reference implementation fires it on the shop's own customer's
+ * successful route while the venue is still dormant; this build fires it on
+ * **arrival** (the hotel's A32 argument: our router accepts the first leg of a
+ * journey it cannot finish, and a shop "rented" by a customer stranded on a
+ * staircase is rent for a shop nobody reached). `spec/DEVIATIONS.md` A38.
+ *
+ * `ctx.onOpen(tower, object)` is the money and the `+10`; this owns the state.
+ *
+ * @returns {boolean} whether this call opened it
+ */
+export function openRetailShop(tower, object, ctx = {}) {
+  const record = venueOf(object);
+  if (!record || object.family !== FAMILY.retail || record.availability !== VENUE.dormant) return false;
+  record.availability = VENUE.available;
+  object.dirty = true;
+  ctx.onOpen?.(tower, object);
+  return true;
+}
+
+/**
+ * The daily bootstrap, `FACILITIES.md` § occupied_flag. A shop's customers are
+ * held at the gate until the flag is up (`commercialGate`), and the flag comes
+ * from the daily recompute — exactly the bootstrap an office has, and for the
+ * same reason: a shop nobody has reached has nothing to be judged on, and the
+ * gate that waits for a judgement would otherwise wait for ever.
+ *
+ * Also what makes a closed shop recoverable. {@link closeIdleRetailShop} clears
+ * the flag; the next morning's recompute puts it back, the customers try again,
+ * and a tower whose lifts have been fixed gets its shop back.
+ */
+export function recomputeRetailOperationalStatus(_tower, object) {
+  object.occupiedFlag = true;
+  return object.occupiedFlag;
+}
+
+/**
+ * Close a shop that nobody reached in the whole 3-day cycle.
+ *
+ * TODO(parity): **the reference never says what takes a shop's rent away.** Its
+ * `deactivate_retail_shop_cashflow` is specified exactly (`COMMERCIAL.md` § Retail
+ * Income Timing: dormant, latch and activation age cleared, span dirty) and
+ * `FACILITIES.md` § Commercial Readiness says commercial readiness is *"based on
+ * customer count from the commercial-venue sidecar record"* with *"per-family
+ * threshold slots"* that are not recovered. The reference implementation closes
+ * a retail shop when its `eval_level` is `0`, and nothing in it ever writes one.
+ * Without any closure, a tower whose only lift was demolished would keep every
+ * shop's rent for ever — the failure `CLAUDE.md` calls a metric improving while
+ * the thing it measures gets worse — so the cheapest honest reading of
+ * "customer count" is used: a shop with **no customer at all** in the cycle is
+ * unreachable and is let go. `spec/DEVIATIONS.md` A38.
+ *
+ * `ctx.onClose(tower, object)` reverses the money and the `+10`.
+ *
+ * @returns {boolean} whether this call closed it
+ */
+export function closeIdleRetailShop(tower, object, ctx = {}) {
+  const record = venueOf(object);
+  if (!record || object.family !== FAMILY.retail || record.availability === VENUE.dormant) return false;
+  if (record.cycleVisits > 0) return false;
+  record.availability = VENUE.dormant;
+  record.currentPopulation = 0;
+  object.occupiedFlag = false;
+  object.activationTickCount = 0;
+  object.dirty = true;
+  ctx.onClose?.(tower, object);
+  return true;
+}
+
+/** The cycle's visits are spent once the 3-day check has judged them. */
+export function resetRetailCycle(tower) {
+  for (const { record } of commercialVenues(tower, new Set([FAMILY.retail]))) record.cycleVisits = 0;
+}
+
+/** Every retail shop with its linked record, for the 3-day sweep. */
+export const retailShops = (tower) =>
+  commercialVenues(tower, new Set([FAMILY.retail])).map(({ object }) => ({ object, occupants: [] }));
+
 /**
  * A completed customer round trip grows the venue's seed for the active phase.
  *
@@ -421,11 +554,12 @@ export function closeCommercialVenues(tower, { onIncome } = {}, families = null)
  */
 export function growVenueSeed(tower, record, actor) {
   const caps = CAPACITY_CAPS[actor?.family] ?? CAPACITY_CAPS[FAMILY.fastFood];
-  const phase = activePhaseOf(tower);
+  // The column the day's rebuild chose, not today's calendar: see the record.
+  const phase = record.activePhase ?? activePhaseOf(tower);
   const stress = computeRuntimeTileStressAverage(actor);
   const upper = evalUpperFor(tower?.starCount ?? 1);
   const increment = stress < EVAL_THRESHOLD_LOWER ? 2 : stress < upper ? 1 : 0;
-  record.seeds[phase] = Math.min(record.seeds[phase] + increment, caps[0]);
+  record.seeds[phase] = Math.min(record.seeds[phase] + increment, caps[PHASE_INDEX[phase]]);
   return record.seeds[phase];
 }
 
@@ -634,7 +768,10 @@ export function commercialDispatch(tower, actor, object, clock, ctx) {
       actor.state = VENUE_STATE.parked;
       return { moved: false };
     }
-    if (record.availability === VENUE.dormant) return { moved: false };
+    // A dormant venue is an unrented SHOP, and its own customers are what rent
+    // it: the trip goes ahead, and {@link openRetailShop} fires on arrival. Any
+    // other family cannot be dormant, so this is the shop's door and no other's.
+    if (record.availability === VENUE.dormant && object.family !== FAMILY.retail) return { moved: false };
 
     // ⚠️ **The first leg starts at the lobby, not where the actor is anchored.**
     // `placeObject` anchors every occupant to its own object's floor, which for
@@ -657,6 +794,7 @@ export function commercialDispatch(tower, actor, object, clock, ctx) {
       record.remainingCapacity -= 1;
       record.todayVisitCount += 1;
       record.acquireCount += 1;
+      record.cycleVisits += 1;
       actor.venueCommitted = true;
       actor.anchorFloor = LOBBY_FLOOR;
       ctx.onVenueVisit?.(object, record);
@@ -672,11 +810,12 @@ export function commercialDispatch(tower, actor, object, clock, ctx) {
       record.remainingCapacity += 1;
       record.todayVisitCount -= 1;
       record.acquireCount -= 1;
+      record.cycleVisits -= 1;
       actor.venueCommitted = false;
       actor.state = VENUE_STATE.parked;
       return { moved: false, code };
     }
-    if (code === 3) return arriveAtVenue(actor, object, record, clock, ctx);
+    if (code === 3) return arriveAtVenue(tower, actor, object, record, clock, ctx);
     actor.state = VENUE_STATE.arriving | 0x40;
     return { moved: true, code };
   }
@@ -706,11 +845,17 @@ export function commercialDispatch(tower, actor, object, clock, ctx) {
 }
 
 /** Arrived at the venue floor: take a slot, or wait, or give up on this one. */
-function arriveAtVenue(actor, object, record, clock, ctx) {
+function arriveAtVenue(tower, actor, object, record, clock, ctx) {
   // Arriving at the venue means standing on its floor. Stated rather than
   // assumed: a same-floor result usually means the anchor was already right,
   // and "usually" is how a position field goes stale.
   actor.anchorFloor = object.floor;
+  // **The first customer to get there rents the shop.** It has to happen before
+  // the slot is asked for: `acquireVenueSlot` refuses a dormant venue, so a shop
+  // opened after it would turn its own first customer away.
+  if (record.availability === VENUE.dormant && object.family === FAMILY.retail) {
+    openRetailShop(tower, object, ctx);
+  }
   const outcome = acquireVenueSlot(record, actor, clock, object.family);
   if (outcome === SLOT.full) {
     // Over-capacity is a **wait**, not a failed route: stay in transit and try
@@ -746,6 +891,11 @@ export function commercialFamilyHandler(ctx) {
   return function serviceVenueCustomer(tower, actor) {
     const object = tower.objects.get(actor.objectId);
     if (!object || !COMMERCIAL_FAMILIES.has(object.family)) return;
+    // A venue with no linked record is not a venue yet (`ui/seed.js` places its
+    // measurement-fixture shops that way, on purpose, and `state.js` counts them
+    // as nobody). Its customers do nothing — and, above all, draw no RNG, which
+    // would move every other number in a benchmark that must stay comparable.
+    if (!venueOf(object)) return;
 
     if (actor.state >= 0x40) {
       if (shouldWaitForQueuedCarrier(actor, tower.clock)) return;
