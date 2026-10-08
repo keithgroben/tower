@@ -110,6 +110,12 @@ is not what the reference stores.
 
 ---
 
+## Confirmed faithful (investigated, no deviation)
+
+| # | Observation | Finding |
+|---|---|---|
+| F1 | Condos "churn": ~20 refunds and re-sales every 3 days in `harness/playtest.js 60 1 --play`, with $1-2M cash swings. | **Faithful to the reference.** 141 of 141 refunds were condos with an office, shop or fast food on the same floor within 30 tiles (`FACILITIES.md` § Noise Search: condo radius 30); 0 refunds for condos without one. A typical stress of ~100 plus the +60 noise penalty is 160, over the 150 "poor" line; a poor grade on the 3-day pass refunds the sale and the condo re-sells next pass (`CONDO.md` § Refund Trigger, § Reactivation nuance). The harness's greedy builder places condos beside offices, which is what triggers it. Pinned by a test in `test/condo.test.js`. **Player-facing consequence:** the game must say "Neighbors are too noisy" (issue #18) or this reads as a bug. |
+
 ## What does not belong here
 
 - **Presentation.** Art, camera, sound, UI layout and the clock's typography are
