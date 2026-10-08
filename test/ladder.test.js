@@ -44,6 +44,7 @@ import { runCommercialRebuild } from '../src/games/tower/sim/ledger-adapter.js';
 import { VENUE, commercialVenues } from '../src/games/tower/sim/commercial.js';
 import { SAVE_VERSION, restore, snapshot } from '../src/games/tower/sim/save.js';
 import { newTowerWorld } from '../src/games/tower/ui/seed.js';
+import { ladderTrial } from '../harness/playtest.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import {
   STAR_RISE_MS, noticeToSay, starClause, starGlyph, starTitle,
@@ -524,6 +525,39 @@ export const tests = {
     const rises = noticesAfter(tower, 0).filter((n) => n.kind === 'starRise').map((n) => n.text);
     assert(rises.join(' | ') === 'The tower has reached 2 stars | The tower has reached 3 stars | The tower has reached 4 stars | '
       + 'The tower has reached 5 stars | The tower has earned the Tower rank', rises.join(' | '));
+  },
+
+  // ============================================================ the harness proof
+
+  'harness: a scripted player reading the bar climbs 1 -> Tower, every rung inside its window'() {
+    const r = ladderTrial({ days: 14 });
+    assert(r.finalStar === TOWER_RANK, 'it reached the Tower rank, not ' + r.finalStar + ': ' + r.perDay.map((d) => d.star).join(''));
+    assert(r.rises.map((x) => x.text).join('|') === [2, 3, 4, 5].map((n) => 'The tower has reached ' + n + ' stars').concat('The tower has earned the Tower rank').join('|'),
+      'five announcements, in order: ' + r.rises.map((x) => x.text).join(' | '));
+
+    const [two, three, four, five, tower] = r.rises;
+    // 4 and 5 stars only inside "a weekday at or after 5 PM" (the day counter has already moved at 2300, so
+    // the weekday is the NEW day's), and the Tower rank only on a weekend before tick 800.
+    for (const rise of [four, five]) {
+      assert(rise.tick >= 1600 && !calendarPhaseFlag(rise.day), rise.text + ' came on day ' + rise.day + ' tick ' + rise.tick + ' - not a weekday evening');
+    }
+    assert(calendarPhaseFlag(tower.day) && tower.tick < WEDDING_DEADLINE_TICK, 'Tower on day ' + tower.day + ' tick ' + tower.tick + ' - not a weekend morning');
+    assert(two.day <= three.day && three.day < four.day && four.day < five.day && five.day < tower.day, 'and in order');
+
+    // What was built was built, and the bar said what was missing on the way.
+    const built = new Set(r.built.map((b) => b.what));
+    for (const what of ['security', 'hotelSuite', 'medical', 'service lift', 'recycling center', 'parking ramp']) {
+      assert(built.has(what), 'the script never built a ' + what + ' - built: ' + [...built]);
+    }
+    const early = r.perDay[1];
+    assert(early.star === 3 && early.hud.includes('2 hotel suites') && early.hud.includes('a favorable VIP stay (VIP visits are not in this build yet)'),
+      'at three stars the bar names the lot: ' + early.hud);
+    assert(r.perDay.some((d) => d.star === 4 && d.hud.includes('every demand answered (Office workers demand Parking)')),
+      'at four stars the bar says the tower still wants parking');
+    assert(r.perDay.some((d) => d.star === 5 && d.hud.startsWith('Next: Tower - ')), 'and at five it asks for the Tower rank');
+    // The stand-ins were set, and only those.
+    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,metroPlaced,officeServiceOk,vipStayFavorable,weddingGuestsArrived',
+      'stand-ins: ' + Object.keys(r.flagsSetOn));
   },
 
   // =================================================== the save, and the version
