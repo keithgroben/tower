@@ -118,6 +118,15 @@ const securityAt = (tower, floor, left = 100) => put(tower, FAMILY.security, flo
 
 const dayLength = 2600;
 
+/** Tick the real scheduler until `done()`; a stalled event is a failure with a message, not a hang. */
+function tickUntil(scheduler, tower, done, what, limit = dayLength * 4) {
+  for (let i = 0; i < limit; i++) {
+    if (done()) return i;
+    scheduler.tick(tower);
+  }
+  throw new Error('never reached: ' + what);
+}
+
 // ------------------------------------------------------------------------- the tests
 
 export const tests = {
@@ -330,7 +339,7 @@ export const tests = {
     const foundAt = bomb.foundTick;
     step(t, 1);
     assert(t.events.bombActive === false && t.events.bomb === null, 'cleaned up');
-    assert(t.clock.dayTick === RESUME_TICK && t.clock.daypart === daypartOf(RESUME_TICK), 'the clock jumped to 1500: ' + t.clock.dayTick);
+    assert(RESUME_TICK === 1500 && t.clock.dayTick === 1500 && t.clock.daypart === 3, 'the clock jumped to 1500: ' + t.clock.dayTick);
     assert(foundAt < RESUME_TICK, 'from earlier in the day');
     assert(rooms.every((o) => t.objects.has(o.id)), 'no room was destroyed');
     const texts = demandsOf(t).notices.map((n) => n.text);
@@ -688,7 +697,8 @@ export const tests = {
     eventsTick(t);
     assert(!t.events.vip, 'not at 1199');
     step(t);
-    assert(t.clock.dayTick === VIP_BOOK_TICK && t.events.vip?.phase === 'booked', 'booked at 1200');
+    assert(VIP_BOOK_TICK === 1200 && VIP_ARRIVAL_TICK === 1600, 'one o clock books, five o clock arrives (A66)');
+    assert(t.clock.dayTick === 1200 && t.events.vip?.phase === 'booked', 'booked at 1200');
     const floor = t.events.vip.floor;
     assert([4, 6].includes(floor), 'on one of the suites\' floors: ' + floor);
     assert(demandsOf(t).notices.at(-1).text === `A VIP has made reservations for the Hotel Suite on floor ${floor}.`, demandsOf(t).notices.at(-1).text);
@@ -792,7 +802,7 @@ export const tests = {
     // A second world: the suite goes while he is in it.
     const e2 = eventsTower({ floors: 6, security: [-1], suites: 2, housekeeping: true, cars: 6 });
     e2.tower.clock.dayCounter = 0; e2.tower.clock.dayTick = 0;
-    while (e2.tower.events.vip?.phase !== 'staying') e2.scheduler.tick(e2.tower);
+    tickUntil(e2.scheduler, e2.tower, () => e2.tower.events.vip?.phase === 'staying', 'the VIP asleep in the suite');
     const suite = e2.tower.objects.get(e2.tower.events.vip.suiteId);
     assert(demolishRefusal(suite) === null, 'a vacant suite can be bulldozed');
     assert(applyAction(e2.world, { type: 'demolish', objectId: suite.id }).ok, 'bulldozed');
@@ -806,15 +816,15 @@ export const tests = {
     const env = eventsTower({ floors: 6, security: [-1], suites: 2, housekeeping: true, cars: 6 });
     const { tower, scheduler, world } = env;
     tower.clock.dayCounter = 0; tower.clock.dayTick = 0;
-    while (!(tower.events.vip?.phase === 'arriving' && tower.clock.dayTick > VIP_ARRIVAL_TICK + 5)) scheduler.tick(tower);
+    tickUntil(scheduler, tower, () => tower.events.vip?.phase === 'arriving' && tower.clock.dayTick > VIP_ARRIVAL_TICK + 5, 'the VIP on his way up');
     const blob = JSON.parse(JSON.stringify(snapshot(world)));
     assert(blob.version === SAVE_VERSION && SAVE_VERSION >= 10, 'the version moved to 10: ' + SAVE_VERSION);
-    while (!tower.events.lastVip) scheduler.tick(tower);
+    tickUntil(scheduler, tower, () => tower.events.lastVip, 'the original visit to end');
     const back = restore(blob);
     assert(back.ok !== false, 'it loads: ' + back.reason);
     rebuildRouteTables(back.world.tower);
     const next = makeDriver(back.world);
-    while (!back.world.tower.events.lastVip) next.scheduler.tick(back.world.tower);
+    tickUntil(next.scheduler, back.world.tower, () => back.world.tower.events.lastVip, 'the restored visit to end');
     const a = eventsOf(tower).history.filter((h) => h.kind === 'vip').at(-1);
     const b = eventsOf(back.world.tower).history.filter((h) => h.kind === 'vip').at(-1);
     same(b, a, 'the restored visit ends exactly as the original did');
@@ -917,7 +927,7 @@ export const tests = {
         if (tw.events.decision && !answered) { applyAction(w, { type: 'answer_event', answer: 'decline' }); answered = true; }
       }
     };
-    while (!tower.events.fire) scheduler.tick(tower);
+    tickUntil(scheduler, tower, () => tower.events.fire, 'the fire to start');
     applyAction(world, { type: 'answer_event', answer: 'decline' });
     for (let i = 0; i < 60; i++) scheduler.tick(tower);
     const blob = JSON.parse(JSON.stringify(snapshot(world)));
