@@ -55,12 +55,32 @@ export const isEvening = (dayTick) => daypartOf(dayTick) >= EVENING_DAYPART;
 /**
  * `((day_counter % 12) % 3) >= 2`. Recomputed whenever the day counter moves.
  *
- * A two-days-in-every-twelve flag that blocks some dispatch gates outright —
- * office state `0x20` will not dispatch while it is set. Nothing about the name
- * explains what it is for; it is a calendar rhythm in the original and we carry
- * it because it changes outcomes.
+ * **This is the weekend.** It is set on days 2, 5, 8 and 11 of the 12-day year,
+ * i.e. the third day of each 3-day quarter, which is the manual's "a SimTower
+ * Quarter has two week-days and one week-end". The reference never gives it a
+ * friendly name, which is why it was easy to miss; offices will not commute
+ * while it is set (state `0x20` is blocked), shops get more customers, and the
+ * cathedral wedding only happens then.
  */
 export const calendarPhaseFlag = (dayCounter) => ((dayCounter % 12) % 3) >= 2;
+
+/** Days in a year, and in a quarter. A year is four quarters. */
+export const DAYS_PER_YEAR = 12;
+export const DAYS_PER_QUARTER = 3;
+
+/** `'weekend'` on the third day of each quarter, otherwise `'weekday'`. */
+export const dayTypeOf = (dayCounter) => (calendarPhaseFlag(dayCounter) ? 'weekend' : 'weekday');
+
+/** Where a day counter sits in the calendar: 1-based year and quarter, 0-based day within the quarter. */
+export function calendarOf(dayCounter) {
+  const inYear = dayCounter % DAYS_PER_YEAR;
+  return {
+    year: Math.floor(dayCounter / DAYS_PER_YEAR) + 1,
+    quarter: Math.floor(inYear / DAYS_PER_QUARTER) + 1,
+    dayInQuarter: inYear % DAYS_PER_QUARTER,
+    type: dayTypeOf(dayCounter),
+  };
+}
 
 export function createClock({ dayTick = NEW_GAME_TICK, dayCounter = 0 } = {}) {
   return {

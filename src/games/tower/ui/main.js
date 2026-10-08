@@ -17,7 +17,7 @@
  * over a worker, the queue count on the shaft. Diagnosis happens in the
  * headless harness. A debugger is not an interface.
  */
-import { DAYPART_LABELS, formatClock } from '../sim/clock.js';
+import { DAYPART_LABELS, calendarOf, formatClock } from '../sim/clock.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
 import { starGateStatus } from '../sim/progression.js';
 import { BUILDABLE } from '../sim/actions.js';
@@ -369,10 +369,12 @@ function bumpLeases(el, up) {
  * eye can read.
  */
 function drawHud() {
-  const { dayTick, dayCounter, daypart, calendarPhase } = tower.clock;
+  const { dayTick, dayCounter, daypart } = tower.clock;
+  const cal = calendarOf(dayCounter);
   $('clock').textContent = formatClock(dayTick);
-  $('day').textContent = `day ${dayCounter}`;
-  $('daypart').textContent = `${DAYPART_LABELS[daypart]}${calendarPhase ? ' · calendar phase' : ''}`;
+  $('day').textContent = `Y${cal.year} Q${cal.quarter} · ${cal.type}`;
+  $('day').title = `day ${dayCounter} · a quarter is two weekdays and a weekend; offices rest on weekends`;
+  $('daypart').textContent = DAYPART_LABELS[daypart];
   $('tick').textContent = `t${String(dayTick).padStart(4, '0')}`;
 
   // "Leasable" is "owns occupants": `OCCUPANTS` in sim/state.js gives six to an
