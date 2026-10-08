@@ -254,7 +254,10 @@ export const tests = {
     const details = starGateStatus(tower).blockerDetails;
     const vip = details.find((d) => /VIP/.test(d.text));
     const evaluation = details.find((d) => /office-service/.test(d.text));
-    assert(vip.unavailable === GATES_WITHOUT_A_WRITER.vipStayFavorable && /not in this build/.test(vip.unavailable), 'VIP: ' + JSON.stringify(vip));
+    // Issue #16 gave the VIP gate its writer (`sim/events.js`), so it carries no excuse any more...
+    assert(!('vipStayFavorable' in GATES_WITHOUT_A_WRITER) && vip.unavailable === undefined, 'VIP: ' + JSON.stringify(vip));
+    // ...and the office-service evaluation (issue #17) still does.
+    assert(evaluation.unavailable === GATES_WITHOUT_A_WRITER.officeServiceOk, 'evaluation: ' + JSON.stringify(evaluation));
     assert(evaluation.unavailable === GATES_WITHOUT_A_WRITER.officeServiceOk, 'evaluation: ' + JSON.stringify(evaluation));
     // A gate that has a writer here carries no excuse: the caveat must not become wallpaper.
     const recycling = starGateStatus(towerAt(3, { office: 5000, gates: { ...ALL, recyclingAdequate: false } })).blockerDetails
@@ -466,7 +469,7 @@ export const tests = {
     const morning = says();
     assert(morning.startsWith('Next: 4 stars - need 5,000 population (now 4,000), '), morning);
     for (const part of ['2 hotel suites', 'recycling centre', 'medical center', 'a passed office-service evaluation',
-      'a favorable VIP stay (VIP visits are not in this build yet)', 'the evening (after 5 PM)']) {
+      'a favorable VIP stay', 'the evening (after 5 PM)']) {
       assert(morning.includes(part), '"' + part + '" is missing from: ' + morning);
     }
     // Everything this build CAN make, made; then the stand-ins for #16 and #17.
@@ -560,14 +563,19 @@ export const tests = {
       assert(built.has(what), 'the script never built a ' + what + ' - built: ' + [...built]);
     }
     const early = r.perDay[1];
-    assert(early.star === 3 && early.hud.includes('2 hotel suites') && early.hud.includes('a favorable VIP stay (VIP visits are not in this build yet)'),
+    assert(early.star === 3 && early.hud.includes('2 hotel suites') && early.hud.includes('a favorable VIP stay'),
       'at three stars the bar names the lot: ' + early.hud);
     assert(r.perDay.some((d) => d.star === 4 && d.hud.includes('every demand answered (Office workers demand Parking)')),
       'at four stars the bar says the tower still wants parking');
     assert(r.perDay.some((d) => d.star === 5 && d.hud.startsWith('Next: Tower - ')), 'and at five it asks for the Tower rank');
     // The stand-ins were set, and only those.
-    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,officeServiceOk,vipStayFavorable,weddingGuestsArrived',
+    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,officeServiceOk,weddingGuestsArrived',
       'stand-ins: ' + Object.keys(r.flagsSetOn));
+    // ...and the VIP is not one of them (issue #16): a real visitor booked a real suite, rode the
+    // real lifts and was pleased, which is what opened 3 -> 4.
+    const vip = r.world.tower.events.history.filter((h) => h.kind === 'vip').map((h) => h.outcome);
+    assert(vip.includes('booked') && vip.includes('arrived') && vip.at(-1) === 'comfortable',
+      'the VIP earned the gate himself: ' + vip);
     // ...and the metro station was BUILT, by the script, through the seam, not flagged.
     assert(built.has('metro station') && r.metroPlacedDay !== null && r.metroPlacedDay < five.day,
       'the script built the station before the fifth star: ' + r.metroPlacedDay);

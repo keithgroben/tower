@@ -40,7 +40,7 @@ import { createSimTripRecord, FACILITY_POPULATION } from '../src/games/tower/sim
 import {
   CONSTRUCTION_COST, POPULATION_BY_FAMILY, RENT_TIERS,
 } from '../src/games/tower/sim/economy.js';
-import { STAR_REQUIREMENT, lockReason } from '../src/games/tower/sim/progression.js';
+import { STAR_REQUIREMENT, lockReason, starGatesOf } from '../src/games/tower/sim/progression.js';
 import { applyAction, BUILDABLE, ESCALATOR_UNDERLAY, hasTenant } from '../src/games/tower/sim/actions.js';
 import { rebuildRouteTables } from '../src/games/tower/sim/routing.js';
 import { placeCommercialVenue, venueOf } from '../src/games/tower/sim/commercial.js';
@@ -127,6 +127,11 @@ function hotelWorld({ rooms = [], top = 6, stars = 3, cars = 1, housekeeping = 0
   const world = newTowerWorld({ seed: 1, cash: 50_000_000 });
   const { tower } = world;
   tower.starCount = stars;
+  // These tests are about the hotel's own nights. Since issue #16 a VIP books one suite for a
+  // night when the tower is at 3 stars and has not yet been approved of, which takes it away from
+  // its regular guests; the VIP has his own tests (`test/events.test.js`), so here he has already
+  // been, and been pleased.
+  starGatesOf(tower).vipStayFavorable = true;
   const shaft = applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: 0, top, column: 40 });
   assert(shaft.ok, 'the lift would not build: ' + shaft.reason);
   for (let i = 1; i < cars; i++) applyAction(world, { type: 'add_car', carrierId: shaft.carrier.id });

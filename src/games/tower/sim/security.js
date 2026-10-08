@@ -24,12 +24,12 @@
  * ten, and it **cannot be bulldozed** (`sim/actions.js` `demolishRefusal`, the
  * one definition housekeeping shares).
  *
- * It does exactly one thing for the player today, and it is the thing the whole
- * ladder was stalled on: its placement latches the `2 -> 3` star gate
- * (`sim/progression.js` `PLACEMENT_GATES`). The guards' work - the bomb search
- * and the fire response - is the event system (issue #16); this module gives it
- * what it will need and no more: who the guards are, how many offices there are,
- * and how long a guard takes to reach a floor by the only route they have.
+ * Its placement latches the `2 -> 3` star gate (`sim/progression.js`
+ * `PLACEMENT_GATES`), and since issue #16 it is also what fights a fire and
+ * finds a bomb: the guards' work is the event system's (`sim/events.js`), and
+ * this module gives it what it needs and no more: who the guards are, how many
+ * offices there are, and how long a guard takes to reach a floor by the only
+ * route they have.
  *
  * ## The guards never touch a lift
  *
@@ -173,8 +173,8 @@ export function emergencyStairsRoute(tower, fromFloor, toFloor) {
  * order {@link securityOffices} returns), and the count the bomb search turns on
  * (*"whether it's found depends on how many security offices you have"*).
  *
- * This is the hook for issue #16's bomb and fire; nothing in the game reads it
- * yet, and it is tested on its own.
+ * This is the hook issue #16's bomb search and fire response read (`sim/events.js`
+ * `searchProgress`); it is tested on its own and again through them.
  *
  * @returns {{count:number, reachable:number, nearestTicks:number|null,
  *   offices:{officeId:number, floor:number, floors:number, ticks:number}[]}}
