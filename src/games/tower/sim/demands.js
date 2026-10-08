@@ -99,6 +99,31 @@ export function raiseDemand(tower, kind) {
   return true;
 }
 
+/**
+ * A notice that is not a demand: something that HAPPENED, said once (issue #14: *"The
+ * tower has reached 3 stars"*). It goes in the same log as the demands' notices, so the
+ * one bar that says them all - and the one harness that reads them - needs no second
+ * channel; it is not an entry in `active`, so nothing "clears" it and it never holds a
+ * rung up. `good` is the tone: the bar draws a good notice as good news, not as a complaint.
+ *
+ * @param {object} tower
+ * @param {string} kind  a label for tests and the harness, e.g. `'starRise'`
+ * @param {string} text  the exact line the player reads
+ * @param {{good?:boolean}} [options]
+ */
+export function postNotice(tower, kind, text, { good = false } = {}) {
+  const demands = demandsOf(tower);
+  demands.notices.push({
+    id: demands.nextNoticeId++,
+    kind,
+    text,
+    day: tower.clock?.dayCounter ?? 0,
+    tick: tower.clock?.dayTick ?? 0,
+    ...(good ? { good: true } : {}),
+  });
+  if (demands.notices.length > NOTICE_LOG_LIMIT) demands.notices.splice(0, demands.notices.length - NOTICE_LOG_LIMIT);
+}
+
 /** Something answered the demand. Returns whether it was live. */
 export function clearDemand(tower, kind) {
   const demands = demandsOf(tower);

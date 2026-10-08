@@ -97,67 +97,90 @@ export const tests = {
     assert(starGlyph(-4) === '☆'.repeat(MAX_STAR), 'nor underflow it');
   },
 
-  '⚠️ the clause names the number a player can move'() {
-    // The measured complaint: the idle seed sits at 216 activity against 300
-    // and star 1 forever, and the game never says the player is 84 short.
+  '⚠️ the clause names the number a player can move, and the number they have'() {
+    // The measured complaint: the idle seed sits short of 300 at star 1 forever, and the
+    // game never says by how much. Issue #14: it says the target AND where the tower is.
     const { tower } = seedDemoWorld({ seed: 1 });
     const status = starGateStatus(tower);
     assert(status.star === 1 && status.nextStar === 2, 'the seed opens on the first rung');
 
     const clause = starClause(status, () => true);
-    assert(/\d+ more tower activity/.test(clause), 'it has to be a number: ' + clause);
-    assert(clause.includes(String(STAR_THRESHOLDS[0] - status.activity)),
-      'and the right one: ' + clause + ' (activity ' + status.activity + ')');
+    assert(clause === 'Next: 2 stars - need 300 population (now ' + status.activity + ')', clause);
+  },
+
+  'the clause lists EVERYTHING missing, in plain words'() {
+    const status = {
+      star: 2, nextStar: 3, activity: 640, threshold: 1000, activityNeeded: 360, activityReady: false,
+      blockers: ['360 more tower activity', 'a security office'],
+      blockerDetails: [{ text: '360 more tower activity', kind: null }, { text: 'a security office', kind: 'security' }],
+      ready: false,
+    };
+    assert(starClause(status, () => true) === 'Next: 3 stars - need 1,000 population (now 640), a security office',
+      starClause(status, () => true));
+
+    // And thousands are grouped, so 5,000 against 3,120 is readable at a glance.
+    const big = { ...status, star: 3, nextStar: 4, activity: 3120, threshold: 5000, blockers: ['x', 'y'],
+      blockerDetails: [{ text: 'x', kind: null }, { text: 'two hotel suites', kind: 'hotelSuite' }] };
+    assert(starClause(big, () => true) === 'Next: 4 stars - need 5,000 population (now 3,120), two hotel suites',
+      starClause(big, () => true));
+  },
+
+  'what is only a wait comes after the needs, and says wait'() {
+    const status = {
+      star: 3, nextStar: 4, activity: 5200, threshold: 5000, activityNeeded: 0, activityReady: true,
+      blockers: ['a hotel suite', 'the evening (after 5 PM)', 'a weekday'],
+      blockerDetails: [
+        { text: 'a hotel suite', kind: 'hotelSuite' },
+        { text: 'the evening (after 5 PM)', kind: null, window: true },
+        { text: 'a weekday', kind: null, window: true },
+      ],
+      ready: false,
+    };
+    assert(starClause(status, () => true) === 'Next: 4 stars - need a hotel suite; wait for the evening (after 5 PM) and a weekday',
+      starClause(status, () => true));
+    // Only waiting: no "need" at all, or the bar sends a player to build a time of day.
+    const waiting = { ...status, blockers: status.blockers.slice(1), blockerDetails: status.blockerDetails.slice(1) };
+    assert(starClause(waiting, () => true) === 'Next: 4 stars - wait for the evening (after 5 PM) and a weekday',
+      starClause(waiting, () => true));
   },
 
   '⚠️ a requirement nothing can build says so'() {
-    // The trap: at star 2 the blocker is a security office, which has no family
-    // and no palette entry. A player who hunts a button that does not exist
-    // stops believing the next thing the bar tells them.
+    // The trap: a metro station or a cathedral has no palette entry yet. A player who
+    // hunts a button that does not exist stops believing the next thing the bar tells them.
     const status = {
-      star: 2, nextStar: 3, activity: 1200, activityNeeded: 0, activityReady: true,
-      blockers: ['a security office'],
-      blockerDetails: [{ text: 'a security office', kind: 'security' }], ready: false,
+      star: 4, nextStar: 5, activity: 11_000, threshold: 10_000, activityNeeded: 0, activityReady: true,
+      blockers: ['a metro station'],
+      blockerDetails: [{ text: 'a metro station', kind: 'metroStation' }], ready: false,
     };
     const honest = starClause(status, (kind) => kind === 'office');
-    assert(honest.includes('a security office'), 'it still names the thing: ' + honest);
+    assert(honest.includes('a metro station'), 'it still names the thing: ' + honest);
     assert(/nothing builds one yet/.test(honest), 'and admits it cannot be built: ' + honest);
 
-    // And when it CAN be built, no caveat — the caveat must not become wallpaper.
+    // And when it CAN be built, no caveat - the caveat must not become wallpaper.
     const buildable = starClause(status, () => true);
     assert(!/nothing builds/.test(buildable), 'a buildable requirement gets no excuse: ' + buildable);
-    assert(buildable.includes('waiting on'), buildable);
+    assert(buildable === 'Next: 5 stars - need a metro station', buildable);
+  },
+
+  '⚠️ a requirement whose system is not in the build says why, in the sim words'() {
+    const status = {
+      star: 3, nextStar: 4, activity: 6000, threshold: 5000, activityNeeded: 0, activityReady: true,
+      blockers: ['a favorable VIP stay'],
+      blockerDetails: [{ text: 'a favorable VIP stay', kind: null, unavailable: 'VIP visits are not in this build yet' }],
+      ready: false,
+    };
+    const clause = starClause(status, () => true);
+    assert(clause === 'Next: 4 stars - need a favorable VIP stay (VIP visits are not in this build yet)', clause);
   },
 
   'bare-string blockers still read correctly'() {
-    // `starGateStatus` reports strings today and may report `{text, kind}`
-    // later. The clause handles both so the display is right either way, and so
-    // the change can land without this file moving.
+    // The clause handles both shapes so the display is right either way.
     const status = {
       star: 1, nextStar: 2, activity: 216, activityNeeded: 84, activityReady: false,
       blockers: ['84 more tower activity'], ready: false,
     };
-    assert(starClause(status, () => true) === '84 more tower activity', starClause(status));
-    assert(starClause(status, null) === '84 more tower activity', 'and with no buildability oracle');
-  },
-
-  '⚠️ an unknown requirement is named, not promised'() {
-    // While blockers are bare strings the UI cannot know whether a security
-    // office is buildable — and it is not. "waiting on:" would read as *go and
-    // do it* and send a player hunting a palette entry that does not exist.
-    // "next:" states the same requirement without the promise.
-    //
-    // Substring-matching the prose is not an escape: "an office" and "a
-    // security office" both contain "office", and those are exactly the two
-    // cases that differ.
-    const status = {
-      star: 2, nextStar: 3, activity: 1200, activityNeeded: 0, activityReady: true,
-      blockers: ['a security office'], ready: false,
-    };
-    const clause = starClause(status, () => true);
-    assert(clause === 'next: a security office', clause);
-    assert(!clause.includes('waiting on'),
-      'a bare string must not promise the thing can be built: ' + clause);
+    assert(starClause(status, () => true) === 'Next: 2 stars - need 300 population (now 216)', starClause(status));
+    assert(starClause(status, null) === 'Next: 2 stars - need 300 population (now 216)', 'and with no buildability oracle');
   },
 
   'a tower with nothing left to do says that instead'() {
@@ -166,12 +189,14 @@ export const tests = {
       blockers: [], ready: true,
     };
     assert(starClause(ready, () => true) === 'ready for 3 stars', starClause(ready));
+    assert(starClause({ ...ready, star: 5, nextStar: 6 }, () => true) === 'ready for Tower',
+      starClause({ ...ready, star: 5, nextStar: 6 }));
 
     const top = {
-      star: MAX_STAR, nextStar: null, activity: 99999, activityNeeded: 0, activityReady: true,
-      blockers: ['nothing — beyond 5 stars is the cathedral’s path, not this one'], ready: false,
+      star: 6, nextStar: null, activity: 99999, activityNeeded: 0, activityReady: true,
+      blockers: ['nothing'], ready: false,
     };
-    assert(starClause(top, () => true).includes('cathedral'), 'the top rung keeps its own words');
+    assert(starClause(top, () => true) === 'Tower rank - the top of the ladder', starClause(top, () => true));
   },
 
   'a missing status is silence, not a crash'() {

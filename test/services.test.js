@@ -934,12 +934,12 @@ export const tests = {
 
   'a goal clause names a medical center or a recycling center as something to build now that the palette has one'() {
     const tower = bare(3);
-    tower.gates = { securityPlaced: true, officePlaced: true, routesViable: true, recyclingAdequate: false,
-      medicalServiceOk: true, officeServiceOk: true, metroPlaced: false };
+    tower.gates = { securityPlaced: true, officePlaced: true, suitePlaced: true, routesViable: true, recyclingAdequate: false,
+      medicalServiceOk: true, officeServiceOk: true, vipStayFavorable: true, metroPlaced: false };
     tower.populationLedger = { office: 5000 };
     tower.clock.daypart = 5;
     const clause = starClause(starGateStatus(tower), (kind) => Object.hasOwn(BUILDABLE, kind));
-    assert(clause === 'waiting on: a recycling centre keeping up with the tower', 'it is not "nothing builds one yet": ' + clause);
+    assert(clause === 'Next: 4 stars - need a recycling centre keeping up with the tower', 'it is not "nothing builds one yet": ' + clause);
   },
 
   // ============================================================ the harness proof
