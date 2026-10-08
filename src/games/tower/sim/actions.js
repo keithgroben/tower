@@ -21,7 +21,8 @@ import {
   placeObject, spanBlocked,
 } from './state.js';
 import {
-  CARRIER_MODE, MAX_SERVED_SPAN, SHAFT_WIDTH, addCar, createCarrier, isExpressStopFloor, resizeCarrierSlots,
+  CARRIER_MODE, MAX_SERVED_SPAN, SCHEDULE_SLOTS, SHAFT_WIDTH, addCar, carrierSlotIndex, createCarrier,
+  isExpressStopFloor, resizeCarrierSlots,
 } from './elevators.js';
 import { CONSTRUCTION_COST, carCostForMode, chargeConstruction, placementCost } from './economy.js';
 import { lockReason, notePlacement } from './progression.js';
@@ -495,6 +496,75 @@ const ACTIONS = {
     segment.active = false;
     tower.routeTablesDirty = true;
     return { ok: true, freed: segment };
+  },
+
+  // ----------------------------------------------------- the control panel
+  //
+  // Each of these writes one of the carrier's own schedule tables
+  // (`specs/ELEVATORS.md` § Schedule Tables), which `tickCarriers` already reads:
+  // `expressMode` steers an idle car, `dwellEnable` holds it at a stop,
+  // `dispatchThreshold` is how far away a moving car may be and still answer a
+  // call, `stopEnabled` is the per-floor switch. They are free, like the
+  // original's panel. A slot is `daypart + 7 x weekend` (0..13).
+
+  /** Local (0), express to the top (1) or express to the bottom (2) in one slot. */
+  set_lift_schedule({ tower }, { carrierId, slot, mode }) {
+    const carrier = tower.carriers.find((c) => c.id === carrierId);
+    if (!carrier) return refuse('no such shaft');
+    if (!Number.isInteger(slot) || slot < 0 || slot >= SCHEDULE_SLOTS) return refuse('there are 14 schedule slots, 0 to 13');
+    if (![0, 1, 2].includes(mode)) return refuse('a schedule is local, express to the top, or express to the bottom');
+    carrier.expressMode[slot] = mode;
+    return { ok: true, slot, mode };
+  },
+
+  /** How long cars wait at a stop before leaving, in one slot. `0` leaves as soon as anyone is aboard. */
+  set_lift_wait({ tower }, { carrierId, slot, value }) {
+    const carrier = tower.carriers.find((c) => c.id === carrierId);
+    if (!carrier) return refuse('no such shaft');
+    if (!Number.isInteger(slot) || slot < 0 || slot >= SCHEDULE_SLOTS) return refuse('there are 14 schedule slots, 0 to 13');
+    if (!Number.isInteger(value) || value < 0 || value > 255) return refuse('waiting time is a whole number from 0 to 255');
+    carrier.dwellEnable[slot] = value;
+    return { ok: true, slot, value };
+  },
+
+  /**
+   * "Floors closer than moving cars": how many floors away a moving car may be
+   * and still answer a call. One setting for the whole shaft, written to every
+   * slot because the reference keeps the table per daypart and offers one box.
+   */
+  set_lift_response({ tower }, { carrierId, value }) {
+    const carrier = tower.carriers.find((c) => c.id === carrierId);
+    if (!carrier) return refuse('no such shaft');
+    if (!Number.isInteger(value) || value < 1 || value > 30) return refuse('a response distance is 1 to 30 floors');
+    carrier.dispatchThreshold.fill(value);
+    return { ok: true, value };
+  },
+
+  /** Switch one floor on or off for every car in the shaft ("the Finger"). */
+  set_lift_stop({ tower }, { carrierId, floor, enabled }) {
+    const carrier = tower.carriers.find((c) => c.id === carrierId);
+    if (!carrier) return refuse('no such shaft');
+    if (carrier.mode === CARRIER_MODE.EXPRESS) return refuse('an express lift has fixed stops');
+    const slot = carrierSlotIndex(carrier, floor);
+    if (slot < 0) return refuse('that lift does not serve that floor');
+    if (!enabled && (floor === carrier.bottomFloor || floor === carrier.topFloor)) {
+      return refuse('the first and last floor of a lift cannot be switched off');
+    }
+    carrier.stopEnabled[slot] = enabled ? 1 : 0;
+    tower.routeTablesDirty = true;
+    return { ok: true, floor, enabled: Boolean(enabled) };
+  },
+
+  /** Where one car waits when it has nothing to do. Not for express lifts. */
+  set_car_home({ tower }, { carrierId, car, floor }) {
+    const carrier = tower.carriers.find((c) => c.id === carrierId);
+    if (!carrier) return refuse('no such shaft');
+    if (carrier.mode === CARRIER_MODE.EXPRESS) return refuse('an express lift has fixed waiting floors');
+    const unit = carrier.cars[car];
+    if (!unit) return refuse('that lift has no such car');
+    if (carrierSlotIndex(carrier, floor) < 0) return refuse('that lift does not serve that floor');
+    unit.homeFloor = floor;
+    return { ok: true, car, floor };
   },
 
   /** Add a car to an existing shaft. The one purchase that scales a route. */

@@ -28,6 +28,7 @@ import { applyAction } from '../sim/actions.js';
 import { TOOLS, preview } from './build.js';
 import { discardSavedWorld, loadSavedWorld, makeAutosave } from './persist.js';
 import { newTowerWorld } from './seed.js';
+import { mountLiftPanel } from './lift-panel.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -193,6 +194,12 @@ const endDrag = (e) => {
   // A drag pans; a click builds. Without the distinction, every pan would end
   // by dropping an office wherever the pointer happened to stop.
   if (!dragged && activeTool) build(...point);
+  // No tool in hand: clicking a shaft opens its control panel, the way the
+  // original's magnifier did on the elevator machinery.
+  else if (!dragged) {
+    const shaft = renderer.carrierAt(tower, ...point) ?? renderer.carrierColumnAt(tower, point[0]);
+    if (shaft) liftPanel.open(shaft.id); else liftPanel.close();
+  }
   if (!dragged) updateHover(...point);
   try { canvas.releasePointerCapture(e.pointerId); } catch { /* pointer already gone */ }
 };
@@ -216,7 +223,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { selectTool(null); return; }
+  if (e.key === 'Escape') { selectTool(null); liftPanel.close(); return; }
   const tool = TOOLS.find((t) => t.key === e.key);
   if (tool) { selectTool(activeTool?.id === tool.id ? null : tool); return; }
   if (e.key === ' ') { e.preventDefault(); setSpeed(speed === 0 ? 1 : 0); return; }
@@ -245,6 +252,16 @@ function localPoint(e) {
 // real when the click comes.
 
 let activeTool = null;
+
+const liftPanel = mountLiftPanel($('liftpanel'), {
+  getCarrier: (id) => tower.carriers.find((c) => c.id === id) ?? null,
+  apply: (command) => {
+    const result = applyAction(world, command);
+    if (tower.routeTablesDirty) { rebuildRouteTables(tower); tower.routeTablesDirty = false; }
+    return result;
+  },
+  onChange: () => drawHud(),
+});
 
 function selectTool(tool) {
   activeTool = tool ?? null;
