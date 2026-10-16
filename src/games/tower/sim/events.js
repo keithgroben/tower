@@ -60,10 +60,11 @@ import { hotelNoiseNear, isHotelInfested, isHotelVacant } from './hotel.js';
 import { evalLevelFor } from './office.js';
 import { starGatesOf } from './progression.js';
 import {
-  ELAPSED_CLAMP, advanceSimTripCounters, computeRuntimeTileStressAverage, createSimTripRecord,
-  rebaseSimElapsedFromClock, resetSimTripCounters,
+  ELAPSED_CLAMP, computeRuntimeTileStressAverage, createSimTripRecord, resetSimTripCounters,
 } from './stress.js';
-import { emitsDistanceFeedback, shouldWaitForQueuedCarrier } from './routing.js';
+import { shouldWaitForQueuedCarrier } from './routing.js';
+import { hasCathedral } from './cathedral.js';
+import { countSameFloorArrival, noteLocalLeg, routeVisitor as route } from './visitors.js';
 
 // ---------------------------------------------------------------- the calendar
 
@@ -347,11 +348,13 @@ export function pickEventFloor(tower, lowerBound = tower.lobbyHeight ?? 1) {
  * `events.ts`): security, housekeeping, parking and its ramp, the metro, the cathedral. Ours
  * adds the lobby, which the reference does not hold as an object (its floor tiles are cells
  * the fire does eat) but which here carries `transferFloors` - the player cannot bulldoze one
- * either - and the cathedral's five types are `#17`'s to add the day it exists.
+ * either. The cathedral is family `0x24` for all five of its slices (issue #17), so one entry
+ * is the whole stack: a bomb's blast that reaches floor 99 leaves it standing.
  * `spec/DEVIATIONS.md` A68.
  */
 export const INDESTRUCTIBLE_FAMILIES = new Set([
   FAMILY.lobby, FAMILY.security, FAMILY.housekeeping, FAMILY.parkingSpace, FAMILY.parkingRamp, FAMILY.metro,
+  FAMILY.cathedral,
 ]);
 
 export const isIndestructible = (object) => INDESTRUCTIBLE_FAMILIES.has(object.family);
@@ -641,8 +644,10 @@ function explodeBomb(tower, bomb) {
  * no cathedral evaluation site is active"*, on a floor at least `32` tiles wide, ignition at
  * `right - 32`. SECOM (a security office) senses it; without one it is merely reported.
  *
- * The cathedral's *"evaluation site"* is `gates.cathedralPlaced` until issue #17 gives it a
- * sharper name.
+ * The cathedral's *"evaluation site"* is the cathedral itself (issue #17, `hasCathedral`): the
+ * reference's own guard is `g_eval_entity_index >= 0`, which is *"a cathedral is placed"* and
+ * nothing finer - the guests' wedding is a weekend morning and the fire a morning too, but the
+ * guard does not look at the day. `spec/DEVIATIONS.md` A72, A74.
  *
  * @returns {boolean} whether a fire started
  */
@@ -650,7 +655,7 @@ export function tryStartFire(tower) {
   const events = eventsOf(tower);
   if (eventIsRunning(tower)) return false;
   if (tower.clock.daypart >= 4 || tower.starCount < FIRE_MIN_STARS) return false;
-  if (starGatesOf(tower).cathedralPlaced) return false;
+  if (hasCathedral(tower)) return false;
   const floor = pickEventFloor(tower);
   if (floor === null) return false;
   const bounds = floorBounds(tower, floor);
@@ -1041,20 +1046,6 @@ function tickVip(tower) {
 
 // ---- the visitor's own movement: the same router, the same lifts, the same stress
 
-/**
- * Route the VIP one stride. `ctx` is `{resolveRoute, onDelay}`, supplied by the composition
- * (`ui/driver.js`) exactly as the hotel's is, so the visitor's delays are priced by the one
- * stress pipeline and nowhere else.
- */
-function route(tower, actor, from, to, ctx, state) {
-  const result = ctx.resolveRoute(tower, actor, from, to, tower.clock, {
-    passengerRoute: true,
-    emitDistanceFeedback: emitsDistanceFeedback(actor.family, state),
-    onDelay: (delay) => ctx.onDelay?.(delay, actor),
-  });
-  return typeof result === 'object' && result !== null ? result : { code: result };
-}
-
 /** The stay begins: the visitor is in the suite. */
 function checkInVip(tower, actor) {
   const vip = tower.events.vip;
@@ -1104,22 +1095,6 @@ export function vipFamilyHandler(ctx) {
       actor.state = enterTransit(VIP_STATE.leaving);
     }
   };
-}
-
-/** A walked leg lands the visitor on the segment's far landing; the next stride routes on from there. */
-function noteLocalLeg(actor, result) {
-  if (result.code === 1 && Number.isInteger(result.legDestination)) actor.anchorFloor = result.legDestination;
-}
-
-/**
- * Result `3` is a counted trip when no lift carried it (`PEOPLE.md` § When Counters Advance:
- * *"same-floor route success (result 3)"*); a lift's arrival is counted by the carrier callback.
- * The router sets `advanceTripCounters` for exactly the former.
- */
-function countSameFloorArrival(actor, tower, result) {
-  if (!result.advanceTripCounters) return;
-  rebaseSimElapsedFromClock(actor, tower.clock.dayTick);
-  advanceSimTripCounters(actor);
 }
 
 /**

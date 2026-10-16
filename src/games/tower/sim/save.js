@@ -126,8 +126,18 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * v9 file resumed by v10 would carry a `vipStayFavorable` the VIP never earned if it were hand-set,
  * and a v10 file resumed by v9 would hold a bomb mid-search and a fire mid-spread that the old build
  * has no code to advance - the tower would be locked in a state of emergency for ever.
+ *
+ * v11 (issue #17, the cathedral) adds a ninth family: a five-slice stack (family `0x24`, types
+ * `0x24`..`0x28`, a shared `stackId`, an `aux` display byte) that owns FORTY wedding-guest actors
+ * in the `0x20` / `0x60` / `0x03` / `0x05` / `0x45` / `0x27` machine, a tenth (`FAMILY.inspector`,
+ * `0x31`, one standing visitor with no object) with `tower.inspection`, `tower.inspectorActorId`
+ * and `tower.lastInspection`, and `tower.finale` (the Tower rank's moment). It also makes
+ * `gates.officeServiceOk` and `gates.weddingGuestsArrived` writable by the game, and makes the
+ * fire's cathedral guard read the building and not the latch. A v10 file at five stars with a hand-set
+ * `cathedralPlaced` would resume with no cathedral and no way to be crowned, and a v11 file
+ * resumed by v10 would hold a family the old build draws as a grey box and cannot demolish-guard.
  */
-export const SAVE_VERSION = 10;
+export const SAVE_VERSION = 11;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

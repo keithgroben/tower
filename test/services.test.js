@@ -958,7 +958,11 @@ export const tests = {
     assert(last.flags[1600] === false, 'the midday reset always clears it');
     assert(last.flags[2566] === true && !ok.recyclingBlocked, 'a served center under 2,500 per center clears the blocker: ' + JSON.stringify(last.flags));
     assert(!ok.blockers.includes('a recycling centre keeping up with the tower'), 'it is off the ladder\'s list');
-    assert(ok.blockers.includes('a passed office-service evaluation'), 'what is left is the evaluation, which needs the cathedral (A57)');
+    // Issue #17: the evaluation has its writer - an inspector rode up to a let office on the first
+    // evaluation day (day 3) and the office passed - so it is no longer what the rung is waiting for
+    // (A57 said it was "written by nothing"). What is left is the suites, the VIP and the evening.
+    assert(!ok.blockers.includes('a passed office-service evaluation'), 'the real inspection passed it: ' + ok.blockers);
+    assert(ok.blockers.includes('2 hotel suites') && ok.blockers.includes('a favorable VIP stay'), 'what is left: ' + ok.blockers);
 
     const full = recyclingTrial({ centers: 1, floors: 28, days: 8 });
     assert(full.perCenter >= 2500 && full.recyclingBlocked, 'one center under ' + full.perCenter + ' per center is full');

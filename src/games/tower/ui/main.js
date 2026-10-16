@@ -37,6 +37,7 @@ import { newTowerWorld } from './seed.js';
 import { mountLiftPanel } from './lift-panel.js';
 import { mountTheaterPanel } from './theater-panel.js';
 import { eventDialogBlocking, mountEventDialog } from './event-dialog.js';
+import { mountFinale } from './finale.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -151,8 +152,8 @@ let lastStress = null;
  *
  * It is what stops the goal clause naming a requirement as though a player could
  * go and place one when the palette has no such button: a security office can
- * be placed since issue #12, a recycling centre since #13 and a metro station since
- * #15; the cathedral cannot yet.
+ * be placed since issue #12, a recycling centre since #13, a metro station since
+ * #15 and the cathedral since #17: everything the ladder asks for is on the palette.
  */
 const isBuildable = (kind) => Object.hasOwn(BUILDABLE, kind);
 
@@ -299,6 +300,9 @@ const eventDialog = mountEventDialog($('eventdialog'), {
   apply: (command) => applyAction(world, command),
   onChange: () => drawHud(),
 });
+
+// The Tower rank's banner (issue #17). It does not stop the game; the fireworks are the renderer's.
+const finale = mountFinale($('finale'), { getWorld: () => world });
 
 function selectTool(tool) {
   activeTool = tool ?? null;
@@ -576,6 +580,7 @@ function drawHud() {
   // The theater window's figures move with the day; its buttons are left alone.
   theaterPanel.refresh();
   eventDialog.refresh();
+  finale.refresh();
 }
 
 // -------------------------------------------------------------- the frame

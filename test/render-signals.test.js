@@ -136,14 +136,20 @@ export const tests = {
       // The VIP (issue #16) is a standing visitor with no object; were one ever placed it would
       // say nothing, as a clinic does.
       vip: '',
+      // The cathedral (issue #17) is a chapel, not a lease: its forty guests are visitors for a
+      // morning. The inspector (issue #17) is a standing visitor with no object, as the VIP is.
+      cathedral: '',
+      inspector: '',
     };
     const tower = createTower({ seed: 1 });
-    let left = 0;
+    // Twenty-odd families, eight tiles apiece: a second row once the first runs out of lot.
+    let slot = 0;
     for (const [name, tag] of Object.entries(expected)) {
+      const left = (slot % 16) * 8;
       const placed = placeObject(tower,
-        { family: FAMILY[name], floor: 5, left, right: left + 5 },
+        { family: FAMILY[name], floor: 5 + Math.floor(slot / 16), left, right: left + 5 },
         () => createSimTripRecord());
-      left += 8;
+      slot++;
       assert(placed.ok, name + ': ' + placed.reason);
       assert(objectStatusTag(placed.object) === tag,
         `an empty ${name} says ${JSON.stringify(objectStatusTag(placed.object))}, expected ${JSON.stringify(tag)}`);

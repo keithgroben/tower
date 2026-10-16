@@ -33,6 +33,7 @@ import {
   FAMILY, OBJECT_TYPE, OCCUPANTS, POPULATION_CONTRIBUTION, __resetIds, createTower, population,
 } from '../src/games/tower/sim/state.js';
 import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
+import { CATHEDRAL_BASE_FLOOR, placeCathedral } from '../src/games/tower/sim/cathedral.js';
 import { objectSprite, venueSignal } from '../src/games/tower/render/canvas.js';
 import { TOOLS, commandFor, costOf, preview, toolById } from '../src/games/tower/ui/build.js';
 import { entertainmentReadout } from '../src/games/tower/ui/readout.js';
@@ -627,10 +628,15 @@ export const tests = {
     // blows up the very theater this test is watching. These two scenarios are about the
     // PAYOUT RULE on those days, so the event itself is held off the way the spec allows -
     // the bomb comes at 2-4 stars only (`bombCanComeAt`), the fire not while a cathedral
-    // evaluation is active - and `test/events.test.js` owns what the events do.
+    // evaluation site stands - and `test/events.test.js` owns what the events do.
     const scenarios = [
       ['a bomb day by the calendar', (t) => { t.clock.dayCounter = 59; t.starCount = 5; }],
-      ['a fire day by the calendar', (t) => { t.clock.dayCounter = 83; t.gates = { ...t.gates, cathedralPlaced: true }; }],
+      ['a fire day by the calendar', (t) => {
+        t.clock.dayCounter = 83;
+        // A real cathedral (issue #17), the evaluation site that keeps the fire away.
+        const placed = placeCathedral(t, { floor: CATHEDRAL_BASE_FLOOR, left: 0 }, () => createSimTripRecord());
+        assert(placed.ok, 'fixture: ' + placed.reason);
+      }],
       ['a live bomb', (t) => { t.clock.dayCounter = 10; t.events.bombActive = true; }],
       ['a live fire', (t) => { t.clock.dayCounter = 10; t.events.fireActive = true; }],
     ];

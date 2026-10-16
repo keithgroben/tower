@@ -25,7 +25,7 @@
  *   3 -> 4   5,000 + hotel suites + recycling & medical demands met + an
  *            office-service evaluation + a favorable VIP stay + a weekday after 5 PM
  *   4 -> 5   10,000 + a metro station + every demand met + a weekday after 5 PM
- *   5 -> Tower  15,000 + the cathedral on floor 100 + a weekend wedding with 40
+ *   5 -> Tower  15,000 + the cathedral on the 100th floor + a weekend wedding with 40
  *            guests there before tick 800 (`EVALUATION.md` § Award Check)
  *
  * ## Three things worth knowing before reading the gates
@@ -42,18 +42,18 @@
  * needs 3 stars, and 3→4 needs recycling. Each rung buys the tool the next rung
  * demands, which is why the population thresholds alone never let you skip one.
  *
- * **Some of the checklist is written by systems that are not in this build.**
- * The gates are all implemented and tested, and each is a plain flag on
- * `tower.gates` that its owner sets: the office-service evaluation and the
- * wedding are the cathedral's (issue #17); the favorable VIP stay was the events'
- * (issue #16, landed: `sim/events.js` writes it) and the metro station was issue
- * #15's. Until the rest land the gate refuses by *name*, and
- * {@link GATES_WITHOUT_A_WRITER} says why it cannot be satisfied yet, so the HUD tells the player the truth instead of sending them
- * hunting a button. Dropping a gate to make the ladder passable would be the worst
+ * **Every gate now has a writer** (issue #17 closed the last two). Each is a plain flag on
+ * `tower.gates` that its owner sets: the metro station (issue #15, `notePlacement`), the
+ * favorable VIP stay (issue #16, `sim/events.js`), the office-service evaluation (issue #17,
+ * `sim/inspection.js`), and the cathedral and its wedding (issue #17, `sim/cathedral.js`).
+ * {@link GATES_WITHOUT_A_WRITER} is the mechanism that kept a gate honest while its writer was
+ * missing - the gate refuses by *name* and the HUD says why it cannot be satisfied yet, instead
+ * of sending the player hunting a button - and stays, empty, for the next gate that is ever
+ * added before its writer. Dropping a gate to make the ladder passable would be the worst
  * available option — a tower that advances because a requirement was skipped
  * teaches the player something false, and `CLAUDE.md` already keeps a list of
  * metrics that improved while the thing they measured got worse.
- * `spec/DEVIATIONS.md` A57-A62.
+ * `spec/DEVIATIONS.md` A57-A62, A73-A80.
  */
 import { EVENING_DAYPART, formatClock } from './clock.js';
 import { activeDemands, postNotice } from './demands.js';
@@ -115,8 +115,14 @@ export const HOTEL_SUITES_FOR_FOUR_STARS = 2;
 export const WEDDING_GUESTS = 40;
 /** `EVALUATION.md` § Award Check: arrival processing *"runs only when `g_day_tick < 800`"*. */
 export const WEDDING_DEADLINE_TICK = 800;
-/** The issue and the help file: *"A cathedral can only be placed on a 100-story tower"*. Issue #17 enforces it. */
-export const CATHEDRAL_FLOOR = 100;
+/**
+ * The issue and the help file: *"A cathedral can only be placed on a 100-story tower"*, and the
+ * build menu's *"Cathedral is available only on 100th floor"*. The original numbers its ground
+ * floor 1, so its 100th floor is logical **99** (`EVALUATION.md` sends the guests to raw floor
+ * 109 = logical 99). The cathedral stack's LOWEST floor; `sim/cathedral.js` enforces it, in
+ * `gradeReason`, for the ghost and the seam alike. `spec/DEVIATIONS.md` A74.
+ */
+export const CATHEDRAL_FLOOR = 99;
 
 // ------------------------------------------------------------- gate flags
 
@@ -138,7 +144,7 @@ export function createStarGates() {
     suitePlaced: false,
     /** Latched when a metro station has ever been placed (issue #15). Gates 4→5. */
     metroPlaced: false,
-    /** Latched when the cathedral has been placed (issue #17). Gates 5→Tower. */
+    /** Latched when the cathedral has been placed (issue #17, `notePlacement`). Gates 5→Tower. */
     cathedralPlaced: false,
     /**
      * Written by the recycling system (`sim/recycling.js`, issue #13): cleared at
@@ -154,8 +160,9 @@ export function createStarGates() {
      */
     medicalServiceOk: false,
     /**
-     * Written by the office-service evaluation - the cathedral guest arriving at the
-     * office under test (issue #17). Gates 3→4; reset on advance.
+     * **Written by the office-service evaluation (issue #17, `sim/inspection.js`):** the
+     * inspector reached the office under test and its workers' average stress was at or
+     * under the star-3 threshold (150). Gates 3→4; cleared by every star advance.
      */
     officeServiceOk: false,
     /**
@@ -192,10 +199,7 @@ export const starGatesOf = (tower) => (tower.gates ??= createStarGates());
  * check on whether a writer exists: the day a writer lands, deleting the line is the
  * one edit, and a test pins that every line here names a real gate.
  */
-export const GATES_WITHOUT_A_WRITER = {
-  officeServiceOk: 'the cathedral guest who tests it is not in this build yet',
-  weddingGuestsArrived: 'the cathedral wedding is not in this build yet',
-};
+export const GATES_WITHOUT_A_WRITER = {};
 
 /**
  * Placement gates, by the family that satisfies them.
@@ -288,7 +292,7 @@ export function refreshStartOfDayGates(tower) {
   }
   // `EVALUATION.md` § Award Check recounts the cathedral's arrivals fresh, and
   // § Runtime Sims has every guest re-activated at day tick 0: yesterday's wedding
-  // is not today's. (Nothing writes the count until issue #17.)
+  // is not today's. (`sim/cathedral.js` writes the count as the guests arrive.)
   gates.weddingGuestsArrived = 0;
   return gates;
 }
@@ -410,7 +414,7 @@ const QUALITATIVE_GATES = {
     { flag: 'routesViable', missing: 'a day to start since you reached 3 stars', kind: null, window: true },
   ],
   5: [
-    { flag: 'cathedralPlaced', missing: 'a cathedral on floor ' + CATHEDRAL_FLOOR, kind: 'cathedral' },
+    { flag: 'cathedralPlaced', missing: 'a cathedral on the 100th floor (floor ' + CATHEDRAL_FLOOR + ')', kind: 'cathedral' },
     {
       flag: 'weddingGuestsArrived', kind: null,
       missing: 'a wedding with ' + WEDDING_GUESTS + ' guests at the cathedral',
@@ -567,7 +571,28 @@ export function tryAdvanceStar(tower) {
   tower.starCount = from + 1;
   resetStarGateState(tower);
   postNotice(tower, 'starRise', starRiseNotice(tower.starCount), { good: true });
+  if (tower.starCount >= TOWER_RANK) crownTower(tower);
   return { advanced: true, star: tower.starCount, from, blockers: [] };
+}
+
+/**
+ * **The finish moment** (issue #17). `EVALUATION.md` § Award Check: `award_star_rating_upgrade`
+ * *"plays popup/sound `0x2718`, and marks all cathedral objects aux `2`, dirty `1`"*, and the
+ * original's own dialog for it is `DIALOG_3034`: *Congratulations! Your tower has been given a
+ * "Tower" Rating!* The sim records WHEN, in plain JSON on `tower.finale` (so a save carries it and
+ * a replay reproduces it); the interface turns that into fireworks and a banner and never
+ * writes back. The game does not end: nothing reads `finale` but the display, and the tower
+ * runs on at rank 6.
+ */
+export const TOWER_RANK_TEXT = 'Congratulations! Your tower has been given a "Tower" Rating!';
+
+function crownTower(tower) {
+  tower.finale = { day: tower.clock.dayCounter, tick: tower.clock.dayTick, text: TOWER_RANK_TEXT };
+  for (const object of tower.objects.values()) {
+    if (object.family !== FAMILY.cathedral) continue;
+    object.aux = 2;
+    object.dirty = true;
+  }
 }
 
 // ------------------------------------------------------------- unlocks

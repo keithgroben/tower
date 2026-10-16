@@ -33,6 +33,8 @@ import {
 import { housekeepingArrival, housekeepingFamilyHandler } from '../sim/housekeeping.js';
 import { securityNightReset } from '../sim/security.js';
 import { vipArrival, vipFamilyHandler } from '../sim/events.js';
+import { cathedralArrival, cathedralFamilyHandler, sendWeddingGuestsHome } from '../sim/cathedral.js';
+import { cleanUpInspection, inspectorArrival, inspectorFamilyHandler } from '../sim/inspection.js';
 import { medicalNightReset } from '../sim/medical.js';
 import { parkingNightReset } from '../sim/parking.js';
 import {
@@ -221,6 +223,21 @@ export function makeDriver(world, { observe } = {}) {
       resolveRoute,
       onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
     }),
+    /**
+     * The wedding (issue #17): forty guests, eight to each slice of the cathedral, who ride the
+     * lobby-to-floor-99 route through the same router and the same lifts on a weekend morning.
+     * `sim/cathedral.js` owns the gate, the arrival count and the midday ride home. And the
+     * inspector (issue #17), the one visitor the office-service evaluation sends up to an
+     * office: his arrival there IS the evaluation (`sim/inspection.js`).
+     */
+    [FAMILY.cathedral]: cathedralFamilyHandler({
+      resolveRoute,
+      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    }),
+    [FAMILY.inspector]: inspectorFamilyHandler({
+      resolveRoute,
+      onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+    }),
     [FAMILY.office]: officeFamilyHandler({
       resolveRoute,
       // Every delay the router reports is priced by the stress pipeline, which
@@ -280,6 +297,8 @@ export function makeDriver(world, { observe } = {}) {
     [FAMILY.hotelSuite]: hotelArrives,
     [FAMILY.housekeeping]: (actor, floor) => housekeepingArrival(tower, actor, floor),
     [FAMILY.vip]: (actor, floor) => vipArrival(tower, actor, floor),
+    [FAMILY.cathedral]: (actor, floor) => cathedralArrival(tower, actor, floor),
+    [FAMILY.inspector]: (actor, floor) => inspectorArrival(tower, actor, floor),
   }, applyRoutingDelay, {
     // `specs/TIME.md` § 2500. Sold condos clamp back to the sync sentinel and
     // every resident goes back to its band's starting state — which is what
@@ -321,9 +340,13 @@ export function makeDriver(world, { observe } = {}) {
     //
     // The recycling midday reset (`TIME.md` § 1600 step 8) is the last thing on the
     // tick: it always clears adequacy, and the afternoon and evening checks set it.
+    //
+    // The office-service evaluation's stale state is cleared on this tick too (issue #17,
+    // `GAME-STATE.md` § Cleanup: *"at the tick 1600 checkpoint"*), last in the body.
     [HOTEL_SWEEP_TICK]: (t) => {
       restaurantRebuild(t); hotelMiddaySweep(t); advancePartyHalls(t, showMoney);
       updateRecyclingState(t, RECYCLING_CHECK.midday);
+      cleanUpInspection(t);
     },
     // `TIME.md` § 32 and § 2566: the stack's daily reset, and the last adequacy check
     // of the day. Two ticks nothing else owns (the 2000 check is in `ui/tick.js`).
@@ -331,7 +354,10 @@ export function makeDriver(world, { observe } = {}) {
     [RECYCLING_FINAL_TICK]: (t) => { updateRecyclingState(t, RECYCLING_CHECK.final); },
     // § 1200: the day's checkout count (the newspaper trigger's input) resets,
     // and then (steps 2-3) the theaters are promoted and the party hall opens.
-    [HOTEL_SALE_RESET_TICK]: (t) => { hotelSaleCountReset(t); middayEntertainment(t); },
+    //
+    // Step 4 of the same checkpoint (issue #17) is the cathedral's: the wedding guests who
+    // arrived are sent home. `MIDDAY_RETURN_TICK` is `HOTEL_SALE_RESET_TICK`; a test pins that.
+    [HOTEL_SALE_RESET_TICK]: (t) => { hotelSaleCountReset(t); middayEntertainment(t); sendWeddingGuestsHome(t); },
     // The rest of the entertainment day, each on a tick nothing else owns:
     // 1000 the theater's upper half opens, 1400 its lower half, 1500 the upper
     // show ends (the audience goes shopping), 1900 the lower show ends and the

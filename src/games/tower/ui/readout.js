@@ -24,6 +24,10 @@ import { FAMILY, OBJECT_TYPE } from '../sim/state.js';
 import { pendingVisitors } from '../sim/medical.js';
 import { recyclingServed } from '../sim/recycling.js';
 import { metroCommuterCount, metroServed } from '../sim/metro.js';
+import {
+  GUEST_STATE, cathedralGuests, cathedralServed, guestsAtTheCathedral, hasCathedral,
+} from '../sim/cathedral.js';
+import { WEDDING_DEADLINE_TICK, WEDDING_GUESTS } from '../sim/progression.js';
 import { SPACE_CAPACITY, rampConnected } from '../sim/parking.js';
 import {
   PARTY_HALL_MIN_HOTEL_ROOMS, PHASE, filmTitle, hotelRoomCount, payoutFor, recordOf,
@@ -151,6 +155,10 @@ export function serviceReadout(object, tower) {
       return 'metro station · ' + metroCommuterCount(tower) + ' workers come by train and eat only underground · '
         + (metroServed(tower) ? 'a lift reaches the platform' : 'NO lift reaches the platform, so nobody comes by train')
         + ' · nothing can be built under it · cannot be bulldozed';
+    case FAMILY.cathedral:
+      return 'cathedral · forty guests ride up on a weekend morning · '
+        + (cathedralServed(tower) ? 'a lift reaches the 100th floor' : 'NO lift reaches the 100th floor, so there can be no wedding')
+        + ' · all forty there before 12:30 PM, with 15,000 people, earns the Tower rank · cannot be bulldozed';
     case FAMILY.parkingRamp:
       return 'parking ramp · ' + (rampConnected(tower, object) ? 'meets the lobby' : 'CUT OFF from the lobby')
         + ' · serves the spaces beside it on this floor';
@@ -202,7 +210,27 @@ export function eventsReadout(tower) {
         : v.phase === 'staying' ? 'VIP asleep on floor ' + v.floor
           : 'VIP checking out');
   }
+  const wedding = weddingReadout(tower);
+  if (wedding) parts.push(wedding);
+  if (tower.inspection) parts.push('INSPECTOR on the way to the office on floor ' + tower.inspection.floor);
   return parts.join(' · ');
+}
+
+/**
+ * The wedding, while it is going on (issue #17), or `''`: a weekend morning with a cathedral,
+ * guests on the lifts or already there. It says how many are in and, once the window has shut
+ * on the Tower rank (`EVALUATION.md`: before tick 800), that they came too late - the one thing
+ * about the wedding a player cannot see from the street.
+ */
+export function weddingReadout(tower) {
+  if (!tower || !hasCathedral(tower) || tower.starCount >= TOWER_RANK) return '';
+  const { calendarPhase, dayTick } = tower.clock;
+  if (!calendarPhase || dayTick >= 1200) return '';
+  const arrived = guestsAtTheCathedral(tower);
+  const riding = cathedralGuests(tower).filter((g) => g.state === GUEST_STATE.outbound).length;
+  if (arrived === 0 && riding === 0) return '';
+  return 'WEDDING - ' + arrived + ' of ' + WEDDING_GUESTS + ' guests at the cathedral'
+    + (dayTick >= WEDDING_DEADLINE_TICK ? ' (too late for the Tower rank today)' : '');
 }
 
 // ------------------------------------------------------------------- stars

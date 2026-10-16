@@ -19,14 +19,15 @@
  * same `progression` hook the game runs every tick - not through `tryAdvanceStar`
  * called by hand.
  *
- * ⚠️ **Three gates are written by systems that are not in this build** (the VIP stay, the
- * office-service evaluation and the cathedral wedding: issues #16 and #17), and a test cannot
- * pretend otherwise. `futureFlags()` below sets them by hand, once, in one place, labelled
- * as stand-ins - the day an issue lands its writer, its line there becomes a real placement
- * or a real event and the test above it does not change. The flags are the interface; this
- * file pins the interface and everything on this side of it. (The metro station, issue #15,
- * has its writer now: the walk below BUILDS one, through `applyAction`, and watches the
- * `4 -> 5` gate refuse without it.)
+ * Every gate has a writer in this build now, and the walk below uses the real ones: it BUILDS
+ * the metro station (issue #15) and watches `4 -> 5` refuse without it; it lets an inspector ride
+ * to a real office for the office-service evaluation (issue #17); and it builds the lifts to the
+ * 100th floor and the cathedral through `applyAction` and lets the forty guests ride up on a
+ * weekend morning (issue #17). The one flag still set by hand, in one place, is the VIP's
+ * (`futureFlags()`): `test/events.test.js` and the ladder trial prove the real visitor, and a
+ * walk that also waited for him would be a test of the events and not of the ladder. The rung
+ * tests (`ALL`) pin the INTERFACE - each gate alone missing blocks its star - and are the one
+ * place the other flags are set directly, because that is what they test.
  */
 import { EVENING_DAYPART, calendarPhaseFlag } from '../src/games/tower/sim/clock.js';
 import { TYPE_CODES } from '../src/games/tower/sim/economy.js';
@@ -46,7 +47,8 @@ import { runCommercialRebuild } from '../src/games/tower/sim/ledger-adapter.js';
 import { VENUE, commercialVenues } from '../src/games/tower/sim/commercial.js';
 import { SAVE_VERSION, restore, snapshot } from '../src/games/tower/sim/save.js';
 import { newTowerWorld } from '../src/games/tower/ui/seed.js';
-import { ladderTrial } from '../harness/playtest.js';
+import { buildWeddingSpine, ladderTrial } from '../harness/playtest.js';
+import { CATHEDRAL_BASE_FLOOR, GUEST_STATE, cathedralGuests } from '../src/games/tower/sim/cathedral.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import {
   STAR_RISE_MS, noticeToSay, starClause, starGlyph, starTitle,
@@ -69,17 +71,12 @@ function towerAt(star, { office = 0, ledger = null, gates = {}, dayTick = 1700, 
 }
 
 /**
- * ⚠️ **THE STAND-INS.** The gates whose writers are issues #16 and #17. This is
- * the only place a test sets them. Each one is the exact flag the future system writes;
- * `officeServiceOk` is cleared by every advance (`GAME-STATE.md`), so a walk has to set
- * it again before 3 -> 4.
+ * ⚠️ **THE ONE STAND-IN.** The VIP's good opinion (issue #16), which `sim/events.js` writes and
+ * `test/events.test.js` and the ladder trial prove. It is the exact flag the events write.
  */
 const futureFlags = (tower, which = {}) => {
   Object.assign(starGatesOf(tower), {
     vipStayFavorable: true,      // issue #16: a VIP stayed in a suite and rated the tower well
-    officeServiceOk: true,       // issue #17: the cathedral guest reached an office that passed
-    cathedralPlaced: true,       // issue #17: the cathedral stands
-    weddingGuestsArrived: WEDDING_GUESTS,   // issue #17: 40 guests there before tick 800, on a weekend
     ...which,
   });
   return tower;
@@ -254,11 +251,20 @@ export const tests = {
     const details = starGateStatus(tower).blockerDetails;
     const vip = details.find((d) => /VIP/.test(d.text));
     const evaluation = details.find((d) => /office-service/.test(d.text));
-    // Issue #16 gave the VIP gate its writer (`sim/events.js`), so it carries no excuse any more...
-    assert(!('vipStayFavorable' in GATES_WITHOUT_A_WRITER) && vip.unavailable === undefined, 'VIP: ' + JSON.stringify(vip));
-    // ...and the office-service evaluation (issue #17) still does.
-    assert(evaluation.unavailable === GATES_WITHOUT_A_WRITER.officeServiceOk, 'evaluation: ' + JSON.stringify(evaluation));
-    assert(evaluation.unavailable === GATES_WITHOUT_A_WRITER.officeServiceOk, 'evaluation: ' + JSON.stringify(evaluation));
+    // Issue #16 gave the VIP gate its writer (`sim/events.js`) and issue #17 the evaluation's
+    // (`sim/inspection.js`) and the wedding's (`sim/cathedral.js`): the table is empty, and neither
+    // gate carries an excuse.
+    assert(Object.keys(GATES_WITHOUT_A_WRITER).length === 0, 'every gate has a writer now: ' + Object.keys(GATES_WITHOUT_A_WRITER));
+    assert(vip.unavailable === undefined && evaluation.unavailable === undefined, 'no excuses: ' + JSON.stringify([vip, evaluation]));
+    // The mechanism is for the next gate that is added before its writer, and it still works: a
+    // line in the table is printed beside the blocker, for exactly as long as the line is there.
+    GATES_WITHOUT_A_WRITER.officeServiceOk = 'a made-up excuse for this test';
+    try {
+      const excused = starGateStatus(tower).blockerDetails.find((d) => /office-service/.test(d.text));
+      assert(excused.unavailable === 'a made-up excuse for this test', 'the table is still read: ' + JSON.stringify(excused));
+    } finally {
+      delete GATES_WITHOUT_A_WRITER.officeServiceOk;
+    }
     // A gate that has a writer here carries no excuse: the caveat must not become wallpaper.
     const recycling = starGateStatus(towerAt(3, { office: 5000, gates: { ...ALL, recyclingAdequate: false } })).blockerDetails
       .find((d) => /recycling/.test(d.text));
@@ -472,12 +478,36 @@ export const tests = {
       'a favorable VIP stay', 'the evening (after 5 PM)']) {
       assert(morning.includes(part), '"' + part + '" is missing from: ' + morning);
     }
-    // Everything this build CAN make, made; then the stand-ins for #16 and #17.
+    // The office-service evaluation (issue #17) is the sim's own: a let office with a lift to it, an
+    // evaluation day (day 3, `day % 9 == 3`), and an inspector who rides up and tests it. Nothing
+    // sets the flag but his arrival. (The office is let by hand - the rent moment is the office
+    // module's and has its own tests - and the lift is built through the seam.)
+    const shaft = applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: 0, top: 3, column: 20 });
+    assert(shaft.ok, 'fixture: a lift: ' + shaft.reason);
+    for (let i = 0; i < 3; i++) assert(applyAction(world, { type: 'add_car', carrierId: shaft.carrier.id }).ok, 'fixture: a car');
+    const office = applyAction(world, { type: 'build', what: 'office', floor: 2, left: 40 });
+    assert(office.ok, 'fixture: an office: ' + office.reason);
+    office.object.unitStatus = 0;
+    office.object.occupiedFlag = true;
+    tower.routeTablesDirty = true;
+    assert(tower.gates.officeServiceOk === false, 'fixture: nothing has passed it');
+    tower.clock.dayCounter = 3;
+    tower.clock.calendarPhase = calendarPhaseFlag(3);
+    tower.clock.dayTick = 238;
+    for (let i = 0; i < 2; i++) scheduler.tick(tower);
+    assert(tower.inspection?.floor === 2, 'at 240 on an evaluation day the inspector sets out for the let office: ' + JSON.stringify(tower.inspection));
+    assert(tower.gates.officeServiceOk === false, 'and has not arrived yet');
+    for (let i = 0; i < 900 && tower.inspection; i++) scheduler.tick(tower);
+    assert(!tower.inspection && tower.lastInspection?.pass === true, 'he rode up and the office passed: ' + JSON.stringify(tower.lastInspection));
+    assert(tower.gates.officeServiceOk === true, 'and his arrival wrote the gate');
+    assert(!says().includes('office-service'), 'the bar no longer asks for it: ' + says());
+
+    // Everything this build CAN make, made; then the one stand-in, the VIP's opinion (#16).
     tower.populationLedger.office = 5000;
     Object.assign(tower.gates, { suitePlaced: true, recyclingAdequate: true, medicalServiceOk: true, routesViable: true });
     step(1599, WEEKDAY);
     assert(tower.starCount === 3, 'not before 5 PM');
-    futureFlags(tower, { cathedralPlaced: false, weddingGuestsArrived: 0 });
+    futureFlags(tower);
     step(1700, WEEKEND);
     assert(tower.starCount === 3, 'not on a weekend');
     assert(says() === 'Next: 4 stars - wait for a weekday', says());
@@ -520,15 +550,36 @@ export const tests = {
     assert(tower.starCount === 5, 'metro + demands met + 10,000: five stars. ' + says());
     record('5 stars');
 
-    // ---- 5 stars: the cathedral and the wedding
+    // ---- 5 stars: the cathedral and the wedding (issue #17), every part of it the sim's own
     tower.populationLedger.office = 15_000;
-    assert(says().includes('a cathedral on floor 100 (nothing builds one yet)') && says().includes('a wedding with 40 guests'), says());
-    futureFlags(tower);                                       // issue #17: cathedral placed, 40 guests arrived
-    step(900, WEEKEND);
-    assert(tower.starCount === 5, 'after 12:30 PM the wedding is over');
-    assert(says().includes('wait for a morning (before 12:30 PM)'), says());
-    step(540, WEEKEND);
-    assert(tower.starCount === TOWER_RANK, 'a weekend morning with 40 guests: the Tower rank');
+    assert(says().includes('a cathedral on the 100th floor (floor 99)') && says().includes('a wedding with 40 guests'), says());
+    assert(!says().includes('nothing builds one yet'), 'the cathedral is on the palette now: ' + says());
+    // Refused anywhere but the 100th floor, with the original's own sentence, and nothing taken.
+    const cash = tower.cash;
+    const wrongFloor = applyAction(world, { type: 'build', what: 'cathedral', floor: 98, left: 60 });
+    assert(!wrongFloor.ok && /available only on the 100th floor/.test(wrongFloor.reason) && tower.cash === cash, wrongFloor.reason);
+    assert(tower.gates.cathedralPlaced === false, 'fixture: not latched by a refusal');
+    // The lifts to the top, then the building. The seam latches the gate.
+    const lifts = buildWeddingSpine(world, { column: 70 });
+    assert(lifts.ok, 'the lifts to the 100th floor build: ' + lifts.reason);
+    const chapel = applyAction(world, { type: 'build', what: 'cathedral', floor: CATHEDRAL_BASE_FLOOR, left: 60 });
+    assert(chapel.ok, 'the cathedral builds: ' + chapel.reason);
+    assert(tower.gates.cathedralPlaced === true, 'placing it latched the gate, with no other edit');
+    assert(!says().includes('a cathedral on') && says().includes('a wedding with 40 guests'), 'what is left is the wedding: ' + says());
+    // A weekday evening and a weekday morning: nothing happens, and the rank is not given.
+    step(1800, WEEKDAY);
+    assert(tower.starCount === 5, 'the cathedral alone is not the Tower rank');
+    // A weekend morning (day 2, tick 0 wakes the guests), and the forty ride the real lifts up.
+    step(0, WEEKEND);
+    assert(cathedralGuests(tower).length === 40 && cathedralGuests(tower).every((g) => g.state === GUEST_STATE.waiting), 'the guests are woken at tick 0');
+    let riseTick = null;
+    for (let i = 0; i < 700 && riseTick === null; i++) {
+      scheduler.tick(tower);
+      if (tower.starCount === TOWER_RANK) riseTick = tower.clock.dayTick;
+    }
+    assert(riseTick !== null && riseTick < WEDDING_DEADLINE_TICK, 'a weekend morning, forty guests, the lifts: the Tower rank by tick ' + riseTick);
+    assert(tower.gates.weddingGuestsArrived === WEDDING_GUESTS, 'the sim counted them: ' + tower.gates.weddingGuestsArrived);
+    assert(tower.finale && tower.finale.day === WEEKEND, 'and recorded the moment: ' + JSON.stringify(tower.finale));
     assert(noticesAfter(tower, 0).at(-1).text === 'The tower has earned the Tower rank', 'and it said so');
     assert(says() === 'Tower rank - the top of the ladder', says());
     assert(starGlyph(tower.starCount) === '★★★★★', 'five stars drawn');
@@ -543,7 +594,7 @@ export const tests = {
   // ============================================================ the harness proof
 
   'harness: a scripted player reading the bar climbs 1 -> Tower, every rung inside its window'() {
-    const r = ladderTrial({ days: 14 });
+    const r = ladderTrial();
     assert(r.finalStar === TOWER_RANK, 'it reached the Tower rank, not ' + r.finalStar + ': ' + r.perDay.map((d) => d.star).join(''));
     assert(r.rises.map((x) => x.text).join('|') === [2, 3, 4, 5].map((n) => 'The tower has reached ' + n + ' stars').concat('The tower has earned the Tower rank').join('|'),
       'five announcements, in order: ' + r.rises.map((x) => x.text).join(' | '));
@@ -568,9 +619,15 @@ export const tests = {
     assert(r.perDay.some((d) => d.star === 4 && d.hud.includes('every demand answered (Office workers demand Parking)')),
       'at four stars the bar says the tower still wants parking');
     assert(r.perDay.some((d) => d.star === 5 && d.hud.startsWith('Next: Tower - ')), 'and at five it asks for the Tower rank');
-    // The stand-ins were set, and only those.
-    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,officeServiceOk,weddingGuestsArrived',
-      'stand-ins: ' + Object.keys(r.flagsSetOn));
+    // **No gate flag was written by the script** (issue #17): its one stand-in is the population ledger's
+    // "crowd". The sim opened every gate itself, and the report says on which day.
+    assert(Object.keys(r.flagsSetOn).length === 0, 'the script wrote flags: ' + Object.keys(r.flagsSetOn));
+    assert(['officeServiceOk', 'vipStayFavorable', 'cathedralPlaced', 'weddingGuestsArrived'].every((k) => k in r.realOn),
+      'the sim opened all four of the issue-14 pending gates: ' + JSON.stringify(r.realOn));
+    assert(r.inspections?.pass === true && r.inspections.floor > 0, 'a real inspector passed a real office: ' + JSON.stringify(r.inspections));
+    assert(built.has('lifts to the 100th floor') && built.has('cathedral'), 'the script built the lifts and the cathedral through the seam: ' + [...built]);
+    assert(r.cathedralPlacedDay !== null && r.cathedralPlacedDay < tower.day, 'the cathedral stood before the wedding');
+    assert(r.weddingTick !== null && r.weddingTick < WEDDING_DEADLINE_TICK, 'the fortieth guest arrived at tick ' + r.weddingTick);
     // ...and the VIP is not one of them (issue #16): a real visitor booked a real suite, rode the
     // real lifts and was pleased, which is what opened 3 -> 4.
     const vip = r.world.tower.events.history.filter((h) => h.kind === 'vip').map((h) => h.outcome);
@@ -616,7 +673,6 @@ export const tests = {
       assert(kinds.has(kind), 'the ladder never asks for a ' + kind);
     }
     const unbuildable = [...kinds].filter((k) => !buildable(k));
-    assert(unbuildable.sort().join() === 'cathedral',
-      'only the cathedral (issue #17) has no palette entry now: ' + unbuildable);
+    assert(unbuildable.length === 0, 'the cathedral (issue #17) was the last; nothing the ladder asks for is missing from the palette: ' + unbuildable);
   },
 };

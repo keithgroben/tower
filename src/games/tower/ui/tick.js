@@ -44,6 +44,8 @@ import { RECYCLING_CHECK, updateRecyclingState } from '../sim/recycling.js';
 import { rebuildParkingCoverage } from '../sim/parking.js';
 import { metroTrainTick } from '../sim/metro.js';
 import { announceSanta, eventsTick, runDailyEvents } from '../sim/events.js';
+import { activateWeddingGuests } from '../sim/cathedral.js';
+import { runDailyInspection } from '../sim/inspection.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -140,7 +142,12 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
       // Issue #13: the ramps' reach is re-read at the start of the day too
       // (`specs/COMMANDS.md`: *"parking ramps force a parking coverage and demand-history
       // rebuild"*; `specs/TIME.md` § 0 step 3).
-      0: (t) => { rebuildRouteTables(t); refreshStartOfDayGates(t); rebuildParkingCoverage(t); },
+      //
+      // Issue #17: the cathedral's guests are woken here (`TIME.md` § 0 step 6, after the
+      // route tables they are about to ask are rebuilt and the day's wedding count is zeroed).
+      0: (t) => {
+        rebuildRouteTables(t); refreshStartOfDayGates(t); rebuildParkingCoverage(t); activateWeddingGuests(t);
+      },
       /**
        * `specs/facility/COMMERCIAL.md` § Capacity, the daily recompute. It
        * runs at 240 rather than 0 because 240 is also the tick every venue's
@@ -156,7 +163,12 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
       //
       // Step 3 of the same checkpoint is the event check - *"`fire` before `bomb`"* - and it
       // goes LAST, after the rebuilds, as the spec orders it (`sim/events.js` `runDailyEvents`).
-      [REBUILD_TICK]: (t) => { runCommercialRebuild(t); runEntertainmentRebuild(t); runDailyEvents(t); },
+      //
+      // Issue #17: the office-service evaluation's daily check goes last, after the events
+      // have drawn what they draw (`sim/inspection.js`).
+      [REBUILD_TICK]: (t) => {
+        runCommercialRebuild(t); runEntertainmentRebuild(t); runDailyEvents(t); runDailyInspection(t);
+      },
       /**
        * The off-hours closure sweep: the day's visitors become the day's
        * money, and every venue closes to new customers. This is where a fast
