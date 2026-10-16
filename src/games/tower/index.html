@@ -128,8 +128,21 @@
      on the bar with everything else. The stars are the state, the clause is the
      only part a player can act on, so the clause gets the readable colour and
      the stars stay quiet. */
-  #stars { color: var(--warn); letter-spacing: -1px; flex-shrink: 0; }
-  #goal { color: #9fb3c8; }
+  #stars { color: var(--warn); letter-spacing: -1px; flex-shrink: 0; display: inline-block; }
+  /* The goal says EVERYTHING missing for the next rung (issue #14), which is a sentence
+     and not a number: it takes the row under the readouts and wraps there, instead of
+     pushing the lease count and the stress off the bar. */
+  #goal { color: #9fb3c8; order: 1; flex: 1 1 100%; white-space: normal; line-height: 1.35; }
+  /* A rung climbed. Same rule as the lease counter's bump: the timer in `main.js` resets it. */
+  #stars.rise { animation: rise 1500ms ease-out; color: var(--good); }
+  @keyframes rise {
+    0%   { transform: scale(1); }
+    15%  { transform: scale(1.6); }
+    100% { transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #stars.rise { animation: none; }
+  }
   /* What the tower is demanding back. Warm, because it is a request and not an error. */
   #demands { color: var(--warn); font-weight: 700; }
 

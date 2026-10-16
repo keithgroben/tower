@@ -14,7 +14,7 @@ import { CONSTRUCTION_COST, TYPE_CODES } from '../src/games/tower/sim/economy.js
 import { FAMILY, createTower, placeObject } from '../src/games/tower/sim/state.js';
 import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
 import {
-  MAX_STAR, STAR_REQUIREMENT, STAR_THRESHOLDS, activityForStar, createStarGates,
+  MAX_STAR, STAR_REQUIREMENT, STAR_THRESHOLDS, TOWER_RANK, activityForStar, createStarGates,
   isUnlocked, lockReason, notePlacement, refreshStartOfDayGates, resetStarGateState,
   starCountForActivity, starGateStatus, starGatesOf, starRequirementFor,
   towerActivity, tryAdvanceStar,
@@ -39,8 +39,9 @@ function towerAt(star, { activity = 0, gates = {}, evening = true, calendarPhase
 
 /** Every gate a tier needs, so a test can remove exactly one and watch it fail. */
 const ALL_GATES = {
-  securityPlaced: true, officePlaced: true, metroPlaced: true,
-  recyclingAdequate: true, medicalServiceOk: true, officeServiceOk: true, routesViable: true,
+  securityPlaced: true, officePlaced: true, suitePlaced: true, metroPlaced: true,
+  recyclingAdequate: true, medicalServiceOk: true, officeServiceOk: true, vipStayFavorable: true,
+  routesViable: true,
 };
 
 export const tests = {
@@ -175,11 +176,14 @@ export const tests = {
    * a checklist test that only checks the all-pass case passes just as happily
    * when a gate has been quietly deleted.
    */
-  'three to four needs every one of its five gates'() {
+  'three to four needs every one of its seven gates'() {
     // `specs/GAME-STATE.md`: "office placed, recycling adequate, office-service
     // evaluation passed, route viability true" - and (issue #13) the daily medical
-    // flag `specs/facility/MEDICAL.md` § Progression Gate adds (`spec/DEVIATIONS.md` A52).
-    const required = ['officePlaced', 'recyclingAdequate', 'medicalServiceOk', 'officeServiceOk', 'routesViable'];
+    // flag `specs/facility/MEDICAL.md` § Progression Gate adds (`spec/DEVIATIONS.md` A52),
+    // and (issue #14) the suites and the favorable VIP stay the help file and the issue
+    // add (A59, A60).
+    const required = ['officePlaced', 'suitePlaced', 'recyclingAdequate', 'medicalServiceOk', 'officeServiceOk',
+      'vipStayFavorable', 'routesViable'];
     for (const flag of required) {
       const tower = towerAt(3, { activity: 5000, gates: { ...ALL_GATES, [flag]: false } });
       assert(!tryAdvanceStar(tower).advanced,
@@ -187,7 +191,7 @@ export const tests = {
     }
     const ready = towerAt(3, { activity: 5000, gates: ALL_GATES });
     assert(tryAdvanceStar(ready).advanced && ready.starCount === 4,
-      'a tower with all five gates did not reach 4 stars');
+      'a tower with all seven gates did not reach 4 stars');
   },
 
   'four to five needs a metro station, recycling, medical service and route viability'() {
@@ -206,7 +210,7 @@ export const tests = {
       const activity = star === 3 ? 5000 : 10_000;
       const morning = towerAt(star, { activity, gates: ALL_GATES, evening: false });
       assert(!tryAdvanceStar(morning).advanced, star + ' stars advanced in the morning');
-      assert(starGateStatus(morning).blockers.includes('the evening'),
+      assert(starGateStatus(morning).blockers.includes('the evening (after 5 PM)'),
         'the morning refusal reads: ' + starGateStatus(morning).blockers.join(' · '));
 
       const phase = towerAt(star, { activity, gates: ALL_GATES, calendarPhase: true });
@@ -361,10 +365,17 @@ export const tests = {
     assert(!status.ready, 'a tower short of activity reports ready');
   },
 
-  'a five-star tower is told the ladder is over, not that it is nearly there'() {
-    const status = starGateStatus(towerAt(MAX_STAR, { activity: 99_999, gates: ALL_GATES }));
-    assert(status.nextStar === null, 'a 5-star tower has a next star of ' + status.nextStar);
-    assert(!status.ready && status.blockers.length === 1, 'the top of the ladder reports ready');
+  'a five-star tower is asked for the cathedral; only the Tower rank is told the ladder is over'() {
+    // Issue #14: the fifth star is not the end - `EVALUATION.md` § Award Check awards
+    // `star_count = 6`. A 5-star tower with nothing yet is told what the Tower rank wants.
+    const five = starGateStatus(towerAt(MAX_STAR, { activity: 99_999, gates: ALL_GATES }));
+    assert(five.nextStar === 6 && !five.ready, 'a 5-star tower has a next rung of ' + five.nextStar);
+    assert(five.blockers.some((b) => /cathedral/.test(b)) && five.blockers.some((b) => /wedding/.test(b)),
+      'and it names the cathedral and the wedding: ' + five.blockers.join(' · '));
+
+    const top = starGateStatus(towerAt(TOWER_RANK, { activity: 99_999, gates: ALL_GATES }));
+    assert(top.nextStar === null, 'the Tower rank has a next star of ' + top.nextStar);
+    assert(!top.ready && top.blockers.length === 1, 'the top of the ladder reports ready');
   },
 
   'activityForStar names the threshold each rung asks for'() {

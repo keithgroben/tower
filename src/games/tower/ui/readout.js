@@ -14,7 +14,7 @@
  * HUD from a broken game, and the first thing they distrust is the game.
  */
 import { stressBand } from '../sim/stress.js';
-import { MAX_STAR } from '../sim/progression.js';
+import { MAX_STAR, TOWER_RANK } from '../sim/progression.js';
 import { VENUE, VISITOR_BANDS, closurePayout, venueOf } from '../sim/commercial.js';
 import { RENT_TIERS } from '../sim/economy.js';
 import { FAMILY, OBJECT_TYPE } from '../sim/state.js';
@@ -162,67 +162,103 @@ export function starGlyph(star, max = MAX_STAR) {
   return '★'.repeat(filled) + '☆'.repeat(max - filled);
 }
 
+/** How long a star rise stays on the line under the tower: long enough to be read twice. */
+export const STAR_RISE_MS = 7000;
+
 /**
- * The clause beside the stars: the one thing standing between this tower and
- * its next one.
+ * Which of a frame's new notices the line under the tower says, and how (issue #14).
  *
- * **One blocker, not a list.** `starGateStatus` orders them activity-first
- * deliberately — there is no point naming a metro station to somebody four
- * thousand tenants short of being asked for one — so the first is the one worth
- * a player's attention, and a bar is not a checklist.
+ * A frame can carry several; the line holds one. A star rise outranks a complaint -
+ * *"The tower has reached 3 stars"* must not be swallowed by a parking notice posted the
+ * same tick - and is drawn as good news and held longer. Otherwise the newest wins, as
+ * it always did. `rise` tells the caller to pulse the stars.
  *
- * ⚠️ **A named requirement this build cannot make says so.** Higher rungs ask
- * for a recycling centre and a metro station; neither has a family yet, let
- * alone a palette entry. (A security office does, since issue #12.) A player who spends an hour hunting
- * a button that does not exist stops believing the next thing the bar tells
- * them, and that credit is much harder to win back than a feature is to ship.
+ * @param {{text:string, good?:boolean}[]} fresh notices posted since the last look
+ * @returns {{text:string, ok:boolean, ms:number|null, rise:boolean}|null}
+ */
+export function noticeToSay(fresh) {
+  if (!fresh || fresh.length === 0) return null;
+  const rise = fresh.find((n) => n.good) ?? null;
+  const shown = rise ?? fresh[fresh.length - 1];
+  return { text: shown.text, ok: Boolean(rise), ms: rise ? STAR_RISE_MS : null, rise: Boolean(rise) };
+}
+
+/** The tooltip on the stars: the population the ladder counted, and what it left out. */
+export function starTitle(status) {
+  if (!status) return '';
+  return 'population ' + grouped(status.activity)
+    + (status.hotelsCounted === false ? ' (hotel guests no longer count toward stars)' : '');
+}
+
+/** `1,000`. The population the bar quotes is a figure a player compares, so it is grouped. */
+const grouped = (n) => Math.round(n).toLocaleString('en-US');
+
+/** `3 stars`, `Tower`: the rung a clause is about. */
+export const rungName = (star) => (star >= TOWER_RANK ? 'Tower' : star + (star === 1 ? ' star' : ' stars'));
+
+/**
+ * The clause beside the stars: **everything** standing between this tower and its
+ * next rung, in the words a player would use (issue #14):
  *
- * `buildable` decides that, and it is passed in rather than worked out here:
- * the UI knows what the palette holds, and matching a blocker's prose to a
- * buildable would be a rule inferred from a sentence.
+ *   `Next: 3 stars - need 1,000 population (now 640), a security office`
+ *   `Next: 4 stars - need 5,000 population (now 3,120), 2 hotel suites, a favorable VIP
+ *    stay (VIP visits are not in this build yet); wait for the evening (after 5 PM)`
+ *
+ * It lists the lot, not the first one: the bar's old "one blocker" answer left a
+ * player with eight things to discover one at a time, and the issue's point is that
+ * the game says exactly what is missing. Needs come first, joined by commas; what is
+ * only a wait (the evening, a weekday, a morning) follows the semicolon, because a
+ * player can build the one and can only sit through the other.
+ *
+ * ⚠️ **A named requirement this build cannot make says so**, in the same breath.
+ * Higher rungs ask for a metro station, a cathedral, a VIP's good opinion: some have
+ * no palette entry yet and some have no system behind them at all. A player who spends
+ * an hour hunting a button that does not exist stops believing the next thing the bar
+ * tells them, and that credit is much harder to win back than a feature is to ship.
+ * Two caveats, and they are different:
+ *
+ *   - `unavailable` on a blocker (from `sim/progression.js`): the SYSTEM that would
+ *     satisfy it is not in the build - the reason is printed as the sim wrote it.
+ *   - a `kind` the palette cannot build: *"(nothing builds one yet)"*.
+ *
+ * `buildable` decides the second, and it is passed in rather than worked out here:
+ * the UI knows what the palette holds, and matching a blocker's prose to a buildable
+ * would be a rule inferred from a sentence.
+ *
+ * Pure, and the population it quotes is `status.activity`, which is what the ladder
+ * itself compared - the bar cannot say 640 while the sim reads 700.
  *
  * @param status    from `starGateStatus(tower)`
- * @param buildable `(kind) => boolean`, or null while the sim reports blockers
- *                  as bare strings and buildability cannot be known
+ * @param buildable `(kind) => boolean`, or null when buildability cannot be known
  */
 export function starClause(status, buildable = null) {
   if (!status) return '';
-  if (status.nextStar === null) return status.blockers[0] ?? 'the top of the ladder';
-  if (status.ready) return 'ready for ' + (status.nextStar) + ' stars';
+  if (status.nextStar === null) return 'Tower rank - the top of the ladder';
+  const next = rungName(status.nextStar);
+  if (status.ready) return 'ready for ' + next;
 
-  // `blockerDetails` carries the same list with the requirement's `kind`
-  // beside each line; `blockers` is the prose alone. Preferring the detailed
-  // one is what lets the caveat below exist — without a kind there is no sound
-  // way to tell a requirement a player can satisfy from one they cannot.
-  const first = status.blockerDetails?.[0] ?? status.blockers[0];
-  if (first === undefined) return 'ready for ' + status.nextStar + ' stars';
+  const needs = [];
+  const waits = [];
+  // `starGateStatus` puts the population shortfall first, when there is one, and
+  // says it as "N more tower activity": the bar says the same fact as a target.
+  const entries = status.blockerDetails ?? status.blockers;
+  entries.forEach((entry, index) => {
+    if (index === 0 && !status.activityReady) {
+      const target = status.threshold ?? (status.activity + status.activityNeeded);
+      needs.push(grouped(target) + ' population (now ' + grouped(status.activity) + ')');
+      return;
+    }
+    const detail = typeof entry === 'string' ? { text: entry, kind: null } : entry;
+    let text = detail.text;
+    if (detail.unavailable) text += ' (' + detail.unavailable + ')';
+    else if (detail.kind && buildable && !buildable(detail.kind)) text += ' (nothing builds one yet)';
+    (detail.window ? waits : needs).push(text);
+  });
 
-  const text = typeof first === 'string' ? first : first.text;
-  const kind = typeof first === 'string' ? null : first.kind;
-
-  // The activity number is always actionable — build, and it moves — so it is
-  // stated bare, as a target.
-  if (!status.activityReady) return text;
-
-  if (kind && buildable) {
-    return buildable(kind)
-      ? 'waiting on: ' + text
-      : 'waiting on: ' + text + ' — nothing builds one yet';
-  }
-
-  // ⚠️ Buildability unknown, because the blocker arrived as a bare string.
-  //
-  // "waiting on:" implies *go and do it*, and at star 2 the requirement is a
-  // security office, which has no family and no palette entry — so that
-  // phrasing would send a player hunting a button that does not exist, which is
-  // precisely the credit that is hardest to win back. "next:" names the same
-  // requirement without promising it is available.
-  //
-  // Substring-matching the prose to work out the kind is not an option: "an
-  // office" and "a security office" both contain "office", and they are the two
-  // cases that differ. The fix is `kind` on the blocker; this is what the bar
-  // says honestly until then.
-  return 'next: ' + text;
+  const parts = [];
+  if (needs.length) parts.push('need ' + needs.join(', '));
+  if (waits.length) parts.push('wait for ' + waits.join(' and '));
+  return 'Next: ' + next + ' - ' + parts.join('; ');
 }
 
 // ------------------------------------------------------------------- venues

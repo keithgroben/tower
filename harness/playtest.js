@@ -26,13 +26,18 @@ import { newTowerWorld, seedDemoWorld } from '../src/games/tower/ui/seed.js';
 import { makeDriver } from '../src/games/tower/ui/driver.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../src/games/tower/sim/stress.js';
 import { BUILDABLE, applyAction } from '../src/games/tower/sim/actions.js';
-import { starGateStatus, towerActivity } from '../src/games/tower/sim/progression.js';
+import {
+  HOTEL_SUITES_FOR_FOUR_STARS, STAR_THRESHOLDS, WEDDING_GUESTS, starGateStatus, starGatesOf, starPopulation,
+  towerActivity,
+} from '../src/games/tower/sim/progression.js';
+import { SECURITY_OFFICES_FOR_THREE_STARS } from '../src/games/tower/sim/security.js';
+import { starClause } from '../src/games/tower/ui/readout.js';
 import { CARRIER_MODE } from '../src/games/tower/sim/elevators.js';
 import {
   CLOSURE_TICK, RESTAURANT_CLOSURE_TICK, closurePayout, venueOf,
 } from '../src/games/tower/sim/commercial.js';
 import { ENT_STATE, LOWER_ADVANCE_TICK, PARTY_ADVANCE_TICK } from '../src/games/tower/sim/entertainment.js';
-import { activeDemands, demandsOf } from '../src/games/tower/sim/demands.js';
+import { activeDemands, demandsOf, isDemanded, noticesAfter } from '../src/games/tower/sim/demands.js';
 import { OFFICE_STATE } from '../src/games/tower/sim/office.js';
 import { carsParked, usableSpaces } from '../src/games/tower/sim/parking.js';
 import { medicalCenters } from '../src/games/tower/sim/medical.js';
@@ -76,8 +81,10 @@ export function readout(world) {
     cash: ledger.cash,
     population: population(tower),
     stars: tower.starCount,
-    activity: towerActivity(tower),
-    blocking: starGateStatus(tower).missing ?? [],
+    // What the LADDER counts (hotel guests drop out from 3 stars), not the raw ledger.
+    activity: starPopulation(tower),
+    // What the bar says, word for word - the ladder's own account of what is missing.
+    hud: starClause(starGateStatus(tower), (kind) => Object.hasOwn(BUILDABLE, kind)),
   };
 }
 
@@ -455,7 +462,7 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
     let let_ = 0;
     for (const o of tower.objects.values()) if (o.family === FAMILY.office && isUnitLet(o)) let_++;
     const row = {
-      day: tower.clock.dayCounter, star: tower.starCount, activity: towerActivity(tower), let: let_,
+      day: tower.clock.dayCounter, star: tower.starCount, activity: starPopulation(tower), let: let_,
       blockers: status.blockers,
     };
     perDay.push(row);
@@ -469,6 +476,162 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
     security, days, offices, perDay, twoStarDay, threeStarDay, peakActivity, daysPastThreshold,
     finalStar: last.star, finalBlockers: last.blockers, earlyRefusal, securityCost, securityDay,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Issue #14: the complete star ladder.
+
+/**
+ * **The ladder trial.** One tower, one scripted player, the driver's own scheduler, and
+ * the whole climb from one star to the Tower rank - with every stand-in named.
+ *
+ * The player is `starClause`'s reader: each morning it looks at what the ladder says is
+ * missing and builds what the palette can make (a security office, two suites, a service
+ * lift and enough recycling centers, a clinic, a garage when the tower demands parking).
+ * Everything it builds is built through `applyAction`; nothing is written into a gate that
+ * a system in this build writes.
+ *
+ * ## The stand-ins, and why each one is honest
+ *
+ *  - **`crowd`**: a ledger bucket the script tops up each morning from 3 stars to the next
+ *    rung's population. A real 5,000-15,000 needs 800-2,500 offices; the trial's tower has
+ *    ~250 (1,500 people) and the point here is the gates, not the head-count. It is
+ *    counted exactly like any other bucket - recycling sizes itself to it - so the centers
+ *    the script builds are real and the trial still fails if there are too few.
+ *  - **`metroPlaced`** (issue #15), **`vipStayFavorable`** (issue #16), **`officeServiceOk`**,
+ *    **`cathedralPlaced`** and the wedding's **`weddingGuestsArrived`** (issue #17): set by
+ *    the script the morning after the rung they belong to opens, on the first weekend
+ *    morning for the wedding. Each is the exact flag its issue will write.
+ *
+ * Returns the numbers; the CLI prints them and `test/ladder.test.js` asserts on the same
+ * function, so the harness and the test cannot disagree about what was run.
+ *
+ * @returns {{days:number, perDay:object[], rises:{star:number, day:number, tick:number}[],
+ *   finalStar:number, built:object[], refused:object[], hud:string}}
+ */
+export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('ladder trial: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  for (const column of [20, 50, 80, 110]) {
+    const shaft = must(applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: -1, top: floors + 1, column }), 'a lift');
+    for (let k = 0; k < 7; k++) must(applyAction(world, { type: 'add_car', carrierId: shaft.carrier.id }), 'a car');
+  }
+  let offices = 0;
+  for (let floor = 1; floor <= floors; floor++) {
+    // The first twelve tiles are kept clear for the service lift the recycling centers need.
+    for (let left = 12; left + BUILDABLE.office.width <= 150; left += BUILDABLE.office.width) {
+      if (applyAction(world, { type: 'build', what: 'office', floor, left }).ok) offices++;
+    }
+  }
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+
+  const built = [];
+  const refused = [];
+  const tryBuild = (action, label) => {
+    const result = applyAction(world, action);
+    (result.ok ? built : refused).push({ day: tower.clock.dayCounter, what: label, ...(result.ok ? {} : { reason: result.reason }) });
+    return result.ok;
+  };
+  const count = (family) => [...tower.objects.values()].filter((o) => o.family === family).length;
+  let serviceLift = false;
+  let spaces = 0;
+  const flagsSetOn = {};
+
+  /** The permanent population the buildings themselves put on the ledger (not the crowd). */
+  const realPopulation = () => {
+    const saved = tower.populationLedger.crowd ?? 0;
+    delete tower.populationLedger.crowd;
+    const real = starPopulation(tower);
+    if (saved) tower.populationLedger.crowd = saved;
+    return real;
+  };
+
+  /** The player's morning: read what is missing, build what can be built. */
+  const morning = () => {
+    const star = tower.starCount;
+    const status = starGateStatus(tower);
+    for (const d of status.blockerDetails) {
+      if (d.kind === 'security' && count(FAMILY.security) < SECURITY_OFFICES_FOR_THREE_STARS) {
+        tryBuild({ type: 'build', what: 'security', floor: -6, left: 60 }, 'security');
+      }
+      if (d.kind === 'hotelSuite') {
+        for (let i = count(FAMILY.hotelSuite); i < HOTEL_SUITES_FOR_FOUR_STARS; i++) {
+          tryBuild({ type: 'build', what: 'hotelSuite', floor: floors + 1, left: i * (BUILDABLE.hotelSuite.width + 1) }, 'hotelSuite');
+        }
+      }
+    }
+    // The clinic: the ladder only names it on a day a worker's trip has failed, so the
+    // player answers the notice as well - "Medical Center demanded near Lobby".
+    if ((isDemanded(tower, 'medical') || status.blockerDetails.some((d) => d.kind === 'medical')) && count(FAMILY.medical) === 0) {
+      tryBuild({ type: 'build', what: 'medical', floor: floors + 1, left: 120 }, 'medical');
+    }
+    if (star >= 3) {
+      // Recycling: a service lift to the basement, then enough centers for the activity
+      // the next rung asks for (the duty tier is activity per working center, < 2,500).
+      if (!serviceLift) {
+        serviceLift = tryBuild({ type: 'build_shaft', kind: 'service', bottom: -3, top: 2, column: 4 }, 'service lift');
+      }
+      const want = Math.min(6, Math.ceil((STAR_THRESHOLDS[star - 1] ?? 15_000) / 2400));
+      for (let i = count(FAMILY.recycling) / 2; serviceLift && i < want; i++) {
+        tryBuild({ type: 'build', what: 'recyclingCenter', floor: -3, left: 12 + i * 25 }, 'recycling center');
+      }
+      // The crowd: top up to the rung the tower is climbing, a little over.
+      const target = STAR_THRESHOLDS[star - 1] ?? 15_000;
+      tower.populationLedger.crowd = Math.max(0, target - realPopulation() + 60);
+      // Parking: the tower asks, the script answers - a ramp, then spaces 8 at a time.
+      if (isDemanded(tower, 'officeParking') || isDemanded(tower, 'suiteParking')) {
+        if (spaces === 0) tryBuild({ type: 'build', what: 'parkingRamp', floor: -1, left: 70 }, 'parking ramp');
+        for (let k = 0; k < 8 && spaces < 35; k++, spaces++) {
+          const left = spaces < 19 ? 71 + 4 * spaces : 66 - 4 * (spaces - 19);
+          tryBuild({ type: 'build', what: 'parkingSpace', floor: -1, left }, 'parking space');
+        }
+      }
+    }
+    // The stand-ins, the morning after the rung they belong to opens.
+    const gates = starGatesOf(tower);
+    const set = (flag, value = true) => {
+      if (gates[flag] === value) return;
+      gates[flag] = value;
+      flagsSetOn[flag] = tower.clock.dayCounter;
+    };
+    if (star === 3 && gates.suitePlaced) { set('vipStayFavorable'); set('officeServiceOk'); }
+    if (star === 4) set('metroPlaced');
+    if (star === 5) set('cathedralPlaced');
+  };
+
+  const perDay = [];
+  const rises = [];
+  let seenRise = 0;
+  for (let d = 0; d < days; d++) {
+    for (let t = 0; t < TICKS_PER_DAY; t++) {
+      scheduler.tick(tower);
+      const { dayTick, calendarPhase } = tower.clock;
+      if (dayTick === 30) morning();
+      // The wedding: 40 guests at the cathedral, a weekend morning, before tick 800.
+      if (dayTick === 300 && calendarPhase && tower.starCount === 5 && tower.gates.cathedralPlaced) {
+        tower.gates.weddingGuestsArrived = WEDDING_GUESTS;
+        flagsSetOn.weddingGuestsArrived ??= tower.clock.dayCounter;
+      }
+      for (const n of noticesAfter(tower, seenRise)) {
+        seenRise = n.id;
+        if (n.kind === 'starRise') rises.push({ day: n.day, tick: n.tick, text: n.text });
+      }
+    }
+    const status = starGateStatus(tower);
+    perDay.push({
+      day: tower.clock.dayCounter, star: tower.starCount, population: status.activity,
+      real: realPopulation(), hud: starClause(status, (kind) => Object.hasOwn(BUILDABLE, kind)),
+      recycling: tower.gates.recyclingAdequate, medical: tower.gates.medicalServiceOk,
+      demands: activeDemands(tower).map((x) => x.text),
+    });
+  }
+  const last = perDay[perDay.length - 1];
+  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, hud: last.hud };
 }
 
 // ---------------------------------------------------------------------------
@@ -994,6 +1157,27 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     }
     process.exit(0);
   }
+  if (process.argv.includes('--ladder')) {
+    // `node harness/playtest.js --ladder [days]` - the issue #14 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 14);
+    const r = ladderTrial({ days: trialDays });
+    console.log('star ladder trial: ' + r.offices + ' real offices, a scripted player reading the bar, ' + trialDays
+      + ' days. STAND-INS: the population above the real tenants ("crowd"), and the flags of issues 15-17.\n');
+    console.log('day  star  population  (real)  the bar says');
+    for (const row of r.perDay) {
+      console.log(String(row.day).padStart(3) + String(row.star).padStart(6) + String(row.population).padStart(12)
+        + String(row.real).padStart(8) + '  ' + row.hud);
+    }
+    console.log('\nrises: ' + (r.rises.map((x) => x.text.replace('The tower has ', '') + ' (day ' + x.day + ', tick ' + x.tick + ')').join('; ') || 'none'));
+    console.log('built: ' + [...new Set(r.built.map((b) => b.what))].join(', '));
+    const firstRefusals = new Map();
+    for (const b of r.refused) if (!firstRefusals.has(b.what)) firstRefusals.set(b.what, b.reason);
+    console.log('refused: ' + (r.refused.length
+      ? [...firstRefusals].map(([what, why]) => what + ' (first of ' + r.refused.filter((b) => b.what === what).length + '): ' + why).join(' | ')
+      : 'nothing'));
+    console.log('stand-in flags set on days: ' + JSON.stringify(r.flagsSetOn));
+    process.exit(0);
+  }
   if (process.argv.includes('--housekeeping')) {
     // `node harness/playtest.js --housekeeping [days]` - the issue #9 proof.
     const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 10);
@@ -1035,7 +1219,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
 
   console.log('seed ' + seed + ' · ' + days + ' days · ' + world.tower.objects.size + ' rooms, '
     + world.tower.carriers.length + ' lift(s), ' + world.tower.carriers[0].cars.length + ' car(s)\n');
-  console.log('day   let    moving   stress          cash        pop  ★  activity  waiting on');
+  console.log('day   let    moving   stress          cash        pop  ★  activity  the bar says');
   console.log('─'.repeat(88));
 
   let previous = null;
@@ -1067,7 +1251,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
       + '   ' + pad(r.stress === null ? '—' : r.stress + ' ' + r.band, 13)
       + ' ' + pad(money(r.cash), 11) + pad(delta, 12)
       + pad(r.population, 6) + pad(r.stars, 3) + pad(r.activity, 10)
-      + '  ' + (r.blocking.length ? r.blocking.join(', ') : '—')
+      + '  ' + r.hud
       + (did.length ? '   « ' + did.length + ' built' : ''),
     );
   }

@@ -102,8 +102,16 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * stars with no medical flag - blocked from 4 stars until the next day's start - and
  * with a lobby that suddenly costs money to keep, which is the case the version exists
  * for.
+ *
+ * v8 (issue #14, the complete star ladder) changes what the ladder COUNTS and ASKS: hotel
+ * guests drop out of the population from 3 stars, a retail shop's yesterday-customers
+ * join the ledger in a new bucket (`retailVisits`), `3 -> 4` wants hotel suites and a
+ * favorable VIP stay, `4 -> 5` wants every demand met, and `starCount` can now be 6 (the
+ * Tower rank) with four more star gates (`suitePlaced`, `vipStayFavorable`,
+ * `cathedralPlaced`, `weddingGuestsArrived`). A v7 file at four stars would resume past a
+ * VIP it never had, and one at five would resume at a rank the old ladder called the end.
  */
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

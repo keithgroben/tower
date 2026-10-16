@@ -25,8 +25,8 @@ import { isHotelInfested, isHotelRoomDirty } from '../sim/hotel.js';
 import { activeDemands, demandsOf, noticesAfter } from '../sim/demands.js';
 import { COMMERCIAL_FAMILY_CODES, FAMILY, isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
 import {
-  demandsReadout, entertainmentReadout, evictionNotice, hotelHealthReadout, infestationNotice, serviceReadout,
-  starClause, starGlyph, stressReadout, venueReadout,
+  demandsReadout, entertainmentReadout, evictionNotice, hotelHealthReadout, infestationNotice, noticeToSay,
+  serviceReadout, starClause, starGlyph, starTitle, stressReadout, venueReadout,
 } from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -350,12 +350,23 @@ const built = (tool, result) => (result.cost
  * action calls through here.
  */
 let sayTimer = null;
-function say(text, ok, { hold = false } = {}) {
+function say(text, ok, { hold = false, ms = null } = {}) {
   const el = $('answer');
   el.textContent = text ?? '';
   el.classList.toggle('bad', !ok);
   clearTimeout(sayTimer);
-  if (text && !hold) sayTimer = setTimeout(() => { el.textContent = ''; }, ok ? 2200 : 4000);
+  if (text && !hold) sayTimer = setTimeout(() => { el.textContent = ''; }, ms ?? (ok ? 2200 : 4000));
+}
+
+/** The stars jump when a rung is climbed; the timer (not `animationend`) puts them back, as `bumpLeases` does. */
+let riseTimer = null;
+function pulseStars() {
+  const el = $('stars');
+  clearTimeout(riseTimer);
+  el.classList.remove('rise');
+  void el.offsetWidth;
+  el.classList.add('rise');
+  riseTimer = setTimeout(() => el.classList.remove('rise'), 1600);
 }
 
 /**
@@ -513,7 +524,9 @@ function drawHud() {
   const fresh = noticesAfter(tower, lastNoticeId);
   if (fresh.length) {
     lastNoticeId = fresh[fresh.length - 1].id;
-    say(fresh[fresh.length - 1].text, false);
+    const notice = noticeToSay(fresh);
+    say(notice.text, notice.ok, { ms: notice.ms });
+    if (notice.rise) pulseStars();
   }
 
   // The loop's own number: the stress of a TYPICAL worker.
@@ -540,7 +553,7 @@ function drawHud() {
   // short, and the game never said so.
   const goal = starGateStatus(tower);
   $('stars').textContent = starGlyph(goal.star);
-  $('stars').title = goal.activity + ' tower activity';
+  $('stars').title = starTitle(goal);
   $('goal').textContent = starClause(goal, isBuildable);
 
   let waiting = 0;

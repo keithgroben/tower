@@ -118,6 +118,24 @@ export const PAYOUT_FAMILY = {
   [FAMILY.retail]: 'retail',
 };
 
+/**
+ * Where each commercial family's **yesterday's customers** go on the population ledger
+ * (issue #14; `COMMERCIAL.md` § Capacity step 7, `TIME.md` § 240 step 1).
+ *
+ * ⚠️ **Retail's are in a bucket of their own.** `retail` is the shop's `+10` lease
+ * population (`COMMERCIAL.md` § Retail Income Timing) and `onOpen` / a demolition move it
+ * by exactly ten; overwriting it with a footfall figure would replace a lease with
+ * a crowd. The reference clears the whole bucket at 240 and re-adds the visits, which
+ * would wipe every shop's `+10` each morning - the analysis doc and the issue both say the
+ * stars count *"yesterday's visitors ... plus 10 per open shop"*, so the two are summed,
+ * from two buckets. `spec/DEVIATIONS.md` A61.
+ */
+const VISITOR_POPULATION_BUCKET = {
+  [FAMILY.fastFood]: 'fastFood',
+  [FAMILY.restaurant]: 'restaurant',
+  [FAMILY.retail]: 'retailVisits',
+};
+
 /** Family code → the income/population bucket name. Built from the type table. */
 const BUCKET_BY_FAMILY = {
   [FAMILY.fastFood]: 'fastFood',
@@ -425,12 +443,8 @@ export function runCommercialRebuild(tower, families = null) {
   const ledger = ledgerFor(tower);
   const { rebuilt, visitors } = rebuildCommercialVenues(tower, families);
   for (const [family, count] of Object.entries(visitors)) {
-    const bucket = BUCKET_BY_FAMILY[family];
+    const bucket = VISITOR_POPULATION_BUCKET[family];
     if (!bucket) continue;
-    // Retail's bucket is its `+10`-per-shop lease population and is NOT the
-    // visitor count; overwriting it here would replace a lease figure with a
-    // footfall one. Only the venue-performance families report footfall.
-    if (bucket === 'retail') continue;
     ledger.population[bucket] = count;
   }
   return rebuilt;
