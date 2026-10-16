@@ -20,6 +20,7 @@ import { RENT_TIERS } from '../sim/economy.js';
 import { FAMILY, OBJECT_TYPE } from '../sim/state.js';
 import { pendingVisitors } from '../sim/medical.js';
 import { recyclingServed } from '../sim/recycling.js';
+import { metroCommuterCount, metroServed } from '../sim/metro.js';
 import { SPACE_CAPACITY, rampConnected } from '../sim/parking.js';
 import {
   PARTY_HALL_MIN_HOTEL_ROOMS, PHASE, filmTitle, hotelRoomCount, payoutFor, recordOf,
@@ -143,6 +144,10 @@ export function serviceReadout(object, tower) {
     case FAMILY.parkingSpace:
       return 'parking space · ' + (object.parking?.cars?.length ?? 0) + ' of ' + SPACE_CAPACITY + ' cars · '
         + (object.coverageFlag === 1 ? 'a ramp serves it' : 'BLOCKED - no ramp reaches it');
+    case FAMILY.metro:
+      return 'metro station · ' + metroCommuterCount(tower) + ' workers come by train and eat only underground · '
+        + (metroServed(tower) ? 'a lift reaches the platform' : 'NO lift reaches the platform, so nobody comes by train')
+        + ' · nothing can be built under it · cannot be bulldozed';
     case FAMILY.parkingRamp:
       return 'parking ramp · ' + (rampConnected(tower, object) ? 'meets the lobby' : 'CUT OFF from the lobby')
         + ' · serves the spaces beside it on this floor';

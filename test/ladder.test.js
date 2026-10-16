@@ -19,12 +19,14 @@
  * same `progression` hook the game runs every tick - not through `tryAdvanceStar`
  * called by hand.
  *
- * ⚠️ **Four gates are written by systems that are not in this build** (the metro station,
- * the VIP stay, the office-service evaluation and the cathedral wedding: issues #15-#17),
- * and a test cannot pretend otherwise. `futureFlags()` below sets them by hand, once, in
- * one place, labelled as stand-ins - the day an issue lands its writer, its line there
- * becomes a real placement or a real event and the test above it does not change. The
- * flags are the interface; this file pins the interface and everything on this side of it.
+ * ⚠️ **Three gates are written by systems that are not in this build** (the VIP stay, the
+ * office-service evaluation and the cathedral wedding: issues #16 and #17), and a test cannot
+ * pretend otherwise. `futureFlags()` below sets them by hand, once, in one place, labelled
+ * as stand-ins - the day an issue lands its writer, its line there becomes a real placement
+ * or a real event and the test above it does not change. The flags are the interface; this
+ * file pins the interface and everything on this side of it. (The metro station, issue #15,
+ * has its writer now: the walk below BUILDS one, through `applyAction`, and watches the
+ * `4 -> 5` gate refuse without it.)
  */
 import { EVENING_DAYPART, calendarPhaseFlag } from '../src/games/tower/sim/clock.js';
 import { TYPE_CODES } from '../src/games/tower/sim/economy.js';
@@ -67,14 +69,13 @@ function towerAt(star, { office = 0, ledger = null, gates = {}, dayTick = 1700, 
 }
 
 /**
- * ⚠️ **THE STAND-INS.** The four gates whose writers are issues #15, #16 and #17. This is
+ * ⚠️ **THE STAND-INS.** The gates whose writers are issues #16 and #17. This is
  * the only place a test sets them. Each one is the exact flag the future system writes;
  * `officeServiceOk` is cleared by every advance (`GAME-STATE.md`), so a walk has to set
  * it again before 3 -> 4.
  */
 const futureFlags = (tower, which = {}) => {
   Object.assign(starGatesOf(tower), {
-    metroPlaced: true,           // issue #15: a metro station placed
     vipStayFavorable: true,      // issue #16: a VIP stayed in a suite and rated the tower well
     officeServiceOk: true,       // issue #17: the cathedral guest reached an office that passed
     cathedralPlaced: true,       // issue #17: the cathedral stands
@@ -473,7 +474,7 @@ export const tests = {
     Object.assign(tower.gates, { suitePlaced: true, recyclingAdequate: true, medicalServiceOk: true, routesViable: true });
     step(1599, WEEKDAY);
     assert(tower.starCount === 3, 'not before 5 PM');
-    futureFlags(tower, { metroPlaced: false, cathedralPlaced: false, weddingGuestsArrived: 0 });
+    futureFlags(tower, { cathedralPlaced: false, weddingGuestsArrived: 0 });
     step(1700, WEEKEND);
     assert(tower.starCount === 3, 'not on a weekend');
     assert(says() === 'Next: 4 stars - wait for a weekday', says());
@@ -491,9 +492,11 @@ export const tests = {
     record('4 stars');
 
     // ---- 4 stars
-    assert(says().startsWith('Next: 5 stars - need 10,000 population (now 5,000), a metro station (nothing builds one yet)'), says());
+    // The metro station is on the palette now, so the bar sends the player to it.
+    assert(says().startsWith('Next: 5 stars - need 10,000 population (now 5,000), a metro station'), says());
+    assert(!says().includes('a metro station (nothing builds one yet)'), says());
     tower.populationLedger.office = 10_000;
-    Object.assign(tower.gates, { metroPlaced: true });        // issue #15
+    assert(tower.gates.metroPlaced === false, 'fixture: nothing has latched the metro gate');
     // The 1600 reset raised "The tower demands a Recycling Center" (this walk set the flag by
     // hand, with no center behind it); a real center answers it. Both stay on the bar until then.
     assert(isDemanded(tower, 'recycling'), 'fixture: the recycling demand is live, as the real 1600 check left it');
@@ -503,7 +506,14 @@ export const tests = {
       && says().includes('Office workers demand Parking'), 'live demands hold it: ' + says());
     clearDemand(tower, 'officeParking');
     clearDemand(tower, 'recycling');
+    // Everything met EXCEPT the station: the gate holds, and says what is missing.
     step(1701, WEEKDAY);
+    assert(tower.starCount === 4 && says() === 'Next: 5 stars - need a metro station', 'no metro, no five stars: ' + says());
+    // The real writer (issue #15): placing a station through the seam latches the gate.
+    const built = applyAction(world, { type: 'build', what: 'metroStation', floor: -10, left: 100 });
+    assert(built.ok, 'the station builds: ' + built.reason);
+    assert(tower.gates.metroPlaced === true, 'placing it latched the gate, with no other edit');
+    step(1702, WEEKDAY);
     assert(tower.starCount === 5, 'metro + demands met + 10,000: five stars. ' + says());
     record('5 stars');
 
@@ -556,13 +566,17 @@ export const tests = {
       'at four stars the bar says the tower still wants parking');
     assert(r.perDay.some((d) => d.star === 5 && d.hud.startsWith('Next: Tower - ')), 'and at five it asks for the Tower rank');
     // The stand-ins were set, and only those.
-    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,metroPlaced,officeServiceOk,vipStayFavorable,weddingGuestsArrived',
+    assert(Object.keys(r.flagsSetOn).sort().join() === 'cathedralPlaced,officeServiceOk,vipStayFavorable,weddingGuestsArrived',
       'stand-ins: ' + Object.keys(r.flagsSetOn));
+    // ...and the metro station was BUILT, by the script, through the seam, not flagged.
+    assert(built.has('metro station') && r.metroPlacedDay !== null && r.metroPlacedDay < five.day,
+      'the script built the station before the fifth star: ' + r.metroPlacedDay);
   },
 
   // =================================================== the save, and the version
 
   'the save carries the Tower rank and the new gates, and the version moved to 8'() {
+    // (Issue #15 moved it on to 9; the check is a floor, and test/metro.test.js pins the 9.)
     assert(SAVE_VERSION >= 8, 'the shape and the rules changed: ' + SAVE_VERSION);
     const world = newTowerWorld({ seed: 1 });
     world.tower.starCount = TOWER_RANK;
@@ -594,7 +608,7 @@ export const tests = {
       assert(kinds.has(kind), 'the ladder never asks for a ' + kind);
     }
     const unbuildable = [...kinds].filter((k) => !buildable(k));
-    assert(unbuildable.sort().join() === 'cathedral,metroStation',
-      'only the metro station (issue #15) and the cathedral (issue #17) have no palette entry: ' + unbuildable);
+    assert(unbuildable.sort().join() === 'cathedral',
+      'only the cathedral (issue #17) has no palette entry now: ' + unbuildable);
   },
 };

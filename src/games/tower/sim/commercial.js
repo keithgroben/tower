@@ -62,6 +62,7 @@ import { DAY_ADVANCE_TICK } from './clock.js';
 // queued customer re-resolve its route and throw away the wait it is accruing.
 import { emitsDistanceFeedback, shouldWaitForQueuedCarrier } from './routing.js';
 import { computeRuntimeTileStressAverage } from './stress.js';
+import { gatewayFloor, venueCustomerCommutes } from './metro.js';
 // The star-rated evaluation thresholds. `specs/FACILITIES.md` § Thresholds By
 // Star Rating is one rule and `sim/office.js` already owns it; a second copy
 // here is how a threshold ends up right in one family and wrong in the next.
@@ -661,13 +662,15 @@ function applyOccupancyBand(record) {
  * `CLAUDE.md`'s first entry, and the reason the lunch fallback below is keyed
  * on `null`.
  */
-export function selectVenue(tower, family, fromFloor) {
+export function selectVenue(tower, family, fromFloor, { undergroundOnly = false } = {}) {
   const zone = zoneBand(fromFloor);
   const bucket = [];
   for (const object of tower.objects.values()) {
     if (object.family !== family) continue;
     if (!venueOf(object)) continue;
-    if (zoneBand(object.floor) !== zone) continue;
+    // A metro commuter's bucket is every outlet below ground, wherever the desk is
+    // (`sim/metro.js`); everyone else's is the zone's, as the spec has it.
+    if (undergroundOnly ? object.floor >= GROUND_FLOOR : zoneBand(object.floor) !== zone) continue;
     bucket.push(object);
   }
   if (bucket.length === 0) return null;
@@ -781,11 +784,16 @@ export function commercialDispatch(tower, actor, object, clock, ctx) {
     // the 48 teleported into their seats without touching a lift: the whole
     // demand this file exists to generate, silently absent.
     const startingOut = !actor.venueCommitted;
+    // **Where the customer comes in from.** The street lobby - or, for a customer of an
+    // underground outlet in a tower with a metro station, the platform (issue #15,
+    // `sim/metro.js`: *"they bring in many customers ... all their shopping and eating
+    // only at outlets on the underground level"*).
+    const gateway = gatewayFloor(tower, venueCustomerCommutes(tower, actor, object), actor, clock.dayCounter);
     // Read BEFORE the commit block below writes the anchor. Computing it after
     // would make `startingOut ? LOBBY : anchor` and a bare `anchor` the same
     // expression — a guard that cannot be wrong is a guard nothing tests, and a
     // mutation run says so by leaving it alive.
-    const from = startingOut ? LOBBY_FLOOR : (actor.anchorFloor ?? LOBBY_FLOOR);
+    const from = startingOut ? gateway : (actor.anchorFloor ?? LOBBY_FLOOR);
     if (startingOut) {
       // `try_consume_commercial_venue_capacity`: the day's ceiling on how many
       // of the 48 actually travel. This is where the capacity limit bites, and
@@ -796,12 +804,23 @@ export function commercialDispatch(tower, actor, object, clock, ctx) {
       record.acquireCount += 1;
       record.cycleVisits += 1;
       actor.venueCommitted = true;
-      actor.anchorFloor = LOBBY_FLOOR;
+      actor.anchorFloor = gateway;
       ctx.onVenueVisit?.(object, record);
     }
 
-    const result = route(tower, actor, from, object.floor, clock, ctx);
-    const code = result.code ?? result;
+    let result = route(tower, actor, from, object.floor, clock, ctx);
+    let code = result.code ?? result;
+    // The platform is out of reach of every lift: the street lobby is used for the
+    // rest of the day, and the visit goes ahead from there (a worker's rule, applied
+    // to a customer - `sim/office.js`).
+    if (code === -1 && startingOut && gateway !== LOBBY_FLOOR) {
+      actor.metroRefusedDay = clock.dayCounter;
+      actor.anchorFloor = LOBBY_FLOOR;
+      actor.routeCarrier = null;
+      actor.spawnFloor = null;
+      result = route(tower, actor, LOBBY_FLOOR, object.floor, clock, ctx);
+      code = result.code ?? result;
+    }
 
     if (code === -1) {
       // A venue nobody can reach: give the capacity back and try again, so a
@@ -824,8 +843,15 @@ export function commercialDispatch(tower, actor, object, clock, ctx) {
   if (!minimumStayElapsed(actor, clock)) return { moved: false };
   releaseVenueSlot(record, actor, clock, { skipDwellGate: true });
 
-  const result = route(tower, actor, actor.anchorFloor ?? object.floor, LOBBY_FLOOR, clock, ctx);
-  const code = result.code ?? result;
+  // Home is where the day began: the platform, for a customer who came in by train.
+  const home = gatewayFloor(tower, venueCustomerCommutes(tower, actor, object), actor, clock.dayCounter);
+  let result = route(tower, actor, actor.anchorFloor ?? object.floor, home, clock, ctx);
+  let code = result.code ?? result;
+  if (code === -1 && home !== LOBBY_FLOOR) {
+    actor.metroRefusedDay = clock.dayCounter;
+    result = route(tower, actor, actor.anchorFloor ?? object.floor, LOBBY_FLOOR, clock, ctx);
+    code = result.code ?? result;
+  }
 
   if (code === -1) {
     actor.state = VENUE_STATE.parked;

@@ -150,7 +150,8 @@ let lastStress = null;
  *
  * It is what stops the goal clause naming a requirement as though a player could
  * go and place one when the palette has no such button: a security office can
- * be placed since issue #12, a recycling centre and a metro station cannot yet.
+ * be placed since issue #12, a recycling centre since #13 and a metro station since
+ * #15; the cathedral cannot yet.
  */
 const isBuildable = (kind) => Object.hasOwn(BUILDABLE, kind);
 

@@ -109,6 +109,17 @@ export const OBJECT_TYPE = {
   theaterLower: 0x13,
   partyHallUpper: 0x1d,
   partyHallLower: 0x1e,
+  /**
+   * **The metro station is a three-floor stack** (`specs/facility/METRO.md` § Identity):
+   * `0x1f` on the top (anchor) floor, `0x20` in the middle and `0x21` at the bottom,
+   * each its own placed object and all three carrying family `0x1f`, as a recycling
+   * center's two halves carry `0x14`. Only the top is priced (`sim/economy.js` has
+   * `TYPE_CODES.metroStation = 0x1f`), so the other two are charged no upkeep and the
+   * station is not paid for three times. `sim/metro.js`.
+   */
+  metroTop: 0x1f,
+  metroMiddle: 0x20,
+  metroBottom: 0x21,
 };
 
 export const FAMILY = {
@@ -174,6 +185,14 @@ export const FAMILY = {
    */
   theater: 0x12,
   partyHall: 0x1d,
+  /**
+   * The metro station's three floors (`specs/facility/METRO.md`; `ECONOMY.md` type
+   * `0x1f`). The family is the TOP floor's type, which is also what the star ladder's
+   * `metroPlaced` latch watches (`sim/progression.js` `PLACEMENT_GATES`); the middle
+   * and bottom floors are the same family with their own placed `type`. No actors:
+   * the commuters it brings are the tower's own workers, re-routed (`sim/metro.js`).
+   */
+  metro: 0x1f,
 };
 
 /**
@@ -183,7 +202,7 @@ export const FAMILY = {
  * demolish a parking space for evicting a tenant it never had.
  */
 export const SERVICE_FACILITY_FAMILIES = new Set([
-  FAMILY.medical, FAMILY.parkingSpace, FAMILY.parkingRamp, FAMILY.recycling,
+  FAMILY.medical, FAMILY.parkingSpace, FAMILY.parkingRamp, FAMILY.recycling, FAMILY.metro,
 ]);
 
 /** Families whose actors are **staff**: they work the tower, they do not live in it. */
@@ -304,6 +323,10 @@ export const POPULATION_CONTRIBUTION = {
   [FAMILY.parkingSpace]: 0,
   [FAMILY.parkingRamp]: 0,
   [FAMILY.recycling]: 0,
+  // The metro owns no actors and is no one's home: its commuters are office workers
+  // who are already counted where they work (`sim/metro.js`). An explicit `0` for the
+  // reason every row above gives - `population()` reads a missing key from `OCCUPANTS`.
+  [FAMILY.metro]: 0,
 };
 
 /** Families whose population is gated on a linked venue record rather than a lease. */

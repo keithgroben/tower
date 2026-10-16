@@ -52,6 +52,7 @@ const RENT_KEY = Object.fromEntries(
   Object.entries(TYPE_CODES).map(([name, code]) => [code, name]),
 );
 import { GROUND_FLOOR, TILES_PER_FLOOR, floorExists, floorLabel } from '../sim/state.js';
+import { shaftFloorLimit } from '../sim/metro.js';
 import { MAX_SERVED_SPAN, SHAFT_WIDTH } from '../sim/elevators.js';
 
 /** Rent tiers run 0 (dearest) to 3 (the one that always passes). */
@@ -123,7 +124,11 @@ export function lowestBuiltFloor(tower) {
   let lowest = GROUND_FLOOR;
   for (const o of tower.objects.values()) if (o.floor < lowest) lowest = o.floor;
   for (const c of tower.carriers) if (c.bottomFloor < lowest) lowest = c.bottomFloor;
-  return lowest;
+  // Nothing goes under the metro station (issue #15), and a shaft may reach no deeper than
+  // the floor under its platform - so with one standing, the span a click asks for stops
+  // there rather than at the station's own bottom floor, which the sim would refuse.
+  const limit = shaftFloorLimit(tower);
+  return limit === null ? lowest : Math.max(lowest, limit);
 }
 
 /**

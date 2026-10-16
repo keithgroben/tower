@@ -48,6 +48,7 @@ import {
 import { HK_STATE } from '../sim/housekeeping.js';
 import { pendingVisitors } from '../sim/medical.js';
 import { recyclingServed } from '../sim/recycling.js';
+import { metroServed, trainAtPlatform } from '../sim/metro.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR,
   floorExists, floorLabel, isBasement, isHotelFamily, isInTransit, isSkyLobbyFloor, isUnitLet,
@@ -425,6 +426,13 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
   // ramp is a one-tile strip.
   if (family === FAMILY.medical) return { name: 'medical', animation: night ? 'night' : 'day' };
   if (family === FAMILY.recycling) return { name: 'basement-utility', animation: 'idle' };
+  // The metro station (issue #15): three floors, each its own slice of the delivered
+  // `metro` sheet, and a train at the platform (`METRO.md`'s `+0xc` display variant `2`)
+  // swaps in the slice with the carriage in it.
+  if (family === FAMILY.metro) {
+    const floor = object.type === OBJECT_TYPE.metroTop ? 'top' : object.type === OBJECT_TYPE.metroMiddle ? 'middle' : 'bottom';
+    return { name: 'metro', animation: trainAtPlatform(object) ? floor + '-train' : floor };
+  }
   if (family === FAMILY.parkingRamp) return { name: 'parking-ramp', animation: 'tile' };
   if (family === FAMILY.parkingSpace) {
     const cars = object.parking?.cars?.length ?? 0;
@@ -671,6 +679,7 @@ export const SPRITE_USES = {
   condo: ['occupied-day', 'occupied-night', 'stressed'],
   hotel: ['booked-day', 'booked-night', 'poor-review'],
   housekeeping: ['day', 'night'],
+  metro: ['top', 'top-train', 'middle', 'middle-train', 'bottom', 'bottom-train'],
   security: ['day', 'night'],
   medical: ['day', 'night'],
   'parking-ramp': ['tile'],
@@ -1244,6 +1253,7 @@ export function makeRenderer(canvas, options = {}) {
       : o.family === FAMILY.security ? '#2a3f73'
       : o.family === FAMILY.medical ? '#3d6b66'
       : o.family === FAMILY.recycling ? '#3f4a3a'
+      : o.family === FAMILY.metro ? '#4a3a2c'
       : o.family === FAMILY.parkingSpace || o.family === FAMILY.parkingRamp ? '#2f3a46'
       : let_ ? KIND_COLOR[o.family] ?? INFO : 'rgba(120,132,148,0.35)';
     ctx.fillRect(x, y, w, L.fh - 2);
@@ -1336,6 +1346,9 @@ export function makeRenderer(canvas, options = {}) {
       if (waiting > 0) text = waiting + ' waiting';
     } else if (o.type === OBJECT_TYPE.recyclingUpper && !recyclingServed(tower, o)) {
       text = 'NO SERVICE LIFT';
+    } else if (o.type === OBJECT_TYPE.metroTop && !metroServed(tower)) {
+      // A platform no lift reaches brings nobody (`sim/metro.js`): said where it stands.
+      text = 'NO LIFT TO THE PLATFORM';
     }
     if (!text) return;
     ctx.fillStyle = 'rgba(11,15,20,0.72)';
@@ -1357,7 +1370,9 @@ export function makeRenderer(canvas, options = {}) {
    */
   function drawUnitSignals(L, o, tower) {
     if (VENUE.has(o.family) || ENTERTAINMENT_FAMILIES.has(o.family)) return void drawVenueSignal(L, o, tower);
-    if (o.family === FAMILY.medical || o.family === FAMILY.recycling) return void drawServiceSignal(L, o, tower);
+    if (o.family === FAMILY.medical || o.family === FAMILY.recycling || o.family === FAMILY.metro) {
+      return void drawServiceSignal(L, o, tower);
+    }
     if (!TENANTED.has(o.family) && !HOTEL.has(o.family)) return;
     const x = L.tileX(o.left);
     const y = L.floorY(o.floor);
