@@ -658,7 +658,7 @@ export const tests = {
   // ========================================================== save and load
 
   'a restaurant and a shop survive a save, record and all'() {
-    assert(SAVE_VERSION === 4, 'the save shape changed (issue #10), so the version is 4');
+    assert(SAVE_VERSION >= 4, 'the save shape changed (issue #10), so the version moved to at least 4: ' + SAVE_VERSION);
     const { world, tower, object: shop, record } = worldWith('retail');
     const eat = applyAction(world, { type: 'build', what: 'restaurant', floor: 1, left: 100 });
     assert(eat.ok, eat.reason);

@@ -54,6 +54,7 @@ import {
   recomputeRetailOperationalStatus, resetRetailCycle, retailShops,
 } from './commercial.js';
 import { condos, recomputeCondoOperationalStatus, revertCondoToUnsold } from './condo.js';
+import { rebuildEntertainment } from './entertainment.js';
 import { resetFacilitySimTripCounters } from './stress.js';
 import {
   DEFAULT_RENT_TIER, EXPENSE_BUCKETS, INCOME_BUCKETS, POPULATION_BY_FAMILY, TYPE_CODES,
@@ -462,6 +463,35 @@ export const restaurantRebuild = (tower) => runCommercialRebuild(tower, RESTAURA
  * money, and the venue closes to new customers. A quiet restaurant LOSES here.
  */
 export const restaurantClosure = (tower) => runCommercialClosure(tower, RESTAURANTS);
+
+// ------------------------------------------------------- entertainment
+
+/**
+ * **Checkpoint 240, step 2** - `rebuild_entertainment_family_ledger`: the two
+ * entertainment population buckets are cleared and re-added from the budgets the
+ * rebuild just seeded (`specs/TIME.md` § 240). *Assigned, not accumulated*, for
+ * the reason {@link runCommercialRebuild} gives: the bucket is always the whole
+ * of today, and an increment would grow for ever and inflate the star thresholds
+ * that read it. Empty when there are no venues, which is the *clear*.
+ */
+export function runEntertainmentRebuild(tower) {
+  const ledger = ledgerFor(tower);
+  const population = rebuildEntertainment(tower);
+  ledger.population.cinema = population[FAMILY.theater];
+  ledger.population.partyHall = population[FAMILY.partyHall];
+}
+
+/**
+ * The one moment entertainment moves money: a venue's day ends and it is paid
+ * (`sim/entertainment.js` `settle`). Cash through `addIncome` - clamped at the
+ * ceiling, mirrored into the venue's income bucket (`cinema` / `partyHall`).
+ */
+export function entertainmentHooks(tower) {
+  const ledger = ledgerFor(tower);
+  return {
+    onIncome: (_object, bucket, dollars) => addIncome(ledger, bucket, dollars),
+  };
+}
 
 // ------------------------------------------------------- checkpoint 2533
 

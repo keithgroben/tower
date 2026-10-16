@@ -77,8 +77,16 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * that phase's own limit, with the column stamped on the record (`activePhase`).
  * A v3 file's shops would resume as record-less or already-open shops with no
  * cycle history, and its fast food would read the wrong seed on a weekend.
+ *
+ * v5 (issue #11, movie theater and party hall) adds two families that are each TWO
+ * placed objects sharing one linked record (`object.venue` on the primary half,
+ * `object.entertainmentId` on both), each half carrying its own sixty / fifty
+ * visitors in the `0x20` / `0x03` / `0x01` / `0x22` / `0x05` machine, and a tower
+ * field, `events` (`bombActive`, `fireActive`), that entertainment reads to pay
+ * nothing on a bomb or fire day. A v4 file would load, but with no `events` the
+ * gate would read undefined, and a theater it never contained cannot be resumed.
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

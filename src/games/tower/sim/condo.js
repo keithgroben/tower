@@ -115,6 +115,7 @@ export const CONDO_NOISE_RADIUS = 30;
 export const CONDO_NOISE_FAMILIES = new Set([
   FAMILY.hotelSingle, FAMILY.hotelTwin, FAMILY.hotelSuite,
   FAMILY.restaurant, FAMILY.office, FAMILY.fastFood, FAMILY.retail,
+  FAMILY.theater, FAMILY.partyHall,
 ]);
 
 /** The countdown `0x10`'s dispatch seeds. `specs/PEOPLE.md` § Family 9 dispatch. */

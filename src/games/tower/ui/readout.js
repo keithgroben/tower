@@ -18,6 +18,9 @@ import { MAX_STAR } from '../sim/progression.js';
 import { VENUE, VISITOR_BANDS, closurePayout, venueOf } from '../sim/commercial.js';
 import { RENT_TIERS } from '../sim/economy.js';
 import { FAMILY } from '../sim/state.js';
+import {
+  PARTY_HALL_MIN_HOTEL_ROOMS, PHASE, filmTitle, hotelRoomCount, payoutFor, recordOf,
+} from '../sim/entertainment.js';
 
 // ------------------------------------------------------------------ stress
 
@@ -220,4 +223,29 @@ export function venueReadout(object) {
   const people = object.family === FAMILY.restaurant ? 'diners' : 'customers';
   return name + ' · ' + visitors + ' ' + people + ' today · closing pays ' + money(pays)
     + (next === undefined ? '' : ' · ' + next + ' pays ' + money(closurePayout(object.family, next)));
+}
+
+/**
+ * One line over a theater or a party hall: the film, and what the day is worth.
+ * Computed from the same payout the 1900 / 1600 checkpoint pays out of, so the
+ * line cannot promise a figure the sweep will not pay. Empty for anything else.
+ *
+ * `tower` is optional; with it a party hall can say WHY it is idle (no hotel
+ * rooms), which is the one thing a player cannot read off the building.
+ */
+export function entertainmentReadout(object, tower = null) {
+  const record = object?.family === FAMILY.theater || object?.family === FAMILY.partyHall
+    ? (tower ? recordOf(tower, object) : (object.venue ?? null)) : null;
+  if (!record) return '';
+  const live = record.phase >= PHASE.activated;
+  const attendance = live ? record.attendance : record.lastAttendance;
+  const pays = live ? payoutFor(record) : record.lastPayout;
+  if (record.variant === 'theater') {
+    return 'theater · showing ' + filmTitle(record.selector) + ' · '
+      + attendance + ' seats ' + (live ? 'today' : 'yesterday') + ' · pays ' + money(pays);
+  }
+  if (!live && tower && hotelRoomCount(tower) < PARTY_HALL_MIN_HOTEL_ROOMS) {
+    return 'party hall · no party without hotel rooms in the tower';
+  }
+  return 'party hall · ' + attendance + ' guests ' + (live ? 'today' : 'yesterday') + ' · pays ' + money(pays);
 }

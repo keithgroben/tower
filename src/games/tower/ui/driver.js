@@ -32,7 +32,13 @@ import {
 } from '../sim/hotel.js';
 import { housekeepingArrival, housekeepingFamilyHandler } from '../sim/housekeeping.js';
 import {
-  condoCashflowHooks, hotelCashflowHooks, officeCashflowHooks, restaurantRebuild, retailCashflowHooks,
+  LOWER_ACTIVATION_TICK, LOWER_ADVANCE_TICK, UPPER_ACTIVATION_TICK, UPPER_ADVANCE_TICK,
+  activateLowerHalves, activateUpperHalves, advanceLowerHalves, advancePartyHalls, advanceUpperHalves,
+  entertainmentArrival, entertainmentFamilyHandler, entertainmentNightReset, middayEntertainment,
+} from '../sim/entertainment.js';
+import {
+  condoCashflowHooks, entertainmentHooks, hotelCashflowHooks, officeCashflowHooks, restaurantRebuild,
+  retailCashflowHooks,
 } from '../sim/ledger-adapter.js';
 import { resolveRouteBetweenFloors } from '../sim/routing.js';
 import {
@@ -123,6 +129,7 @@ export function makeDriver(world, { observe } = {}) {
   const condoCashflow = condoCashflowHooks(tower);
   const hotelCashflow = hotelCashflowHooks(tower);
   const retailCashflow = retailCashflowHooks(tower);
+  const showMoney = entertainmentHooks(tower);
   const price = makeDelayPricer(tower);
 
   // The observers wrap, they do not replace. A `route` that forgot to return
@@ -164,7 +171,24 @@ export function makeDriver(world, { observe } = {}) {
     onOpen: retailCashflow.onOpen,
   });
 
+  // One handler for both entertainment families: a theater's audience and a party
+  // hall's guests run the same eight-state machine (`ENTERTAINMENT.md` § Entity
+  // State Machine); the placed type only decides which half's budget is spent.
+  const showHandler = entertainmentFamilyHandler({
+    resolveRoute,
+    onDelay: (delay, actor) => applyRoutingDelay(delay, actor),
+  });
+
   const scheduler = makeTowerScheduler(tower, {
+    /**
+     * The audience of a movie theater and the guests of a party hall (issue #11).
+     * They are activated by the checkpoints below, roll the gate, spend one unit of
+     * their half's budget and ROUTE to the venue floor - attendance is the count
+     * that arrived, and the day's money is read from it. No `onRent`/`onSale`:
+     * the venue is paid once, at the end of its day, by `entertainmentHooks`.
+     */
+    [FAMILY.theater]: showHandler,
+    [FAMILY.partyHall]: showHandler,
     [FAMILY.hotelSingle]: hotelHandler,
     [FAMILY.hotelTwin]: hotelHandler,
     [FAMILY.hotelSuite]: hotelHandler,
@@ -227,6 +251,8 @@ export function makeDriver(world, { observe } = {}) {
     [FAMILY.fastFood]: commercialArrival,
     [FAMILY.restaurant]: commercialArrival,
     [FAMILY.retail]: commercialArrival,
+    [FAMILY.theater]: entertainmentArrival,
+    [FAMILY.partyHall]: entertainmentArrival,
     // The arrival handlers are called `(actor, floor)`; the condo's needs its
     // object to step the countdown, and only the tower can answer that.
     [FAMILY.condo]: (actor, floor) => condoArrival(tower, actor, floor),
@@ -245,7 +271,11 @@ export function makeDriver(world, { observe } = {}) {
     // carries a guest overnight. `extraCheckpoints` holds one body per tick, so
     // the two families are chained here rather than the later one silently
     // replacing the earlier.
-    [CONDO_RESET_TICK]: (t) => { condoDailyReset(t); hotelDailyReset(t); },
+    //
+    // Entertainment's night is `TIME.md` § 2500 too (entertainment sims go to
+    // `0x27` with their aux fields cleared) and goes last: it touches only its
+    // own visitors.
+    [CONDO_RESET_TICK]: (t) => { condoDailyReset(t); hotelDailyReset(t); entertainmentNightReset(t); },
     // `specs/TIME.md` § 1600: the hotel pass, on the tick the check-in window
     // opens — spread the cockroaches, recompute each room and give a dirty one
     // its strike, then refresh the latches (`hotelMiddaySweep` runs all three, in
@@ -254,12 +284,24 @@ export function makeDriver(world, { observe } = {}) {
     // second key would silently replace this one. `TIME.md` § 1600 lists the
     // type-6 rebuild as step 1 and the hotel pass as steps 2-3, so the restaurant
     // call goes BEFORE the hotel's: the restaurants reopen and write the evening's
-    // capacity, and only then do the hotel guests start choosing one. (Issue #11's
-    // entertainment midday cycle, § 1600 step 7, goes AFTER the hotel pass in this
-    // same body.)
-    [HOTEL_SWEEP_TICK]: (t) => { restaurantRebuild(t); hotelMiddaySweep(t); },
-    // § 1200: the day's checkout count (the newspaper trigger's input) resets.
-    [HOTEL_SALE_RESET_TICK]: hotelSaleCountReset,
+    // capacity, and only then do the hotel guests start choosing one. The
+    // entertainment midday cycle (§ 1600 step 7, issue #11) goes AFTER the hotel
+    // pass in this same body, as the spec orders it: the party hall ends and is
+    // paid. ONE key still - a second would replace this one.
+    [HOTEL_SWEEP_TICK]: (t) => {
+      restaurantRebuild(t); hotelMiddaySweep(t); advancePartyHalls(t, showMoney);
+    },
+    // § 1200: the day's checkout count (the newspaper trigger's input) resets,
+    // and then (steps 2-3) the theaters are promoted and the party hall opens.
+    [HOTEL_SALE_RESET_TICK]: (t) => { hotelSaleCountReset(t); middayEntertainment(t); },
+    // The rest of the entertainment day, each on a tick nothing else owns:
+    // 1000 the theater's upper half opens, 1400 its lower half, 1500 the upper
+    // show ends (the audience goes shopping), 1900 the lower show ends and the
+    // theater is paid.
+    [UPPER_ACTIVATION_TICK]: activateUpperHalves,
+    [LOWER_ACTIVATION_TICK]: activateLowerHalves,
+    [UPPER_ADVANCE_TICK]: advanceUpperHalves,
+    [LOWER_ADVANCE_TICK]: (t) => { advanceLowerHalves(t, showMoney); },
   });
 
   return { scheduler, applyRoutingDelay, cashflow, condoCashflow, hotelCashflow };

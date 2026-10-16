@@ -17,7 +17,7 @@
  * A preview that re-implements the rules is the "rule written in four places"
  * mistake `CLAUDE.md` names: three copies predicting what the fourth will do.
  * So this file calls **the same exported functions `sim/actions.js` calls** —
- * `floorExists`, `spanBlocked`, `placementCost`, `chargeConstruction` — rather
+ * `floorExists`, `placementObstruction`, `buildCost`, `chargeConstruction` — rather
  * than restating any of them. `chargeConstruction` is handed a *copy* of the
  * ledger, so the real affordability rule runs and no money moves.
  *
@@ -29,10 +29,10 @@
  * **its** refusal, so a disagreement surfaces as a visible sentence rather than
  * as a ghost that lied.
  */
-import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, demolishRefusal, linkObstruction, lobbyFloorReason, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
+import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, buildCost, demolishRefusal, linkObstruction, lobbyFloorReason, placementObstruction, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
 import { lockReason } from '../sim/progression.js';
 import {
-  carCostForMode, chargeConstruction, payout, placementCost, CONSTRUCTION_COST, TYPE_CODES,
+  carCostForMode, chargeConstruction, payout, CONSTRUCTION_COST, TYPE_CODES,
 } from '../sim/economy.js';
 
 /**
@@ -51,7 +51,7 @@ import {
 const RENT_KEY = Object.fromEntries(
   Object.entries(TYPE_CODES).map(([name, code]) => [code, name]),
 );
-import { GROUND_FLOOR, TILES_PER_FLOOR, floorExists, floorLabel, spanBlocked } from '../sim/state.js';
+import { GROUND_FLOOR, TILES_PER_FLOOR, floorExists, floorLabel } from '../sim/state.js';
 import { MAX_SERVED_SPAN, SHAFT_WIDTH } from '../sim/elevators.js';
 
 /** Rent tiers run 0 (dearest) to 3 (the one that always passes). */
@@ -177,7 +177,7 @@ export function costOf(tower, command) {
   if (command.type === 'build') {
     const spec = BUILDABLE[command.what];
     if (!spec) return 0;
-    return placementCost(spec.cost, { tiles: spec.width, floor: command.floor, lobbyHeight: tower.lobbyHeight });
+    return buildCost(tower, spec, command.floor);
   }
   if (command.type === 'build_shaft') return CONSTRUCTION_COST[SHAFT_KIND[command.kind]?.cost] ?? 0;
   if (command.type === 'build_link') return CONSTRUCTION_COST[LINK_KIND[command.kind]?.cost] ?? 0;
@@ -242,7 +242,8 @@ export function preview(world, tool, target) {
   if (command.type === 'build') {
     const spec = BUILDABLE[command.what];
     const right = command.left + spec.width - 1;
-    const footprint = { kind: 'room', floor: command.floor, left: command.left, right };
+    // `floors` is how tall the thing is: a theater and a party hall stand on two.
+    const footprint = { kind: 'room', floor: command.floor, left: command.left, right, floors: spec.floors ?? 1 };
     if (!floorExists(command.floor)) return refuse('that floor is outside the tower', { cost, footprint });
     // In the seam's own order — after the floor check, before the span check —
     // and in the seam's own words. A refusal the sim has and the ghost does not
@@ -253,9 +254,10 @@ export function preview(world, tool, target) {
     }
     const wrongFloor = lobbyFloorReason(spec.family, command.floor);
     if (wrongFloor) return refuse(wrongFloor, { cost, footprint });
-    if (spanBlocked(tower, command.floor, command.left, right)) {
-      return refuse('something is already built there', { cost, footprint });
-    }
+    // The seam's own predicate: a single room's span, or both floors of a venue
+    // and a free slot in the 16-venue table.
+    const blocked = placementObstruction(tower, spec, command.floor, command.left);
+    if (blocked) return refuse(blocked, { cost, footprint });
     if (!affordable) return refuse(cannotAfford(cost, ledger), { cost, footprint });
     return { ok: true, cost, footprint, command };
   }

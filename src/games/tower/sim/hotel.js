@@ -103,10 +103,11 @@ export const HOTEL_NOISE_RADIUS = 20;
  * **A hotel counts offices.** Combined with the 20-tile radius that is the whole
  * placement lesson of this family: a hotel built beside an office bank starts
  * 60 points into a 150-point failure budget before a single guest has taken a
- * trip. Entertainment has no family code in this build yet (issue #11).
+ * trip. Entertainment joined with issue #11: a theater or a party hall on the same
+ * floor within the radius is noise too.
  */
 export const HOTEL_NOISE_FAMILIES = new Set([
-  FAMILY.restaurant, FAMILY.office, FAMILY.retail, FAMILY.fastFood,
+  FAMILY.restaurant, FAMILY.office, FAMILY.retail, FAMILY.fastFood, FAMILY.theater, FAMILY.partyHall,
 ]);
 
 // --------------------------------------------------------------- the bands
