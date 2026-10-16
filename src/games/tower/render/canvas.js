@@ -46,8 +46,10 @@ import {
   ENTERTAINMENT_FAMILIES, PHASE as SHOW_PHASE, entertainmentSignal, halfOf,
 } from '../sim/entertainment.js';
 import { HK_STATE } from '../sim/housekeeping.js';
+import { pendingVisitors } from '../sim/medical.js';
+import { recyclingServed } from '../sim/recycling.js';
 import {
-  FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, TILES_PER_FLOOR,
+  FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR,
   floorExists, floorLabel, isBasement, isHotelFamily, isInTransit, isSkyLobbyFloor, isUnitLet,
 } from '../sim/state.js';
 import { computeRuntimeTileStressAverage, stressBand } from '../sim/stress.js';
@@ -417,6 +419,17 @@ export function objectSprite(object, { night = false, stressed = false } = {}) {
   if (family === FAMILY.lobby) return { name: 'lobby', animation: night ? 'night' : 'day' };
   if (family === FAMILY.housekeeping) return { name: 'housekeeping', animation: night ? 'night' : 'day' };
   if (family === FAMILY.security) return { name: 'security', animation: night ? 'night' : 'day' };
+  // The service facilities (issue #13). A clinic is lit by night; the garage floor
+  // shows how many cars are in it, from the delivered `basement-parking` sheet; the
+  // recycling center is the delivered `basement-utility` plant, both floors; the
+  // ramp is a one-tile strip.
+  if (family === FAMILY.medical) return { name: 'medical', animation: night ? 'night' : 'day' };
+  if (family === FAMILY.recycling) return { name: 'basement-utility', animation: 'idle' };
+  if (family === FAMILY.parkingRamp) return { name: 'parking-ramp', animation: 'tile' };
+  if (family === FAMILY.parkingSpace) {
+    const cars = object.parking?.cars?.length ?? 0;
+    return { name: 'basement-parking', animation: cars >= 2 ? 'two-cars' : cars === 1 ? 'one-car' : 'empty' };
+  }
   // The two entertainment venues, a sheet each. The half is the placed type; the
   // primary half (the one with the linked record) lights up while the venue's
   // day is running - a theater's upper floor while a show is on, a party hall's
@@ -659,6 +672,10 @@ export const SPRITE_USES = {
   hotel: ['booked-day', 'booked-night', 'poor-review'],
   housekeeping: ['day', 'night'],
   security: ['day', 'night'],
+  medical: ['day', 'night'],
+  'parking-ramp': ['tile'],
+  'basement-parking': ['empty', 'one-car', 'two-cars'],
+  'basement-utility': ['idle'],
   restaurant: ['day', 'night'],
   theater: ['upper', 'lower', 'showing'],
   'party-hall': ['upper', 'lower', 'party'],
@@ -692,8 +709,6 @@ export const SPRITE_USES = {
  * and adding the family that uses one forces its removal from here.
  */
 export const SPRITE_NOT_YET_DRAWN = {
-  'basement-parking': 'parking is an object type nothing places yet (sim/economy.js prices it, sim/state.js has no family)',
-  'basement-utility': 'same — no utility family',
   'palette-icons': 'no build palette in this shell; placement is seeded, not clicked',
   placeholder: 'the loader fallback sheet, deliberately never drawn',
 };
@@ -1227,6 +1242,9 @@ export function makeRenderer(canvas, options = {}) {
     ctx.fillStyle = o.family === FAMILY.lobby ? '#2b3a4d'
       : o.family === FAMILY.housekeeping ? '#1f5560'
       : o.family === FAMILY.security ? '#2a3f73'
+      : o.family === FAMILY.medical ? '#3d6b66'
+      : o.family === FAMILY.recycling ? '#3f4a3a'
+      : o.family === FAMILY.parkingSpace || o.family === FAMILY.parkingRamp ? '#2f3a46'
       : let_ ? KIND_COLOR[o.family] ?? INFO : 'rgba(120,132,148,0.35)';
     ctx.fillRect(x, y, w, L.fh - 2);
 
@@ -1254,6 +1272,18 @@ export function makeRenderer(canvas, options = {}) {
         sprites.drawSprite(ctx, { ...wing, x: x + w - cellW, y, scale: L.zoom });
       }
       ctx.restore();
+    }
+
+    // A space no ramp serves is blocked: a red X across the bay (`PARKING.md`: an
+    // unreached space is drawn blocked), so a garage that is not connected to the
+    // lobby says so where it stands instead of looking like a place to park.
+    if (o.family === FAMILY.parkingSpace && o.coverageFlag !== 1) {
+      ctx.strokeStyle = BAD;
+      ctx.lineWidth = Math.max(1, L.zoom);
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + 3); ctx.lineTo(x + w - 2, y + L.fh - 5);
+      ctx.moveTo(x + w - 2, y + 3); ctx.lineTo(x + 2, y + L.fh - 5);
+      ctx.stroke();
     }
   }
 
@@ -1290,6 +1320,33 @@ export function makeRenderer(canvas, options = {}) {
   }
 
   /**
+   * The one thing worth saying over a clinic or a recycling center (issue #13): how
+   * many workers are waiting to be seen, and a center no service lift reaches - which
+   * is the whole of what makes it count (`sim/recycling.js`). Nothing else: the rest is
+   * a number on the HUD or a notice, and a sign on every room is noise.
+   */
+  function drawServiceSignal(L, o, tower) {
+    const x = L.tileX(o.left);
+    const y = L.floorY(o.floor);
+    const w = (o.right - o.left + 1) * L.tw;
+    if (x + w < 0 || x > W || y + L.fh < 0 || y > H || L.fh < 14) return;
+    let text = '';
+    if (o.family === FAMILY.medical) {
+      const waiting = pendingVisitors(o);
+      if (waiting > 0) text = waiting + ' waiting';
+    } else if (o.type === OBJECT_TYPE.recyclingUpper && !recyclingServed(tower, o)) {
+      text = 'NO SERVICE LIFT';
+    }
+    if (!text) return;
+    ctx.fillStyle = 'rgba(11,15,20,0.72)';
+    ctx.fillRect(x + 1, y + 2, w - 2, Math.min(11, L.fh * 0.4));
+    ctx.fillStyle = o.family === FAMILY.medical ? INFO : WARN;
+    ctx.textAlign = 'center';
+    ctx.font = '700 8px ui-monospace, monospace';
+    ctx.fillText(text, x + w / 2, y + Math.min(10, L.fh * 0.36));
+  }
+
+  /**
    * What the room SAYS: its lease status, and one dot per occupant coloured by
    * that person's stress band.
    *
@@ -1300,6 +1357,7 @@ export function makeRenderer(canvas, options = {}) {
    */
   function drawUnitSignals(L, o, tower) {
     if (VENUE.has(o.family) || ENTERTAINMENT_FAMILIES.has(o.family)) return void drawVenueSignal(L, o, tower);
+    if (o.family === FAMILY.medical || o.family === FAMILY.recycling) return void drawServiceSignal(L, o, tower);
     if (!TENANTED.has(o.family) && !HOTEL.has(o.family)) return;
     const x = L.tileX(o.left);
     const y = L.floorY(o.floor);

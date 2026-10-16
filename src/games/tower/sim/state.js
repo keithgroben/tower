@@ -84,6 +84,19 @@ export const OBJECT_TYPE = {
    */
   security: 0x0e,
   /**
+   * **The three things the tower demands back** (issue #13). Type codes are
+   * `specs/ECONOMY.md` § Construction Costs: medical `0x0d`, parking space `0x0b`,
+   * parking ramp `0x2c`, and the recycling center's two floors `0x14` (upper) and
+   * `0x15` (lower, `specs/facility/RECYCLING.md` § Identity). None of them owns an
+   * actor: a medical center is a clinic the office workers visit, a parking space
+   * holds cars, a recycling center is a number the star ladder reads.
+   */
+  medical: 0x0d,
+  parkingSpace: 0x0b,
+  parkingRamp: 0x2c,
+  recyclingUpper: 0x14,
+  recyclingLower: 0x15,
+  /**
    * The two entertainment venues are TWO-FLOOR facilities, and each floor is its
    * own placed object (`specs/facility/ENTERTAINMENT.md` § Placed-Object Types:
    * *"Adjacent type codes denote upper and lower halves, base type = upper,
@@ -144,6 +157,16 @@ export const FAMILY = {
    */
   security: 0x0e,
   /**
+   * `specs/FACILITIES.md` § Type codes: `13` Medical Center, `11` Parking Space,
+   * `44` Parking Ramp, `20` Recycling Center. Both halves of a recycling center
+   * carry the one family, as both halves of a theater do; the half is the placed
+   * `type`. (`sim/medical.js`, `sim/parking.js`, `sim/recycling.js`.)
+   */
+  medical: 0x0d,
+  parkingSpace: 0x0b,
+  parkingRamp: 0x2c,
+  recycling: 0x14,
+  /**
    * The audience of a movie theater (`0x12`) and the guests of a party hall
    * (`0x1d`). Both halves of a facility carry its family; the half is the
    * placed `type`. Their actors are the venue's *visitors*, exactly as a
@@ -152,6 +175,16 @@ export const FAMILY = {
   theater: 0x12,
   partyHall: 0x1d,
 };
+
+/**
+ * Facilities that own no actors and no tenants (issue #13): a clinic, a parking
+ * space, a ramp, a recycling center. They are placed at `unit_status` `0`, which
+ * reads as "let" to `isUnitLet`, so without this set `hasTenant` would refuse to
+ * demolish a parking space for evicting a tenant it never had.
+ */
+export const SERVICE_FACILITY_FAMILIES = new Set([
+  FAMILY.medical, FAMILY.parkingSpace, FAMILY.parkingRamp, FAMILY.recycling,
+]);
 
 /** Families whose actors are **staff**: they work the tower, they do not live in it. */
 export const STAFF_FAMILY_CODES = new Set([FAMILY.housekeeping, FAMILY.security]);
@@ -263,6 +296,14 @@ export const POPULATION_CONTRIBUTION = {
   // as people who live here.
   [FAMILY.theater]: 0,
   [FAMILY.partyHall]: 0,
+  // The four service facilities own no actors at all, and an explicit `0` anyway,
+  // for the reason every row above gives: a future occupant count must not turn
+  // a clinic into residents. A parked car is not a person either - the cars
+  // belong to office workers and suite guests who are already counted.
+  [FAMILY.medical]: 0,
+  [FAMILY.parkingSpace]: 0,
+  [FAMILY.parkingRamp]: 0,
+  [FAMILY.recycling]: 0,
 };
 
 /** Families whose population is gated on a linked venue record rather than a lease. */

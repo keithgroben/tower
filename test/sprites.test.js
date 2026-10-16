@@ -30,13 +30,18 @@
 import path from 'node:path';
 import { createSegment } from '../src/games/tower/sim/routing.js';
 import { CARRIER_MODE, addCar, createCarrier } from '../src/games/tower/sim/elevators.js';
-import { FAMILY, createTower, placeObject } from '../src/games/tower/sim/state.js';
+import { FAMILY, OBJECT_TYPE, createTower, placeObject } from '../src/games/tower/sim/state.js';
 import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
 import { FLYERS } from '../src/games/tower/render/sky.js';
 import { SHEET_READY } from '../src/games/tower/render/sprites.js';
 import { RESTAURANT_WIDTH, RETAIL_WIDTH, finalizeCommercialVenue } from '../src/games/tower/sim/commercial.js';
 import { PHASE, placeEntertainment } from '../src/games/tower/sim/entertainment.js';
 import { SECURITY_WIDTH } from '../src/games/tower/sim/security.js';
+import { MEDICAL_WIDTH, finalizeMedicalCenter } from '../src/games/tower/sim/medical.js';
+import { placeRecycling } from '../src/games/tower/sim/recycling.js';
+import {
+  PARKING_RAMP_WIDTH, PARKING_SPACE_WIDTH, finalizeParkingSpace, rebuildParkingCoverage,
+} from '../src/games/tower/sim/parking.js';
 import {
   PRELOAD_SHEETS, SPRITE_NOT_YET_DRAWN, SPRITE_UNUSED_ANIMATIONS, SPRITE_USES,
   makeRenderer,
@@ -149,6 +154,39 @@ function towerWithEverything() {
   // drawn as figures of their own - the control room is painted with one at the
   // desk - so the office sheet is the whole of what reaches the screen.
   place(tower, { family: FAMILY.security, floor: -3, left: 54, right: 54 + SECURITY_WIDTH - 1 }, trips);
+
+  // The service facilities (issue #13), one of each so every frame they own is drawn:
+  //  - a medical center on F8, beside the late office placement below, with two
+  //    workers in its queue (the "2 waiting" sign over it), lit by night as well;
+  //  - a recycling center in the basement, next to the security office, with no
+  //    service lift reaching it (the "NO SERVICE LIFT" sign) - it is the delivered
+  //    `basement-utility` plant on both floors;
+  //  - a garage on B1 under the lobby: a ramp, three spaces it serves holding no car,
+  //    one car and two cars (the three frames of the delivered `basement-parking`
+  //    sheet), and one space too far from the ramp to be served (drawn blocked).
+  const clinic = placeObject(tower,
+    { family: FAMILY.medical, type: OBJECT_TYPE.medical, floor: 8, left: 100, right: 100 + MEDICAL_WIDTH - 1 },
+    trips, finalizeMedicalCenter);
+  assert(clinic.ok, 'fixture: ' + clinic.reason);
+  clinic.object.medical.queue.push(9001, 9002);
+  const plant = placeRecycling(tower, { floor: -4, left: 100 }, trips);
+  assert(plant.ok, 'fixture: ' + plant.reason);
+  const garage = [];
+  const bay = (left, width, make) => {
+    const placed = placeObject(tower, { family: make.family, type: make.type, floor: -1, left, right: left + width - 1 },
+      trips, make.finalize);
+    assert(placed.ok, 'fixture: B1 ' + left + ': ' + placed.reason);
+    garage.push(placed.object);
+    return placed.object;
+  };
+  const SPACE = { family: FAMILY.parkingSpace, type: OBJECT_TYPE.parkingSpace, finalize: finalizeParkingSpace };
+  bay(96, PARKING_RAMP_WIDTH, { family: FAMILY.parkingRamp, type: OBJECT_TYPE.parkingRamp });
+  bay(97, PARKING_SPACE_WIDTH, SPACE);
+  bay(101, PARKING_SPACE_WIDTH, SPACE).parking.cars.push('a1');
+  bay(105, PARKING_SPACE_WIDTH, SPACE).parking.cars.push('a2', 'a3');
+  bay(130, PARKING_SPACE_WIDTH, SPACE);
+  rebuildParkingCoverage(tower);
+  assert(garage.filter((o) => o.coverageFlag === 1).length === 3, 'fixture: three of the four spaces are served');
 
   // The commercial venues (issue #10), each with its linked record so the money
   // sign over them draws too: a restaurant (its own sheet, day and by night) and a
@@ -417,6 +455,13 @@ export const tests = {
       'the housekeeping facility': 'housekeeping/day',
       'a security office by day': 'security/day',
       'a security office at night': 'security/night',
+      'a medical center by day': 'medical/day',
+      'a medical center at night': 'medical/night',
+      'a parking ramp': 'parking-ramp/tile',
+      'a bay with no car': 'basement-parking/empty',
+      'a bay with one car': 'basement-parking/one-car',
+      'a bay with two cars': 'basement-parking/two-cars',
+      'the recycling plant': 'basement-utility/idle',
       'a restaurant by day': 'restaurant/day',
       'a restaurant at night': 'restaurant/night',
       'a shop that has not been rented': 'shop/closed-night',

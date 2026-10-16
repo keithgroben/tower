@@ -600,7 +600,16 @@ export function applyPeriodicOperatingExpenses(ledger, tower = {}) {
   for (const item of items) {
     const count = item.count ?? 1;
 
-    if (item.type === 'parkingSpace') {
+    // ⚠️ `'lobby'` is charged by this formula too, and it is the lobby that pays it in
+    // play (issue #13, `spec/DEVIATIONS.md` A55). The reference's routine is named for
+    // parking and the spec sweeps it over types `0x18` / `0x19` / `0x1a` - and `0x18`
+    // is the LOBBY's type code (`specs/FACILITIES.md` § Type codes; this build's
+    // `OBJECT_TYPE.lobby`), which is also why the very next rule exempts *"the upper
+    // floors of a multi-floor lobby"*. The issue says the same in its own words:
+    // *"Lobby upkeep per tile: $0 below 3 stars, $300 at 3, $1,000 from 4"*. A parking
+    // SPACE has no upkeep of its own (`ECONOMY.md` § Construction Costs: space -, ramp
+    // $10,000), so `sim/ledger-adapter.js` never hands this loop one.
+    if (item.type === 'parkingSpace' || item.type === 'lobby') {
       // The upper floors of a multi-floor lobby are exempt — logical floors
       // 1 through lobbyHeight-1, in the reference's own "clone logical"
       // numbering, which is ours. The skip is operating-expense only; parking

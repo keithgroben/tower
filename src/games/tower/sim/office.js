@@ -34,7 +34,7 @@
  * letting an idle tenant look perfect.
  */
 import {
-  FAMILY, UNIT_STATUS, baseState, enterTransit, isRented,
+  FAMILY, UNIT_STATUS, baseState, enterTransit, isInTransit, isRented,
 } from './state.js';
 import { EVENING_DAYPART } from './clock.js';
 import {
@@ -48,6 +48,13 @@ import {
 // THIS one makes the tower look better than it is. See the note in
 // `officeFamilyHandler`.
 import { shouldWaitForQueuedCarrier } from './routing.js';
+import {
+  clinicOf, joinMedicalQueue, medicalTripFailed, medicalTripServed, medicalVisitDone, releaseMedical,
+  rollMedicalTrip,
+} from './medical.js';
+import {
+  officeWorkerDrives, parkWorker, spaceOfWorker, unparkWorker,
+} from './parking.js';
 
 /** The lobby. Logical floor 0 — the reference's EXE floor 10. */
 export const LOBBY_FLOOR = 0;
@@ -64,6 +71,13 @@ export const OFFICE_STATE = {
   lunchOut: 0x01,
   /** Continuing to a venue. */
   lunchTransit: 0x02,
+  /**
+   * Heading for the medical center instead of home (issue #13, `MEDICAL.md` § Demand
+   * Generation). The reference's own `0x02` is a star-3 medical variant (see
+   * `nextStateAfterArrival`); here `0x02` is the lunch and the clinic trip is its own
+   * state, so the two cannot be mistaken for one another. `spec/DEVIATIONS.md` A51.
+   */
+  medicalOut: 0x03,
   /** At the office, wanting to go home. */
   commuteOut: 0x05,
   /** Waiting to be employed. The rental path. */
@@ -74,6 +88,8 @@ export const OFFICE_STATE = {
   lunchReturn: 0x22,
   /** At the venue, eating. Holds a slot; the dwell is enforced here. */
   atLunch: 0x23,
+  /** In the medical center's queue, waiting to be seen (issue #13). */
+  atMedical: 0x24,
   /** Route failed while the office was already open. */
   strandedOpen: 0x25,
   /** Route failed outright. */
@@ -81,6 +97,13 @@ export const OFFICE_STATE = {
   /** Parked for the night. Terminal to the gate. */
   parked: 0x27,
 };
+
+/**
+ * The tick after which a parked worker is released to look for work again, and the
+ * tick after which a worker still on a clinic errand is sent to bed. `specs/TIME.md`
+ * § 2300: the day counter moves, and the night begins.
+ */
+export const NIGHT_RELEASE_TICK = 2300;
 
 /** `specs/FACILITIES.md` § Thresholds By Star Rating. */
 export const EVAL_THRESHOLD_LOWER = 80;
@@ -269,7 +292,13 @@ export function officeGate(actor, object, clock, rng) {
     case OFFICE_STATE.strandedFailed:
     case OFFICE_STATE.parked:
       // Night parking releases only once the day counter has moved.
-      return dayTick > 2300 ? OFFICE_STATE.seekingWork : 'hold';
+      return dayTick > NIGHT_RELEASE_TICK ? OFFICE_STATE.seekingWork : 'hold';
+
+    case OFFICE_STATE.medicalOut:
+    case OFFICE_STATE.atMedical:
+      // On a clinic errand: the dispatch handles the whole of it (the ride, the
+      // wait, the way home), and the night ends it where it stands.
+      return dayTick > NIGHT_RELEASE_TICK ? OFFICE_STATE.parked : 'dispatch';
 
     default:
       return 'hold';
@@ -302,9 +331,36 @@ export function officeDispatch(tower, actor, object, clock, ctx) {
     return lunchHomeward(tower, actor, object, clock, ctx, state);
   }
 
+  // **The clinic errand** (issue #13). At the end of the day a worker at three stars
+  // or more may go to the medical center instead of home.
+  if (state === OFFICE_STATE.medicalOut) return medicalOutbound(tower, actor, object, clock, ctx);
+  if (state === OFFICE_STATE.atMedical) return medicalVisit(tower, actor, object, clock);
+
   const inbound = state === OFFICE_STATE.commuteIn || state === OFFICE_STATE.seekingWork;
-  const from = inbound ? LOBBY_FLOOR : object.floor;
-  const to = inbound ? object.floor : LOBBY_FLOOR;
+
+  if (state === OFFICE_STATE.commuteOut && !isInTransit(actor.state)) {
+    const trip = rollMedicalTrip(tower, actor, object);
+    if (trip?.center) {
+      actor.medicalObjectId = trip.center.id;
+      actor.anchorFloor = object.floor;
+      actor.state = OFFICE_STATE.medicalOut;
+      return medicalOutbound(tower, actor, object, clock, ctx);
+    }
+  }
+
+  // **The car** (issue #13, `specs/facility/PARKING.md` § Demand Families). A worker
+  // who drives starts the commute in a parking space and ends it there; one who
+  // cannot be given a space - or whose garage the lifts cannot reach - walks in from
+  // the lobby like everybody else. Only an office that is already let: renting is the
+  // lobby route's business and nothing else's.
+  let space = spaceOfWorker(tower, actor);
+  if (inbound && !space && !isInTransit(actor.state) && isRented(object.unitStatus)
+    && actor.parkRefusedDay !== clock.dayCounter && officeWorkerDrives(tower, actor, object)) {
+    space = parkWorker(tower, actor);
+    if (!space) actor.parkRefusedDay = clock.dayCounter;
+  }
+  const from = inbound ? (space ? space.floor : LOBBY_FLOOR) : (actor.homeFrom ?? object.floor);
+  const to = inbound ? object.floor : (space ? space.floor : LOBBY_FLOOR);
 
   const result = ctx.resolveRoute(tower, actor, from, to, clock, {
     passengerRoute: true,
@@ -316,6 +372,18 @@ export function officeDispatch(tower, actor, object, clock, ctx) {
     onDelay: (delay) => ctx.onDelay?.(delay, actor),
   });
   const code = result.code ?? result;
+
+  // The garage is out of reach of every lift: the car is given up and the worker
+  // tries again from the lobby, a stride later. Stranding somebody the lobby could
+  // have served would make a parking space a way to lose a tenant.
+  if (code === -1 && space) {
+    unparkWorker(tower, actor);
+    actor.parkRefusedDay = clock.dayCounter;
+    actor.state = state;
+    actor.routeCarrier = null;
+    actor.spawnFloor = null;
+    return { moved: false, code };
+  }
 
   if (state === OFFICE_STATE.seekingWork) return seekingWorkResult(tower, object, actor, code, ctx);
 
@@ -337,7 +405,87 @@ export function officeDispatch(tower, actor, object, clock, ctx) {
   actor.state = code === -1 ? OFFICE_STATE.strandedFailed
     : code === 3 ? OFFICE_STATE.parked
       : enterTransit(OFFICE_STATE.commuteOut);
+  if (code === 3) { unparkWorker(tower, actor); actor.homeFrom = null; }
   return { moved: code !== -1, code };
+}
+
+// ----------------------------------------------------------------- the clinic
+
+/**
+ * **Out to the medical center.** `specs/facility/MEDICAL.md` § Trip Resolution, the
+ * three outcomes: the worker rides to the center and joins its queue; the center is
+ * gone, in which case *"fire the banner, clear the daily flag, abandon the trip"*;
+ * or - this build's own, because the router can say no - the center cannot be
+ * reached, in which case the worker simply goes home. An unreachable clinic is not a
+ * missing one, and the banner says the tower has none.
+ */
+function medicalOutbound(tower, actor, object, clock, ctx) {
+  const center = clinicOf(tower, actor);
+  if (!center) {
+    medicalTripFailed(tower);
+    return abandonClinicTrip(tower, actor);
+  }
+  if (clock.dayTick > NIGHT_RELEASE_TICK) return sendToBed(tower, actor);
+
+  const result = ctx.resolveRoute(tower, actor, actor.anchorFloor ?? object.floor, center.floor, clock, {
+    passengerRoute: true,
+    emitDistanceFeedback: false,
+    onDelay: (delay) => ctx.onDelay?.(delay, actor),
+  });
+  const code = result.code ?? result;
+
+  if (code === -1) return abandonClinicTrip(tower, actor);
+  if (code === 3) {
+    actor.anchorFloor = center.floor;
+    joinMedicalQueue(tower, actor, center);
+    actor.state = OFFICE_STATE.atMedical;
+    return { moved: true, code, queued: true };
+  }
+  actor.state = enterTransit(OFFICE_STATE.medicalOut);
+  return { moved: true, code };
+}
+
+/**
+ * In the queue. One refresh per stride, each counting toward the retry limit; when the
+ * visit is over - or the limit is - the worker leaves *"as if served"* and goes home
+ * from the clinic's own floor.
+ */
+function medicalVisit(tower, actor, object, clock) {
+  const center = clinicOf(tower, actor);
+  if (!center) {
+    // *"target was deleted mid-trip"*: the same banner and the same cleared flag.
+    medicalTripFailed(tower);
+    return abandonClinicTrip(tower, actor);
+  }
+  if (clock.dayTick > NIGHT_RELEASE_TICK) return sendToBed(tower, actor);
+  if (!medicalVisitDone(tower, actor)) return { moved: false };
+
+  actor.homeFrom = center.floor;
+  releaseMedical(tower, actor);
+  medicalTripServed(tower);
+  actor.state = OFFICE_STATE.commuteOut;
+  return { moved: true, code: 3, served: true };
+}
+
+/** The trip is off: back to the ordinary evening, from wherever the worker is standing. */
+function abandonClinicTrip(tower, actor) {
+  actor.homeFrom = actor.anchorFloor ?? null;
+  releaseMedical(tower, actor);
+  actor.routeCarrier = null;
+  actor.spawnFloor = null;
+  actor.state = OFFICE_STATE.commuteOut;
+  return { moved: false };
+}
+
+/** Night fell with the worker still on the errand: nobody is left in a queue overnight. */
+function sendToBed(tower, actor) {
+  releaseMedical(tower, actor);
+  unparkWorker(tower, actor);
+  actor.homeFrom = null;
+  actor.routeCarrier = null;
+  actor.spawnFloor = null;
+  actor.state = OFFICE_STATE.parked;
+  return { moved: false };
 }
 
 /**
@@ -641,6 +789,13 @@ export function officeFamilyHandler(ctx) {
       releaseVenueSlot(venueOf(lunchVenue(tower, actor)), actor, tower.clock, { skipDwellGate: true });
       actor.venueObjectId = null;
     }
+    // ...and a clinic queue, and a parking space: whoever parks for the night
+    // leaves them (issue #13).
+    if (verdict === OFFICE_STATE.parked) {
+      releaseMedical(tower, actor);
+      unparkWorker(tower, actor);
+      actor.homeFrom = null;
+    }
     actor.state = verdict;
   };
 }
@@ -658,7 +813,7 @@ export function officeFamilyHandler(ctx) {
  * tower rents its offices and then nobody ever moves again, which is exactly
  * what it did before this existed.
  */
-export function officeArrival(actor, floor) {
+export function officeArrival(actor, floor, tower = null) {
   const state = baseState(actor.state);
   actor.anchorFloor = floor;
   switch (state) {
@@ -682,8 +837,19 @@ export function officeArrival(actor, floor) {
     case OFFICE_STATE.lunchReturn:            // 0x62 / 0x63 -> back at the office
     case OFFICE_STATE.atLunch:
       actor.state = nextStateAfterLunch(actor); break;
+    case OFFICE_STATE.medicalOut:             // 0x43 -> at the clinic's floor
+      // As lunch does: drop the transit bit and let the next dispatch resolve the
+      // same-floor route, which is where the queue is joined - once, in
+      // `medicalOutbound`, rather than a second copy of it here.
+      actor.state = OFFICE_STATE.medicalOut; break;
     case OFFICE_STATE.commuteOut:             // 0x45 -> home, park for the night
-      actor.state = OFFICE_STATE.parked; break;
+      actor.state = OFFICE_STATE.parked;
+      // The car leaves its space and the errand is over. `tower` is the driver's
+      // to hand over (`ui/driver.js`); a bare call, as the older tests make, has no
+      // parking to give back.
+      if (tower) unparkWorker(tower, actor);
+      actor.homeFrom = null;
+      break;
     default:
       actor.state = state; break;             // drop the transit bit regardless
   }
@@ -719,6 +885,10 @@ export function deactivateIfFailing(tower, object, occupants, ctx) {
       releaseVenueSlot(venueOf(lunchVenue(tower, worker)), worker, tower.clock, { skipDwellGate: true });
       worker.venueObjectId = null;
     }
+    // Nor may it keep a place in a clinic queue or a parking space.
+    releaseMedical(tower, worker);
+    unparkWorker(tower, worker);
+    worker.homeFrom = null;
     worker.state = OFFICE_STATE.seekingWork;
   }
   ctx?.onVacate?.(tower, object);

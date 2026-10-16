@@ -92,8 +92,18 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * written at two stars with a population past 1,000 would resume stalled on a
  * gate nothing could open, and a v6 file resumed by v5 would hold a family it has
  * no staff handling for - which is the case the version exists for.
+ *
+ * v7 (issue #13, medical, recycling, parking) adds four families that own no actors
+ * (a clinic with its `object.medical` queue, a parking space with its `object.parking`
+ * cars and `coverageFlag`, a ramp, and a recycling center's two floors with their
+ * `stayPhase`), a tower field `demands` (the live demands and the notice log), a star
+ * gate `medicalServiceOk` that `3 -> 4` and `4 -> 5` now read, and worker fields
+ * (`parkedAt`, `homeFrom`, `medicalObjectId`, ...). A v6 file would resume at three
+ * stars with no medical flag - blocked from 4 stars until the next day's start - and
+ * with a lobby that suddenly costs money to keep, which is the case the version exists
+ * for.
  */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

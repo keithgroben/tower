@@ -125,6 +125,12 @@ export const tests = {
       // (`entertainmentSignal`), not a lease tag.
       theater: '',
       partyHall: '',
+      // The four service facilities (issue #13) own no tenants and no actors: a clinic,
+      // a parking space, a ramp, a recycling center. Nothing about one is for rent.
+      medical: '',
+      parkingSpace: '',
+      parkingRamp: '',
+      recycling: '',
     };
     const tower = createTower({ seed: 1 });
     let left = 0;

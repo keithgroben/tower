@@ -40,7 +40,7 @@ function towerAt(star, { activity = 0, gates = {}, evening = true, calendarPhase
 /** Every gate a tier needs, so a test can remove exactly one and watch it fail. */
 const ALL_GATES = {
   securityPlaced: true, officePlaced: true, metroPlaced: true,
-  recyclingAdequate: true, officeServiceOk: true, routesViable: true,
+  recyclingAdequate: true, medicalServiceOk: true, officeServiceOk: true, routesViable: true,
 };
 
 export const tests = {
@@ -175,10 +175,11 @@ export const tests = {
    * a checklist test that only checks the all-pass case passes just as happily
    * when a gate has been quietly deleted.
    */
-  'three to four needs every one of its four gates'() {
+  'three to four needs every one of its five gates'() {
     // `specs/GAME-STATE.md`: "office placed, recycling adequate, office-service
-    // evaluation passed, route viability true".
-    const required = ['officePlaced', 'recyclingAdequate', 'officeServiceOk', 'routesViable'];
+    // evaluation passed, route viability true" - and (issue #13) the daily medical
+    // flag `specs/facility/MEDICAL.md` § Progression Gate adds (`spec/DEVIATIONS.md` A52).
+    const required = ['officePlaced', 'recyclingAdequate', 'medicalServiceOk', 'officeServiceOk', 'routesViable'];
     for (const flag of required) {
       const tower = towerAt(3, { activity: 5000, gates: { ...ALL_GATES, [flag]: false } });
       assert(!tryAdvanceStar(tower).advanced,
@@ -186,11 +187,11 @@ export const tests = {
     }
     const ready = towerAt(3, { activity: 5000, gates: ALL_GATES });
     assert(tryAdvanceStar(ready).advanced && ready.starCount === 4,
-      'a tower with all four gates did not reach 4 stars');
+      'a tower with all five gates did not reach 4 stars');
   },
 
-  'four to five needs a metro station, recycling and route viability'() {
-    const required = ['metroPlaced', 'recyclingAdequate', 'routesViable'];
+  'four to five needs a metro station, recycling, medical service and route viability'() {
+    const required = ['metroPlaced', 'recyclingAdequate', 'medicalServiceOk', 'routesViable'];
     for (const flag of required) {
       const tower = towerAt(4, { activity: 10_000, gates: { ...ALL_GATES, [flag]: false } });
       assert(!tryAdvanceStar(tower).advanced, 'a tower missing ' + flag + ' still reached 5 stars');

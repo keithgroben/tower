@@ -130,6 +130,8 @@
      the stars stay quiet. */
   #stars { color: var(--warn); letter-spacing: -1px; flex-shrink: 0; }
   #goal { color: #9fb3c8; }
+  /* What the tower is demanding back. Warm, because it is a request and not an error. */
+  #demands { color: var(--warn); font-weight: 700; }
 
   #waiting { color: var(--info); }
   #cash { color: var(--good); font-weight: 700; }
@@ -284,6 +286,7 @@
       <span id="stress">no trips yet</span>
       <span id="waiting">0 waiting</span>
       <span id="hotels" hidden title="hotel rooms waiting to be cleaned, and rooms lost to cockroaches"></span>
+      <span id="demands" hidden title="what the tower is asking for - build it and the notice goes away"></span>
       <span id="people">—</span>
     </span>
     <span id="cash">—</span>

@@ -806,9 +806,13 @@ export const tests = {
     assert(back.world.tower.objects.get(again.venue.lowerId)?.entertainmentId === again.id, 'and the lower half still points at it');
     assert(back.world.tower.events.bombActive === false, 'with its event flags');
     const next = makeDriver(back.world);
-    const before = back.world.tower.cash;
-    runDay(next.scheduler, back.world.tower);
-    assert(again.venue.lastAttendance > 0 && back.world.tower.cash > before - 1, 'the restored theater fills and is paid: ' + again.venue.lastAttendance);
+    // What the theater was PAID, not what the tower's cash did: a day that falls on a
+    // 3-day expense pass also pays the lobby's upkeep (issue #13, A55), and net cash
+    // measures the two together. `settleDay` reads the cash on either side of the
+    // payout tick alone.
+    const paid = settleDay(next.scheduler, back.world.tower);
+    assert(again.venue.lastAttendance > 0 && paid.theater > 0,
+      'the restored theater fills and is paid: ' + again.venue.lastAttendance + ' seats, $' + paid.theater);
     assert(object.id === again.id, 'same object id');
   },
 

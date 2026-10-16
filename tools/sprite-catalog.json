@@ -672,6 +672,32 @@
       }
     ]
   },
+  "medical": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "day",
+        "frames": 1
+      },
+      {
+        "name": "night",
+        "frames": 1
+      }
+    ]
+  },
+  "parking-ramp": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "tile",
+        "frames": 1
+      }
+    ]
+  },
   "restaurant": {
     "frameW": 48,
     "frameH": 32,
