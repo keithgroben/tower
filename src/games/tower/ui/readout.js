@@ -14,6 +14,9 @@
  * HUD from a broken game, and the first thing they distrust is the game.
  */
 import { stressBand } from '../sim/stress.js';
+import { formatClock } from '../sim/clock.js';
+import { BOMB_DEADLINE_TICK } from '../sim/events.js';
+import { securityOffices } from '../sim/security.js';
 import { MAX_STAR, TOWER_RANK } from '../sim/progression.js';
 import { VENUE, VISITOR_BANDS, closurePayout, venueOf } from '../sim/commercial.js';
 import { RENT_TIERS } from '../sim/economy.js';
@@ -159,6 +162,49 @@ export function serviceReadout(object, tower) {
 /** The tower's live demands as the bar says them, or `''` when it asks for nothing. */
 export const demandsReadout = (demands) => demands.map((d) => d.text).join(' · ');
 
+// ------------------------------------------------------------------ events
+
+/**
+ * What is going on in the tower right now, in one clause (issue #16), or `''`.
+ *
+ * A bomb is the one event with nothing to see - *hidden* is the whole point - so the bar is
+ * where a player learns it is there, who is looking and when it goes off; a fire is drawn in
+ * the world and the bar only counts the guards on it; a VIP's progress is the one thing the
+ * 3 -> 4 gate waits on and is otherwise invisible while he sleeps. Pure, and read from the
+ * sim's own `tower.events`, so it cannot say what the sim does not hold.
+ */
+export function eventsReadout(tower) {
+  const e = tower?.events;
+  if (!e) return '';
+  const parts = [];
+  if (e.bomb) {
+    const b = e.bomb;
+    const at = formatClock(BOMB_DEADLINE_TICK).replace(':00', '');
+    parts.push(b.phase === 'prompt' ? 'BOMB threat - ransom or search'
+      : b.phase === 'armed' ? (securityOffices(tower).length > 0
+        ? 'BOMB hidden - security is searching, it goes off at ' + at
+        : 'BOMB hidden - nobody is looking, it goes off at ' + at)
+        : b.phase === 'found' ? 'BOMB found on floor ' + b.floor
+          : 'BOMB exploded on floor ' + b.floor);
+  }
+  if (e.fire) {
+    const f = e.fire;
+    const climbing = f.guards.filter((g) => g.status === 'climb').length;
+    parts.push('FIRE on floor ' + f.current
+      + (f.guards.length ? ' - ' + f.guards.length + ' guard team' + (f.guards.length === 1 ? '' : 's')
+        + (climbing ? ' (' + climbing + ' on the stairs)' : '') : ' - nobody to fight it')
+      + (f.helicopter !== null ? ' - helicopter' : ''));
+  }
+  if (e.vip) {
+    const v = e.vip;
+    parts.push(v.phase === 'booked' ? 'VIP booked: suite on floor ' + v.floor
+      : v.phase === 'arriving' ? 'VIP on the way to floor ' + v.floor
+        : v.phase === 'staying' ? 'VIP asleep on floor ' + v.floor
+          : 'VIP checking out');
+  }
+  return parts.join(' · ');
+}
+
 // ------------------------------------------------------------------- stars
 
 /** `★★☆☆☆`. One glyph, per the brief — the clause beside it does the talking. */
@@ -184,8 +230,19 @@ export const STAR_RISE_MS = 7000;
 export function noticeToSay(fresh) {
   if (!fresh || fresh.length === 0) return null;
   const rise = fresh.find((n) => n.good) ?? null;
-  const shown = rise ?? fresh[fresh.length - 1];
-  return { text: shown.text, ok: Boolean(rise), ms: rise ? STAR_RISE_MS : null, rise: Boolean(rise) };
+  // An event's line (issue #16: a fire, a bomb, a VIP's verdict, treasure, Santa) carries a `tone`
+  // and outranks a complaint posted the same tick, as a rise outranks both: *"The fire was stopped"*
+  // must not be swallowed by *"Office workers demand Parking"*. It is held as long as a rise is.
+  const event = rise ? null : ([...fresh].reverse().find((n) => n.tone) ?? null);
+  const shown = rise ?? event ?? fresh[fresh.length - 1];
+  // The line under the tower is one line: the original's dialogs wrap, this does not.
+  const text = shown.text.replace(/\s*[\r\n]+\s*/g, ' ');
+  return {
+    text,
+    ok: Boolean(rise) || shown.tone === 'good',
+    ms: rise || event ? STAR_RISE_MS : null,
+    rise: Boolean(rise),
+  };
 }
 
 /** The tooltip on the stars: the population the ladder counted, and what it left out. */
@@ -207,7 +264,7 @@ export const rungName = (star) => (star >= TOWER_RANK ? 'Tower' : star + (star =
  *
  *   `Next: 3 stars - need 1,000 population (now 640), a security office`
  *   `Next: 4 stars - need 5,000 population (now 3,120), 2 hotel suites, a favorable VIP
- *    stay (VIP visits are not in this build yet); wait for the evening (after 5 PM)`
+ *    stay; wait for the evening (after 5 PM)`
  *
  * It lists the lot, not the first one: the bar's old "one blocker" answer left a
  * player with eight things to discover one at a time, and the issue's point is that

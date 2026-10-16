@@ -109,9 +109,10 @@ export function raiseDemand(tower, kind) {
  * @param {object} tower
  * @param {string} kind  a label for tests and the harness, e.g. `'starRise'`
  * @param {string} text  the exact line the player reads
- * @param {{good?:boolean}} [options]
+ * @param {{good?:boolean, tone?:'good'|'bad'|null}} [options]  `good` is a STAR RISE (the bar pulses
+ *   the stars for it); `tone` is the colour of an event's line - issue #16's fire, bomb, VIP and treasure.
  */
-export function postNotice(tower, kind, text, { good = false } = {}) {
+export function postNotice(tower, kind, text, { good = false, tone = null } = {}) {
   const demands = demandsOf(tower);
   demands.notices.push({
     id: demands.nextNoticeId++,
@@ -120,6 +121,7 @@ export function postNotice(tower, kind, text, { good = false } = {}) {
     day: tower.clock?.dayCounter ?? 0,
     tick: tower.clock?.dayTick ?? 0,
     ...(good ? { good: true } : {}),
+    ...(tone ? { tone } : {}),
   });
   if (demands.notices.length > NOTICE_LOG_LIMIT) demands.notices.splice(0, demands.notices.length - NOTICE_LOG_LIMIT);
 }

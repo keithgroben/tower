@@ -30,7 +30,8 @@
 import path from 'node:path';
 import { createSegment } from '../src/games/tower/sim/routing.js';
 import { CARRIER_MODE, addCar, createCarrier } from '../src/games/tower/sim/elevators.js';
-import { FAMILY, OBJECT_TYPE, createTower, placeObject } from '../src/games/tower/sim/state.js';
+import { FAMILY, OBJECT_TYPE, createActor, createTower, placeObject } from '../src/games/tower/sim/state.js';
+import { addScar, eventsOf } from '../src/games/tower/sim/events.js';
 import { createSimTripRecord } from '../src/games/tower/sim/stress.js';
 import { FLYERS } from '../src/games/tower/render/sky.js';
 import { SHEET_READY } from '../src/games/tower/render/sprites.js';
@@ -270,6 +271,42 @@ function towerWithEverything() {
     actor.accumulatedElapsed = band;
   }
 
+  // The events (issue #16). Everything here is state the sim itself writes - the same shapes
+  // `sim/events.js` builds - set directly because the sprite test is about whether the art
+  // reaches the screen, and `test/events.test.js` is about whether the events happen.
+  //  - three VIPs waiting for a lift, one per stress band, so every posture of the yellow figure
+  //    is drawn (the real visitor is ONE actor; the other two are fixtures);
+  //  - the real visitor asleep in the suite, which is the second place he is drawn;
+  //  - ground a fire took, in a gap beside the F5 rooms (the scorch);
+  //  - a fire on F3 with both fronts alive and two guards on it, one walking and one putting it out.
+  const vipFloor = HOTEL_FLOOR;
+  const vips = [0, 100, 300].map((band) => {
+    const actor = createActor({
+      family: FAMILY.vip, anchorFloor: vipFloor, objectId: null, occupantIndex: 0, state: 0x20, tripFields: trips(),
+    });
+    actor.waitingFloor = vipFloor;
+    actor.tripCount = 1;
+    actor.accumulatedElapsed = band;
+    tower.actors.push(actor);
+    return actor;
+  });
+  const sleeper = createActor({
+    family: FAMILY.vip, anchorFloor: vipFloor, objectId: null, occupantIndex: 0, state: 0x01, tripFields: trips(),
+  });
+  tower.actors.push(sleeper);
+  const events = eventsOf(tower);
+  events.vipActorId = sleeper.id;
+  events.vip = { phase: 'staying', suiteId: suite.id, floor: vipFloor, bookedDay: 0, arrivedTick: 1650 };
+  addScar(tower, 5, 96, 107, 'fire');
+  events.fire = {
+    floor: 3, current: 3, seed: 70, startTick: 240, age: 40, hold: 0, fronts: { left: 66, right: 72 },
+    helicopter: null, destroyed: 0, floorsBurned: 1,
+    guards: [
+      { officeId: 1, floor: 3, target: 3, travel: 0, status: 'walk', column: 80, windup: 0, extinguished: 0 },
+      { officeId: 2, floor: 3, target: 3, travel: 0, status: 'wind', column: 76, windup: 3, extinguished: 0 },
+    ],
+  };
+
   // Stairs and an escalator, so both link sheets are drawn (issue #5). Placed
   // directly: this test is about whether the art reaches the screen, and the
   // placement rules have their own tests in `links.test.js`.
@@ -335,6 +372,12 @@ async function recordDrawnSprites() {
   stockTheSky(renderer.sky, 1200);
   renderer.draw(tower, 0);
 
+  // A bomb goes off (issue #16): the renderer plays the blast from the frame it first sees it in,
+  // and does NOT replay one it found already there - so it is set AFTER the frames above, which
+  // are the "already there" ones. And it is the last of the sky's night: Santa is out on the last
+  // evening of the year, from the clock alone.
+  eventsOf(tower).blast = { floor: 4, x: 74, day: 0, tick: 1200 };
+
   // Seven 100 ms frames advance the animation clock by exactly 700 ms, which
   // flips the two-pose beat for EVERY waiting figure regardless of its phase
   // offset — `floor((t + p) / 700)` always gains exactly one. That is what
@@ -343,6 +386,13 @@ async function recordDrawnSprites() {
     stockTheSky(renderer.sky, 1200);
     renderer.draw(tower, 100);
   }
+
+  // Santa's evening (issue #16): the last day of the year, between 2000 and 2300.
+  tower.clock.dayCounter = 11;
+  tower.clock.dayTick = 2100;
+  stockTheSky(renderer.sky, 1200);
+  renderer.draw(tower, 100);
+  tower.clock.dayCounter = 0;
 
   // Night, for every sheet with a lit-window variant - and a train in the station.
   for (const o of tower.objects.values()) if (o.family === FAMILY.metro) o.platform = PLATFORM.train;

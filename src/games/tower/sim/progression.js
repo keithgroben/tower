@@ -45,10 +45,10 @@
  * **Some of the checklist is written by systems that are not in this build.**
  * The gates are all implemented and tested, and each is a plain flag on
  * `tower.gates` that its owner sets: the office-service evaluation and the
- * wedding are the cathedral's (issue #17), the favorable VIP stay is the events'
- * (issue #16), and the metro station is issue #15. Until they land the gate
- * refuses by *name*, and {@link GATES_WITHOUT_A_WRITER} says why it cannot be
- * satisfied yet, so the HUD tells the player the truth instead of sending them
+ * wedding are the cathedral's (issue #17); the favorable VIP stay was the events'
+ * (issue #16, landed: `sim/events.js` writes it) and the metro station was issue
+ * #15's. Until the rest land the gate refuses by *name*, and
+ * {@link GATES_WITHOUT_A_WRITER} says why it cannot be satisfied yet, so the HUD tells the player the truth instead of sending them
  * hunting a button. Dropping a gate to make the ladder passable would be the worst
  * available option — a tower that advances because a requirement was skipped
  * teaches the player something false, and `CLAUDE.md` already keeps a list of
@@ -159,11 +159,12 @@ export function createStarGates() {
      */
     officeServiceOk: false,
     /**
-     * **Written by the events (issue #16):** a VIP has stayed in a suite and rated the
-     * tower favorably (*"This person must be happy with your hotel suite and with your
-     * elevator system for you to get a favorable rating"* - the original's help file).
-     * Gates 3→4. Never cleared by the ladder: a favorable stay is a fact about the
-     * tower, and issue #16 decides whether a later bad one takes it back.
+     * **Written by the events (issue #16, `sim/events.js` `finishVip`):** a VIP has stayed in a
+     * suite and rated the tower favorably (*"This person must be happy with your hotel suite and
+     * with your elevator system for you to get a favorable rating"* - the original's help file).
+     * Gates 3→4. Never cleared: a favorable stay is a fact about the tower, a later bad one
+     * cannot happen (once the flag is set no more VIPs are booked, so there is no later stay to
+     * go wrong), and the ladder never takes a star back. `spec/DEVIATIONS.md` A66.
      */
     vipStayFavorable: false,
     /**
@@ -193,7 +194,6 @@ export const starGatesOf = (tower) => (tower.gates ??= createStarGates());
  */
 export const GATES_WITHOUT_A_WRITER = {
   officeServiceOk: 'the cathedral guest who tests it is not in this build yet',
-  vipStayFavorable: 'VIP visits are not in this build yet',
   weddingGuestsArrived: 'the cathedral wedding is not in this build yet',
 };
 

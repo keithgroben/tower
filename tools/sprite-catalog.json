@@ -817,5 +817,75 @@
         "speed": "idle"
       }
     ]
+  },
+  "person-vip": {
+    "frameW": 16,
+    "frameH": 16,
+    "states": [
+      {
+        "name": "stand",
+        "frames": 1
+      },
+      {
+        "name": "fidget",
+        "frames": 1
+      },
+      {
+        "name": "wait",
+        "frames": 1
+      },
+      {
+        "name": "wait-annoyed",
+        "frames": 1
+      }
+    ],
+    "fit": "contain"
+  },
+  "fire": {
+    "frameW": 16,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "flame",
+        "frames": 2,
+        "speed": "idle"
+      }
+    ],
+    "fit": "stretch"
+  },
+  "burned-area": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "scorch",
+        "frames": 1
+      }
+    ],
+    "fit": "stretch"
+  },
+  "explosion": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "blast",
+        "frames": 2,
+        "speed": "idle"
+      }
+    ],
+    "fit": "stretch"
+  },
+  "sky-santa": {
+    "frameW": 48,
+    "frameH": 32,
+    "states": [
+      {
+        "name": "fly",
+        "frames": 2,
+        "speed": "idle"
+      }
+    ],
+    "fit": "contain"
   }
 }

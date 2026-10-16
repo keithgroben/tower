@@ -26,7 +26,7 @@ import { activeDemands, demandsOf, noticesAfter } from '../sim/demands.js';
 import { COMMERCIAL_FAMILY_CODES, FAMILY, isHotelFamily, isStaff, isStaffFamily } from '../sim/state.js';
 import {
   demandsReadout, entertainmentReadout, evictionNotice, hotelHealthReadout, infestationNotice, noticeToSay,
-  serviceReadout, starClause, starGlyph, starTitle, stressReadout, venueReadout,
+  eventsReadout, serviceReadout, starClause, starGlyph, starTitle, stressReadout, venueReadout,
 } from './readout.js';
 import { STRESS_COLORS, makeRenderer, objectStatusTag, officeIsLet } from '../render/canvas.js';
 import { DAY_SECONDS, SPEEDS, TICKS_PER_SECOND, makeTickPump } from './loop.js';
@@ -36,6 +36,7 @@ import { discardSavedWorld, loadSavedWorld, makeAutosave } from './persist.js';
 import { newTowerWorld } from './seed.js';
 import { mountLiftPanel } from './lift-panel.js';
 import { mountTheaterPanel } from './theater-panel.js';
+import { eventDialogBlocking, mountEventDialog } from './event-dialog.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -290,6 +291,15 @@ const theaterPanel = mountTheaterPanel($('theaterpanel'), {
   onChange: () => drawHud(),
 });
 
+// The question the tower asks (issue #16): a bomb's ransom, a fire's helicopter. While one is open
+// `frame()` does not ask the scheduler for another tick, so the two-tick default can never be
+// reached by a person who is still reading.
+const eventDialog = mountEventDialog($('eventdialog'), {
+  getWorld: () => world,
+  apply: (command) => applyAction(world, command),
+  onChange: () => drawHud(),
+});
+
 function selectTool(tool) {
   activeTool = tool ?? null;
   for (const button of document.querySelectorAll('[data-tool]')) {
@@ -398,10 +408,10 @@ function updateHover(px, py) {
   // Staff have no lease and no stress; "6 occupants · worst stress 0" would read
   // as a tenant who is doing perfectly.
   if (isStaffFamily(object.family)) {
-    // Guards say what they are for: the bomb and fire work is issue #16's, but the
-    // gate they open is the one thing a player needs to be told when pointing.
+    // Guards say what they are for: they fight fires and search for bombs (issue #16), by the
+    // outside stairs only, and the nearer the office the sooner they get there.
     $('hover').textContent = object.family === FAMILY.security
-      ? `security · ${occupants.length} guards · outside stairs only · cannot be bulldozed`
+      ? `security · ${occupants.length} guards · fight fires, find bombs · outside stairs only · cannot be bulldozed`
       : `housekeeping · ${occupants.length} staff · cannot be bulldozed`;
     return;
   }
@@ -519,6 +529,9 @@ function drawHud() {
 
   // What the tower is asking for (issue #13), until something answers it - and each
   // new notice said once on the line under the tower, in the sim's own words.
+  const live = eventsReadout(tower);
+  $('events').hidden = !live;
+  $('events').textContent = live;
   const demanded = demandsReadout(activeDemands(tower));
   $('demands').hidden = !demanded;
   $('demands').textContent = demanded;
@@ -562,6 +575,7 @@ function drawHud() {
   $('waiting').textContent = `${waiting} waiting`;
   // The theater window's figures move with the day; its buttons are left alone.
   theaterPanel.refresh();
+  eventDialog.refresh();
 }
 
 // -------------------------------------------------------------- the frame
@@ -575,7 +589,10 @@ function frame(nowMs) {
     // Real milliseconds in, whole ticks out. This is the entire boundary.
     // Every daily and 3-day rule now rides inside the scheduler's own
     // checkpoint table, so this is the whole of the sim step.
-    pump.advance(dtMs, speed, () => scheduler.tick(tower));
+    pump.advance(dtMs, speed, () => { if (!eventDialogBlocking(tower)) scheduler.tick(tower); });
+    // Open (or close) the question the moment the tick that raised (or answered) it is done,
+    // not up to a tenth of a second later when the HUD next refreshes.
+    eventDialog.refresh();
     // Render dt, not sim dt: the sky and the sprite clock run at wall speed so
     // a paused tower still has weather.
     renderer.draw(tower, dtMs);

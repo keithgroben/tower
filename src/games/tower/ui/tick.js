@@ -17,6 +17,10 @@
  *   7.   entity refresh stride         `families` — **empty, see below**
  *   8.   carriers                      `sim/elevators.js`
  *
+ * Issue #16 adds the events to the same table, at the places the spec puts them: the daily
+ * bomb/fire/VIP check rides the 240 body (`TIME.md` § 240 step 3), Santa's notice rides 2000, and
+ * `events` is the per-tick hook that advances a live bomb or fire (`sim/scheduler.js` step 6b).
+ *
  * ## The hole
  *
  * `families` is empty. Nothing in `sim/` implements family 7's gate and
@@ -39,6 +43,7 @@ import { CLOSURE_TICK, REBUILD_TICK, RESTAURANT_CLOSURE_TICK } from '../sim/comm
 import { RECYCLING_CHECK, updateRecyclingState } from '../sim/recycling.js';
 import { rebuildParkingCoverage } from '../sim/parking.js';
 import { metroTrainTick } from '../sim/metro.js';
+import { announceSanta, eventsTick, runDailyEvents } from '../sim/events.js';
 
 /**
  * @param tower    the tower this scheduler will drive
@@ -148,7 +153,10 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
       // `specs/TIME.md` § 240 step 2 rides on the same tick: the entertainment
       // ledger rebuild (budgets reseeded, ages bumped, counters cleared), AFTER
       // the linked-facility rebuild of step 1.
-      [REBUILD_TICK]: (t) => { runCommercialRebuild(t); runEntertainmentRebuild(t); },
+      //
+      // Step 3 of the same checkpoint is the event check - *"`fire` before `bomb`"* - and it
+      // goes LAST, after the rebuilds, as the spec orders it (`sim/events.js` `runDailyEvents`).
+      [REBUILD_TICK]: (t) => { runCommercialRebuild(t); runEntertainmentRebuild(t); runDailyEvents(t); },
       /**
        * The off-hours closure sweep: the day's visitors become the day's
        * money, and every venue closes to new customers. This is where a fast
@@ -160,7 +168,13 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
       // AFTER the facility advance (step 2 to the sweep's step 1). It rides here
       // rather than in `extraCheckpoints`, because this key wins over theirs - one
       // body per tick - and a second body at 2000 would silently replace this one.
-      [CLOSURE_TICK]: (t) => { runCommercialClosure(t); updateRecyclingState(t, RECYCLING_CHECK.afternoon); },
+      //
+      // Santa (issue #16) is announced on this tick too: `sim/events.js` `announceSanta`, a notice
+      // on the last day of the year and nothing else. It rides here for the same reason the
+      // recycling check does - one body per tick.
+      [CLOSURE_TICK]: (t) => {
+        runCommercialClosure(t); updateRecyclingState(t, RECYCLING_CHECK.afternoon); announceSanta(t);
+      },
       /**
        * `specs/TIME.md` § 2200, *"type-6 facility advance"*: the same sweep for
        * the restaurant, two hundred ticks later — the evening's diners become
@@ -186,6 +200,8 @@ export function makeTowerScheduler(tower, families = {}, arrivals = {}, onDelay 
     // holds the `day_tick > 240` and `daypart < 4` guards; the rest, and the roll, are
     // the function's - and a tower with no station draws nothing.
     vip: metroTrainTick,
+    // Issue #16: a live bomb or fire advances, every tick. Costs one property read when none is.
+    events: eventsTick,
     carriers: (t) => tickCarriers(t.carriers, t.clock, carrierContext),
     // The only thing in the game that says you are winning. Every tick, because
     // two of its gates are time windows — see `sim/scheduler.js` step 9.

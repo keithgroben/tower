@@ -49,6 +49,7 @@ import { HK_STATE } from '../sim/housekeeping.js';
 import { pendingVisitors } from '../sim/medical.js';
 import { recyclingServed } from '../sim/recycling.js';
 import { metroServed, trainAtPlatform } from '../sim/metro.js';
+import { BLAST_FLOORS_ABOVE, BLAST_FLOORS_BELOW, BLAST_TILES_LEFT, BLAST_TILES_RIGHT, FIRE_RIGHT_REACH, VIP_STATE, santaFlight } from '../sim/events.js';
 import {
   FAMILY, GROUND_FLOOR, MAX_FLOOR, MIN_FLOOR, OBJECT_TYPE, TILES_PER_FLOOR,
   floorExists, floorLabel, isBasement, isHotelFamily, isInTransit, isSkyLobbyFloor, isUnitLet,
@@ -700,6 +701,13 @@ export const SPRITE_USES = {
   'person-resident': ['stand', 'fidget', 'wait', 'wait-annoyed'],
   'person-guest': ['stand', 'fidget', 'wait', 'wait-annoyed', 'luggage'],
   'person-staff': ['stand', 'wait', 'clean'],
+  // The events (issue #16): a yellow VIP in the lift queue and in his suite; the flames of a fire
+  // and the black the fire and a bomb leave behind; the blast; and Santa's sleigh over the tower.
+  'person-vip': ['stand', 'fidget', 'wait', 'wait-annoyed'],
+  fire: ['flame'],
+  'burned-area': ['scorch'],
+  explosion: ['blast'],
+  'sky-santa': ['fly'],
   'sky-cloud': ['small', 'medium', 'large'],
   'sky-bird': ['fly'],
   'sky-plane': ['fly'],
@@ -817,6 +825,16 @@ export function makeRenderer(canvas, options = {}) {
   const landing = new Map();
   let knownObjects = null;
   let framedTower = null;
+
+  /**
+   * The last blast this renderer has seen, and when (render time). An explosion is over in two ticks
+   * of sim time and then the clock jumps to 1500, so the blast cannot be animated from the sim's
+   * clock: it is played for `BLAST_MS` of wall time from the frame it first appears in. The first
+   * frame only records what is already there, so a saved tower does not explode again on load.
+   */
+  let blastKey = undefined;
+  let blastSeenAt = 0;
+  const BLAST_MS = 1800;
 
   /** Last frame's answer to "is this let", per object. See `diffLetStatus`. */
   const letSeen = new Map();
@@ -976,12 +994,14 @@ export function makeRenderer(canvas, options = {}) {
     const L = layout();
     const visible = visibleFloorRange(camera, viewport());
     const byFloor = objectsByFloor(tower);
+    const scarsByFloor = scarsOf(tower);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     paintSky(tod);
+    drawSanta(tower);
     drawEarth(L, byFloor);
 
-    for (let f = visible.low; f <= visible.high; f++) drawStorey(L, f, byFloor.get(f));
+    for (let f = visible.low; f <= visible.high; f++) drawStorey(L, f, byFloor.get(f), scarsByFloor.get(f));
     drawFoundation(L, byFloor);
     drawRoofCap(L, byFloor);
     drawStreet(L, byFloor.get(GROUND_FLOOR));
@@ -996,6 +1016,9 @@ export function makeRenderer(canvas, options = {}) {
     for (const carrier of tower.carriers) drawCars(L, carrier, dtMs);
     drawWaiting(L, tower, visible, byFloor);
     drawStaffAtWork(L, tower);
+    drawVipInSuite(L, tower);
+    drawFire(L, tower);
+    drawBlast(L, tower);
     for (const o of tower.objects.values()) drawUnitSignals(L, o, tower);
     // Last of the world passes, and it has to stay last: the whole point is
     // that nothing draws over it.
@@ -1021,14 +1044,28 @@ export function makeRenderer(canvas, options = {}) {
   }
 
   /** Leftmost and rightmost tile built on a floor, or null when it is bare. */
-  function builtSpan(objects) {
-    if (!objects || !objects.length) return null;
+  function builtSpan(objects, scars = null) {
     let left = Infinity, right = -Infinity;
-    for (const o of objects) {
+    for (const o of objects ?? []) {
       if (o.left < left) left = o.left;
       if (o.right > right) right = o.right;
     }
-    return { left, right };
+    // Ground a fire or a bomb took is still part of the building: the shell stands around it, black.
+    for (const s of scars ?? []) {
+      if (s.left < left) left = s.left;
+      if (s.right > right) right = s.right;
+    }
+    return left > right ? null : { left, right };
+  }
+
+  /** Where something burned or blew up, by floor. Read from the sim's own `events.scars`. */
+  function scarsOf(tower) {
+    const byFloor = new Map();
+    for (const s of tower.events?.scars ?? []) {
+      const list = byFloor.get(s.floor);
+      if (list) list.push(s); else byFloor.set(s.floor, [s]);
+    }
+    return byFloor;
   }
 
   /**
@@ -1040,8 +1077,8 @@ export function makeRenderer(canvas, options = {}) {
    * cells left a lift shaft floating with a hole between it and the building.
    * A building is continuous between its own ends and nowhere else.
    */
-  function drawStorey(L, floor, objects) {
-    const span = builtSpan(objects);
+  function drawStorey(L, floor, objects = [], scars = null) {
+    const span = builtSpan(objects, scars);
     if (!span) return;
     const y = L.floorY(floor);
     if (y + L.fh < 0 || y > H) return;
@@ -1073,6 +1110,28 @@ export function makeRenderer(canvas, options = {}) {
         }
       }
     });
+
+    // What burned (issue #16): the scorch over the tiles a fire or a bomb took. The rooms that
+    // stand there now are drawn over it by `drawObject`, so a rebuilt bay hides it, as it should.
+    if (scars?.length) {
+      for (const scar of scars) {
+        const sx = L.tileX(scar.left);
+        const sw = (scar.right - scar.left + 1) * L.tw;
+        if (sx + sw < 0 || sx > W) continue;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(sx, y, sw, L.fh);
+        ctx.clip();
+        for (let t = scar.left; t <= scar.right; t += ART_CELL_TILES) {
+          const cx = L.tileX(t);
+          if (!sprites.drawSprite(ctx, { name: 'burned-area', animation: 'scorch', x: cx, y, scale: L.zoom })) {
+            ctx.fillStyle = '#1a1410';
+            ctx.fillRect(cx, y, cellW, L.fh - 2);
+          }
+        }
+        ctx.restore();
+      }
+    }
 
     // Where a dug storey ends, the earth it was cut out of begins. Drawn
     // OUTSIDE the span: the edge is soil, not a buildable tile.
@@ -1863,6 +1922,90 @@ export function makeRenderer(canvas, options = {}) {
     }
   }
 
+  /**
+   * The VIP, in his suite (issue #16). While he is asleep upstairs the only sign of him is here;
+   * on the way he is in the lift queue like anyone else, drawn by `drawWaitingFigure`.
+   */
+  function drawVipInSuite(L, tower) {
+    const vip = tower.events?.vip;
+    if (!vip || (vip.phase !== 'staying' && vip.phase !== 'leaving')) return;
+    const suite = tower.objects.get(vip.suiteId);
+    if (!suite) return;
+    const actor = tower.actors.find((a) => a && a.id === tower.events.vipActorId);
+    // Waiting for a lift to take him down: the queue draws him, not the room.
+    if (!actor || actor.waitingFloor != null) return;
+    const x = L.tileX(suite.left) + ((suite.right - suite.left + 1) * L.tw) / 2 - 8 * L.zoom;
+    const y = L.floorY(suite.floor) + L.fh - 2 - 16 * L.zoom;
+    if (x + 16 * L.zoom < 0 || x > W || y + 16 * L.zoom < 0 || y > H) return;
+    const beat = Math.floor(sprites.elapsedMs / 900) % 2 === 1;
+    sprites.drawSprite(ctx, { name: 'person-vip', animation: beat ? 'fidget' : 'stand', x, y, scale: L.zoom });
+  }
+
+  /**
+   * A fire (issue #16): flames at both fronts of the burning floor, and the guards who have
+   * climbed the outside stairs to fight it. The fronts and the guards are read from
+   * `tower.events.fire`; nothing here decides anything.
+   */
+  function drawFire(L, tower) {
+    const fire = tower.events?.fire;
+    if (!fire) return;
+    const y = L.floorY(fire.current);
+    if (y + L.fh < 0 || y > H) return;
+    const flames = (tile) => {
+      for (let k = -1; k <= 1; k++) {
+        const x = L.tileX(tile + k * 2);
+        if (x + 16 * L.zoom < 0 || x > W) continue;
+        if (!sprites.drawSprite(ctx, { name: 'fire', animation: 'flame', x, y, scale: L.zoom, phaseMs: (tile + k) * 90 })) {
+          ctx.fillStyle = BAD;
+          ctx.fillRect(x, y + L.fh * 0.4, 12 * L.zoom, L.fh * 0.6);
+        }
+      }
+    };
+    if (fire.fronts.left !== null) flames(fire.fronts.left + 2);
+    if (fire.fronts.right !== null) flames(fire.fronts.right + FIRE_RIGHT_REACH);
+    for (const guard of fire.guards) {
+      if (guard.column === null || guard.floor !== fire.current || guard.status === 'climb') continue;
+      const gx = L.tileX(guard.column) - 8 * L.zoom;
+      if (gx + 16 * L.zoom < 0 || gx > W) continue;
+      sprites.drawSprite(ctx, {
+        name: 'person-staff', animation: guard.status === 'wind' ? 'clean' : 'stand',
+        x: gx, y: y + L.fh - 2 - 16 * L.zoom, scale: L.zoom, phaseMs: guard.officeId * 130,
+      });
+    }
+  }
+
+  /** The bomb going off (issue #16): a fireball in every cell of the 40 x 6 rectangle it took. */
+  function drawBlast(L, tower) {
+    const blast = tower.events?.blast ?? null;
+    const key = blast ? blast.day + ':' + blast.tick + ':' + blast.floor + ':' + blast.x : null;
+    if (blastKey === undefined) { blastKey = key; blastSeenAt = -Infinity; return; }
+    if (key !== blastKey) { blastKey = key; blastSeenAt = sprites.elapsedMs; }
+    if (!blast || sprites.elapsedMs - blastSeenAt > BLAST_MS) return;
+    const left = blast.x - BLAST_TILES_LEFT, right = blast.x + BLAST_TILES_RIGHT;
+    for (let floor = blast.floor - BLAST_FLOORS_BELOW; floor <= blast.floor + BLAST_FLOORS_ABOVE; floor++) {
+      const y = L.floorY(floor);
+      if (y + L.fh < 0 || y > H) continue;
+      for (let t = left; t <= right; t += ART_CELL_TILES) {
+        const x = L.tileX(t);
+        if (x + ART_CELL_TILES * L.tw < 0 || x > W) continue;
+        sprites.drawSprite(ctx, { name: 'explosion', animation: 'blast', x, y, scale: L.zoom, phaseMs: (floor * 7 + t) * 40 });
+      }
+    }
+  }
+
+  /** Santa (issue #16): a sleigh across the sky on the last evening of the year, from the clock alone. */
+  function drawSanta(tower) {
+    const progress = santaFlight(tower.clock);
+    if (progress === null) return;
+    const zoom = flyerScale(camera.zoom);
+    const x = -48 * zoom + progress * (W + 96 * zoom);
+    const y = H * 0.16 + Math.sin(progress * Math.PI * 4) * 6 * zoom;
+    if (!sprites.drawSprite(ctx, { name: 'sky-santa', animation: 'fly', x, y, scale: zoom })) {
+      ctx.fillStyle = BAD;
+      ctx.fillRect(x, y, 24 * zoom, 8 * zoom);
+    }
+  }
+
   function drawWaitingFigure(L, actor, x, feetY) {
     const score = actorStress(actor);
     const band = stressBand(score);
@@ -1887,6 +2030,7 @@ export function makeRenderer(canvas, options = {}) {
         }
       }
       const sheet = actor.family === FAMILY.condo ? 'person-resident'
+        : actor.family === FAMILY.vip ? 'person-vip'
         : HOTEL.has(actor.family) || ENTERTAINMENT_FAMILIES.has(actor.family) ? 'person-guest' : 'person-worker';
       // A calm guest on the way up to check in is carrying a suitcase — the one
       // frame the guest sheet has that the others do not. Stress still wins: a

@@ -637,6 +637,10 @@ export function hotelGate(actor, object, clock, rng) {
       // *"if `room.pairing_pending_flag != 0`"* — the occupancy latch, which is
       // the same byte as `occupied_flag` (`+0x14`). Held clear on a dirty room.
       if (!object.occupiedFlag) return 'hold';
+      // A suite a VIP has reserved takes nobody else (issue #16, `sim/events.js`). The hold is
+      // the booking: the VIP is not a guest of this room's own, so the room's guests simply
+      // wait until the visit is over.
+      if (object.vipHold) return 'hold';
       if (daypart === 4) return chance(rng, 12);
       // *"daypart > 4 and tick < 2300 → dispatch; tick >= 2300 → no dispatch"*.
       return daypart > 4 && dayTick < 2300 ? 'dispatch' : 'hold';

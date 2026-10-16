@@ -853,6 +853,9 @@ const DISTANCE_FEEDBACK_STATES = {
   0x09: [0x00, 0x01, 0x20],          // condo: the outbound trips
   0x12: [0x20],                      // entertainment: arrival only
   0x1d: [0x20],
+  // The VIP (issue #16, `FAMILY.vip`): judged like the suite guest it is - the long ride up
+  // and the long ride down, and nothing in between. `spec/DEVIATIONS.md` A66.
+  0x30: [0x20, 0x05],
 };
 
 /** `state & 0x3f`. The in-transit bit is `0x40`; the base state is what gates. */

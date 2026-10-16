@@ -1,0 +1,10 @@
+{
+  "frameW": 48,
+  "frameH": 32,
+  "animations": {
+    "scorch": {
+      "col": 0,
+      "frames": 1
+    }
+  }
+}

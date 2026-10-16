@@ -193,6 +193,19 @@ export const FAMILY = {
    * the commuters it brings are the tower's own workers, re-routed (`sim/metro.js`).
    */
   metro: 0x1f,
+  /**
+   * **The VIP** (issue #16): ONE visitor who books a hotel suite, rides the real lifts to
+   * it, sleeps, rides back down and rates the stay. Not a placed facility - it owns no
+   * object, so `objectId` is `null` and demolishing the suite it booked never takes the
+   * visitor with it - and not staff either: it has stress, which is the whole point.
+   *
+   * ⚠️ `0x30` is ours. `specs/TIME.md` § 2500 calls family `0x0f` the *"VIP claimant"*, but
+   * `0x0f` is housekeeping in `FACILITIES.md` and in this build, and the reference's VIP
+   * event is a display toggle on the metro station (`EVENTS.md` § VIP / Special Visitor
+   * Event). The visitor the help file and the dialogs describe has no code of its own in
+   * `specs/`, so it gets an unused one. `spec/DEVIATIONS.md` A66.
+   */
+  vip: 0x30,
 };
 
 /**

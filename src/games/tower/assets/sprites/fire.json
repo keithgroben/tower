@@ -1,0 +1,11 @@
+{
+  "frameW": 16,
+  "frameH": 32,
+  "animations": {
+    "flame": {
+      "col": 0,
+      "frames": 2,
+      "speed": "idle"
+    }
+  }
+}

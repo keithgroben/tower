@@ -50,12 +50,13 @@ export function strideIndices(dayTick, actorCount) {
  *   Keyed by `family_code`. Called once per serviced actor.
  * @property {(tower:object) => void} [news]  per-tick hook, runs FIRST
  * @property {(tower:object) => void} [vip]   per-tick hook, runs after news
+ * @property {(tower:object) => void} [events] runs every tick, AFTER the checkpoint body (issue #16)
  * @property {(tower:object) => void} [carriers] runs after entity refresh
  * @property {(tower:object) => void} [progression] runs LAST, every tick
  */
 
 export function createScheduler(hooks = {}) {
-  const { checkpoints = {}, families = {}, news, vip, carriers, progression } = hooks;
+  const { checkpoints = {}, families = {}, news, vip, events, carriers, progression } = hooks;
 
   /**
    * Advance the tower exactly one tick.
@@ -84,6 +85,13 @@ export function createScheduler(hooks = {}) {
     // 6. The checkpoint body for this exact tick.
     const checkpoint = checkpoints[dayTick];
     if (checkpoint) checkpoint(tower);
+
+    // 6b. A live bomb or fire advances. The reference runs `tickBombEvent` and `tickFireEvent`
+    // straight after its checkpoints (`day-scheduler.ts`), so the 240 body that STARTS an event
+    // and this hook that steps it share a tick, and an event that ends by moving the clock
+    // (`sim/events.js`: *"forces `day_tick` up to 1500"*) has done so before anyone is refreshed.
+    // They draw from the generator only to choose a floor and a tile, at the checkpoint.
+    if (events) events(tower);
 
     // 7. Entity refresh. Runs AFTER the checkpoint deliberately: actors
     // serviced this tick see state a checkpoint already changed. The start-of-

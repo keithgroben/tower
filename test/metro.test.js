@@ -609,7 +609,8 @@ export const tests = {
   // -------------------------------------------------------------------- save
 
   'save v9: the stack and its train survive a round trip, and a v8 file is refused'() {
-    assert(SAVE_VERSION === 9, 'the shape changed (issue #15): ' + SAVE_VERSION);
+    // (Issue #16 moved it on to 10; the check is a floor, as the older ones are.)
+    assert(SAVE_VERSION >= 9, 'the shape changed (issue #15): ' + SAVE_VERSION);
     const w = withMetro();
     metroObjects(w.tower).forEach((o) => { o.platform = PLATFORM.train; });
     const back = restore(JSON.parse(JSON.stringify(snapshot(w))));

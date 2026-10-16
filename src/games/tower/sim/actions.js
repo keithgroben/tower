@@ -48,6 +48,7 @@ import {
 } from './parking.js';
 import { clearDemand } from './demands.js';
 import { METRO_FLOORS, METRO_WIDTH, belowMetroReason, metroObstruction, placeMetro } from './metro.js';
+import { answerEvent, clearScars, maybeFindTreasure } from './events.js';
 
 /**
  * What each buildable maps to. The palette is built from this, so it cannot
@@ -687,13 +688,17 @@ const ACTIONS = {
     // start of day — the reference sets these at placement.
     notePlacement(tower, spec.family);
     afterServiceBuilt(tower, spec.family);
+    // Ground that burned or blew up is whole again once something is built on it, and the first
+    // thing built on a new basement floor may strike treasure (issue #16, `sim/events.js`).
+    clearScars(tower, floor, left, right);
+    const treasure = maybeFindTreasure(tower, floor);
     // A sky lobby is a transfer point: the router needs to know the floor.
     if (spec.family === FAMILY.lobby && floor > GROUND_FLOOR) {
       tower.transferFloors ??= [];
       if (!tower.transferFloors.includes(floor)) tower.transferFloors.push(floor);
       tower.routeTablesDirty = true;
     }
-    return { ok: true, cost, object: placed.object };
+    return { ok: true, cost, object: placed.object, ...(treasure ? { treasure } : {}) };
   },
 
   /**
@@ -979,6 +984,19 @@ const ACTIONS = {
     }
     const selector = changeFilm(record, pool);
     return { ok: true, cost, selector, title: filmTitle(selector) };
+  },
+
+  /**
+   * **Answer the question the tower is asking** (issue #16): a bomb's ransom (`'pay'`, or
+   * `'search'` for the guards to look) or a fire's helicopter (`'helicopter'`, $500,000, or
+   * `'decline'`). The money moves in `sim/events.js` `answerEvent`; whether the answer can be
+   * given - and in what words it is refused - is `answerRefusal`, which the dialog asks too.
+   * An unanswered question is answered `'search'` / `'decline'` two ticks after it opens
+   * (`EVENTS.md`: *"two ticks after ignition, the game resolves the rescue choice prompt"*); the
+   * browser holds the clock still while the dialog is open.
+   */
+  answer_event({ tower }, { answer }) {
+    return answerEvent(tower, answer);
   },
 
   /** Change a unit's rent tier. 0 is dearest, 3 is the one that always passes. */

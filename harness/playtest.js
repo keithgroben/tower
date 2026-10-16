@@ -40,6 +40,9 @@ import {
 import { ENT_STATE, LOWER_ADVANCE_TICK, PARTY_ADVANCE_TICK } from '../src/games/tower/sim/entertainment.js';
 import { activeDemands, demandsOf, isDemanded, noticesAfter } from '../src/games/tower/sim/demands.js';
 import { OFFICE_STATE } from '../src/games/tower/sim/office.js';
+import {
+  BOMB_RANSOM, HELICOPTER_COST, TREASURE_AMOUNTS, VIP_RETRY_DAYS, eventsOf, vipBlocker,
+} from '../src/games/tower/sim/events.js';
 import { carsParked, usableSpaces } from '../src/games/tower/sim/parking.js';
 import { medicalCenters } from '../src/games/tower/sim/medical.js';
 import {
@@ -499,7 +502,7 @@ export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lif
  *    ~250 (1,500 people) and the point here is the gates, not the head-count. It is
  *    counted exactly like any other bucket - recycling sizes itself to it - so the centers
  *    the script builds are real and the trial still fails if there are too few.
- *  - **`vipStayFavorable`** (issue #16), **`officeServiceOk`**, **`cathedralPlaced`** and the
+ *  - **`officeServiceOk`**, **`cathedralPlaced`** and the
  *    wedding's **`weddingGuestsArrived`** (issue #17): set by the script the morning after
  *    the rung they belong to opens, on the first weekend morning for the wedding. Each is
  *    the exact flag its issue will write. (**`metroPlaced`** was one until issue #15: the
@@ -564,7 +567,12 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
       }
       if (d.kind === 'hotelSuite') {
         for (let i = count(FAMILY.hotelSuite); i < HOTEL_SUITES_FOR_FOUR_STARS; i++) {
-          tryBuild({ type: 'build', what: 'hotelSuite', floor: floors + 1, left: i * (BUILDABLE.hotelSuite.width + 1) }, 'hotelSuite');
+          tryBuild({ type: 'build', what: 'hotelSuite', floor: floors + 1, left: 12 + i * (BUILDABLE.hotelSuite.width + 1) }, 'hotelSuite');
+        }
+        // A suite is only a suite while somebody turns it round (issue #9), and the VIP (issue #16)
+        // will only be given one that is clean: housekeeping beside them, reached by the service lift.
+        if (count(FAMILY.housekeeping) === 0 && count(FAMILY.hotelSuite) > 0) {
+          tryBuild({ type: 'build', what: 'housekeeping', floor: floors + 1, left: 40 }, 'housekeeping');
         }
       }
     }
@@ -584,7 +592,9 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
       // Recycling: a service lift to the basement, then enough centers for the activity
       // the next rung asks for (the duty tier is activity per working center, < 2,500).
       if (!serviceLift) {
-        serviceLift = tryBuild({ type: 'build_shaft', kind: 'service', bottom: -3, top: 2, column: 4 }, 'service lift');
+        // From the recycling centers' basement to the suites' floor: the same lift takes the plants'
+        // waste out and the housekeepers up.
+        serviceLift = tryBuild({ type: 'build_shaft', kind: 'service', bottom: -3, top: floors + 1, column: 4 }, 'service lift');
       }
       const want = Math.min(6, Math.ceil((STAR_THRESHOLDS[star - 1] ?? 15_000) / 2400));
       for (let i = count(FAMILY.recycling) / 2; serviceLift && i < want; i++) {
@@ -609,7 +619,9 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
       gates[flag] = value;
       flagsSetOn[flag] = tower.clock.dayCounter;
     };
-    if (star === 3 && gates.suitePlaced) { set('vipStayFavorable'); set('officeServiceOk'); }
+    // The VIP is no stand-in any more (issue #16): a real visitor books one of the two suites the
+    // script built, rides the real lifts, and `sim/events.js` writes the gate when he is pleased.
+    if (star === 3 && gates.suitePlaced) set('officeServiceOk');
     if (star === 5) set('cathedralPlaced');
   };
 
@@ -640,7 +652,7 @@ export function ladderTrial({ days = 14, seed = 1, floors = 9 } = {}) {
     });
   }
   const last = perDay[perDay.length - 1];
-  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, metroPlacedDay, hud: last.hud };
+  return { days, offices, perDay, rises, finalStar: last.star, built, refused, flagsSetOn, metroPlacedDay, hud: last.hud, world };
 }
 
 // ---------------------------------------------------------------------------
@@ -1114,7 +1126,14 @@ export function entertainmentTrial({
   const shopObjects = shops.map((s) => must(applyAction(world, { type: 'build', what: s.what, floor: s.floor, left: 100 }), s.what).object);
   rebuildRouteTables(tower);
   const { scheduler } = makeDriver(world);
-  if (startDay !== null) { tower.clock.dayCounter = startDay; tower.clock.dayTick = 0; }
+  if (startDay !== null) {
+    tower.clock.dayCounter = startDay; tower.clock.dayTick = 0;
+    // Since issue #16 a bomb or fire day HAS a bomb or a fire. This trial measures the payout
+    // rule on those days, so the event is held off the way the spec allows (a bomb comes at 2-4
+    // stars; a fire not during a cathedral evaluation) - `eventsTrial` is the one that lets it burn.
+    tower.starCount = 5;
+    starGatesOf(tower).cathedralPlaced = true;
+  }
 
   const settleTick = kind === 'theater' ? LOWER_ADVANCE_TICK : PARTY_ADVANCE_TICK;
   const spill = new Map(shopObjects.map((s) => [s.id, new Set()]));
@@ -1141,6 +1160,177 @@ export function entertainmentTrial({
     })),
     world, venue,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Issue #16: the events.
+
+/**
+ * **A tower for the events to test.** Three standard lifts of four cars, `floors` floors of offices
+ * (22 an office row, 6 tiles each, from tile 12), security offices in the basement floors named by
+ * `security` (`[-1]` is one office on B1, `[-1, -9]` two), at `stars` stars on an otherwise empty
+ * lot - the same shape `starLadderTrial` uses, and for the same reason: the routes are real and the
+ * numbers are the router's, not a stand-in's. `suites` hotel suites sit on the top floor (clear of the
+ * lifts) with a service lift and a housekeeping facility to turn them round when `housekeeping`.
+ *
+ * @returns {{world:object, tower:object, scheduler:object, offices:number, suites:object[]}}
+ */
+export function eventsTower({
+  floors = 10, security = [], stars = 3, seed = 1, suites = 0, housekeeping = false, liftTop = null, cars = 4,
+  suiteFloor = null,
+} = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  tower.starCount = stars;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('events tower: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  const top = liftTop ?? floors + 1;
+  const suitesOn = suiteFloor ?? floors + 1;
+  for (const column of [20, 50, 80]) {
+    const shaft = must(applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: -1, top, column }), 'a lift');
+    for (let k = 1; k < cars; k++) must(applyAction(world, { type: 'add_car', carrierId: shaft.carrier.id }), 'a car');
+  }
+  let offices = 0;
+  for (let floor = 1; floor <= floors; floor++) {
+    for (let left = 12; left + BUILDABLE.office.width <= 150; left += BUILDABLE.office.width) {
+      if (applyAction(world, { type: 'build', what: 'office', floor, left }).ok) offices++;
+    }
+  }
+  security.forEach((floor, i) => must(applyAction(world, { type: 'build', what: 'security', floor, left: 60 + i * 20 }), 'a security office'));
+  const rooms = [];
+  for (let i = 0; i < suites; i++) {
+    rooms.push(must(applyAction(world, { type: 'build', what: 'hotelSuite', floor: suitesOn, left: 100 + i * 11 }), 'a suite').object);
+  }
+  if (housekeeping) {
+    must(applyAction(world, { type: 'build_shaft', kind: 'service', bottom: 0, top: suitesOn, column: 4 }), 'a service lift');
+    must(applyAction(world, { type: 'build', what: 'housekeeping', floor: suitesOn, left: 40 }), 'housekeeping');
+  }
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+  return { world, tower, scheduler, offices, suites: rooms };
+}
+
+/** Run a day (from tick 0 of `dayCounter`), answering the open question the moment it appears. */
+function runEventDay(env, dayCounter, answer = null) {
+  const { world, tower, scheduler } = env;
+  tower.clock.dayCounter = dayCounter;
+  tower.clock.dayTick = 0;
+  const cash = tower.cash;
+  const objects = tower.objects.size;
+  const events = eventsOf(tower);
+  const logFrom = events.history.length;
+  const jumps = [];
+  let answered = null;
+  for (let i = 0; i < TICKS_PER_DAY; i++) {
+    const before = tower.clock.dayTick;
+    scheduler.tick(tower);
+    // A tick that moved the clock by more than one is the events' own jump to 1500.
+    const moved = (tower.clock.dayTick - before + TICKS_PER_DAY) % TICKS_PER_DAY;
+    if (moved > 1) jumps.push({ from: before, to: tower.clock.dayTick });
+    if (answer && !answered && tower.events.decision) answered = applyAction(world, { type: 'answer_event', answer });
+  }
+  return {
+    answered, jumps, cash: tower.cash - cash, destroyed: objects - tower.objects.size,
+    history: eventsOf(tower).history.slice(logFrom), world: env.world,
+  };
+}
+
+/**
+ * **The bomb trial.** Day 59 of a ten-floor tower at three stars (a $300,000 ransom):
+ *
+ *  - `answer: 'pay'`    the ransom is taken, the bomb never goes off;
+ *  - `answer: 'search'` the guards look - found in a few ticks with an office on B1, and **exploded at
+ *    1 PM** with none, taking everything in the 40 x 6 rectangle that can burn.
+ *
+ * @returns {{outcome:string, ticks:number|null, cash:number, destroyed:number, ransom:number, jumps:object[], history:object[]}}
+ */
+export function bombTrial({ answer = 'search', security = [-1], floors = 10, stars = 3, seed = 1 } = {}) {
+  const env = eventsTower({ floors, security, stars, seed });
+  const r = runEventDay(env, 59, answer);
+  const last = r.history.filter((h) => h.kind === 'bomb').at(-1);
+  return {
+    answer, security: security.length, outcome: last?.outcome ?? 'nothing', ticks: last?.ticks ?? null,
+    cash: r.cash, destroyed: r.destroyed, ransom: BOMB_RANSOM[stars] ?? null, jumps: r.jumps, history: r.history,
+    clockAfter: env.tower.clock.dayTick, flags: { ...env.tower.events },
+  };
+}
+
+/**
+ * **The fire trial.** Day 83 of a ten-floor tower at three stars. `security` is the basement floors
+ * the offices sit on (`[]` none, `[-1]` one beside the lobby, `[-10]` one ten floors down),
+ * `answer` the player's reply to the helicopter.
+ *
+ * @returns {{outcome:string, ticks:number, floorsBurned:number, destroyed:number, cash:number, started:object}}
+ */
+export function fireTrial({ answer = 'decline', security = [-1], floors = 10, stars = 3, seed = 1 } = {}) {
+  const env = eventsTower({ floors, security, stars, seed });
+  const r = runEventDay(env, 83, answer);
+  const out = r.history.find((h) => h.kind === 'fire' && h.outcome === 'out');
+  const started = r.history.find((h) => h.kind === 'fire' && h.outcome === 'started');
+  return {
+    answer, security: security.length, outcome: out ? 'out' : (started ? 'still burning' : 'nothing'),
+    ticks: out?.ticks ?? null, floorsBurned: out?.floorsBurned ?? 0, destroyed: out?.destroyed ?? 0,
+    cash: r.cash, started, history: r.history, clockAfter: env.tower.clock.dayTick,
+    jumps: r.jumps, floorBurned: started?.floor ?? null, offices: env.offices,
+  };
+}
+
+/**
+ * **The VIP trial.** Two suites on the top floor of a ten-floor tower, housekeeping to turn them
+ * round, and lifts that are `'good'` (three shafts of eight cars), `'average'` (four), `'thin'` (one car a
+ * shaft: the VIP queues all evening), or `'none'` (the suites are two floors above the shafts' top: he
+ * can book and cannot get there). The VIP's first trip is at 5 PM, the hour the workers go home - the same hour a
+ * suite's own guests check in.
+ *
+ * @returns {{visits:object[], favorable:boolean, gateDay:number|null, stress:number|null, days:number}}
+ */
+export function vipTrial({ lift = 'good', days = 8, seed = 1, floors = 10 } = {}) {
+  const top = floors + 1;
+  const suiteFloor = lift === 'none' ? floors + 3 : top;
+  const cars = { good: 8, average: 4, thin: 1, none: 4 }[lift];
+  if (!cars) throw new Error('vip trial: no lift called "' + lift + '"');
+  const env = eventsTower({ floors, security: [-1], suites: 2, housekeeping: true, seed, liftTop: top, cars, suiteFloor });
+  const { world, tower, scheduler } = env;
+  tower.clock.dayCounter = 0;
+  tower.clock.dayTick = 0;
+  let gateDay = null;
+  for (let d = 0; d < days; d++) {
+    for (let t = 0; t < TICKS_PER_DAY; t++) {
+      scheduler.tick(tower);
+      if (gateDay === null && tower.gates?.vipStayFavorable) gateDay = tower.clock.dayCounter;
+    }
+  }
+  const visits = eventsOf(tower).history.filter((h) => h.kind === 'vip'
+    && ['comfortable', 'uncomfortable', 'cancelled'].includes(h.outcome));
+  return {
+    lift, days, visits, favorable: Boolean(tower.gates?.vipStayFavorable), gateDay,
+    stress: visits.at(-1)?.stress ?? null, history: eventsOf(tower).history.filter((h) => h.kind === 'vip'),
+    world, retryDays: VIP_RETRY_DAYS, blocker: vipBlocker(tower),
+  };
+}
+
+/**
+ * **The treasure trial.** Dig `floors` basement floors in a fresh tower, one cheap fast food a floor
+ * (the first object on each new floor is the roll), over `seeds`, and count the strikes.
+ *
+ * @returns {{digs:number, strikes:{seed:number, floor:number, amount:number}[], amounts:number[]}}
+ */
+export function treasureTrial({ seeds = 40, floors = 9 } = {}) {
+  const strikes = [];
+  let digs = 0;
+  for (let seed = 1; seed <= seeds; seed++) {
+    const world = newTowerWorld({ seed, cash: 90_000_000 });
+    world.tower.starCount = 4;
+    for (let k = 1; k <= floors; k++) {
+      const r = applyAction(world, { type: 'build', what: 'fastFood', floor: -k, left: 30 });
+      if (!r.ok) continue;
+      digs++;
+      if (r.treasure) strikes.push({ seed, floor: -k, amount: r.treasure.amount });
+    }
+  }
+  return { digs, strikes, amounts: TREASURE_AMOUNTS };
 }
 
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
@@ -1318,6 +1508,41 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
         + (String(r.lunches.otherUnderground) + ' / ' + r.lunches.otherAbove).padStart(22)
         + (String(r.let) + '/' + r.offices).padStart(9) + String(r.stress ?? '-').padStart(10));
     }
+    process.exit(0);
+  }
+  if (process.argv.includes('--events')) {
+    // `node harness/playtest.js --events` - the issue #16 proof.
+    const dollars = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
+    console.log('BOMB - day 59, a ten-floor tower (220 offices) at three stars; ransom ' + dollars(BOMB_RANSOM[3]) + '\n');
+    console.log('  answer   offices   outcome     ticks searching   cash          destroyed   clock after');
+    for (const [answer, security] of [['pay', [-1]], ['search', [-1]], ['search', [-1, -9]], ['search', []]]) {
+      const r = bombTrial({ answer, security });
+      console.log('  ' + answer.padEnd(8) + String(r.security).padStart(7) + '   ' + r.outcome.padEnd(11)
+        + String(r.ticks ?? '-').padStart(13) + dollars(r.cash).padStart(15) + String(r.destroyed).padStart(12)
+        + String(r.clockAfter).padStart(14) + (r.jumps.length ? '   (clock jumped ' + r.jumps.map((j) => j.from + ' -> ' + j.to).join(', ') + ')' : ''));
+    }
+    console.log('\nFIRE - day 83, the same tower; the helicopter is ' + dollars(HELICOPTER_COST) + '\n');
+    console.log('  answer       offices   outcome   ticks   floors burned   destroyed   cash');
+    for (const [answer, security, label] of [
+      ['decline', [], 'none'], ['decline', [-1], 'B1'], ['decline', [-10], 'B10'], ['helicopter', [], 'none'], ['helicopter', [-1], 'B1'],
+    ]) {
+      const r = fireTrial({ answer, security });
+      console.log('  ' + answer.padEnd(12) + label.padStart(5) + '   ' + r.outcome.padEnd(9) + String(r.ticks ?? '-').padStart(5)
+        + String(r.floorsBurned).padStart(14) + String(r.destroyed).padStart(12) + dollars(r.cash).padStart(14)
+        + '   (fire on F' + r.floorBurned + ')');
+    }
+    console.log('\nVIP - two suites on F11, housekeeping, a security office; the lifts:\n');
+    console.log('  lifts                 visits (outcome, day)                     the gate    stress (the VIP\'s own two trips)');
+    for (const lift of ['good', 'average', 'thin', 'none']) {
+      const r = vipTrial({ lift, days: 12 });
+      console.log('  ' + lift.padEnd(22)
+        + (r.visits.map((v) => v.outcome + ' d' + v.day).join(', ') || 'no visit').padEnd(42)
+        + String(r.favorable ? 'OPEN d' + r.gateDay : 'shut').padEnd(12) + (r.stress ?? '-'));
+    }
+    const t = treasureTrial();
+    console.log('\nTREASURE - ' + t.digs + ' basement floors dug over 40 towers: ' + t.strikes.length + ' strikes ('
+      + (100 * t.strikes.length / t.digs).toFixed(1) + '% against 12.5% expected); amounts '
+      + [...new Set(t.strikes.map((x) => x.amount))].sort((a, b) => a - b).map(dollars).join(', '));
     process.exit(0);
   }
   if (process.argv.includes('--ladder')) {

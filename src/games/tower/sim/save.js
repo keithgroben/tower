@@ -118,8 +118,16 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * the platform, and a commuter eats only underground. A v8 file has no station, so it would
  * load - but a v9 file resumed by v8 would hold a family the old build draws as a grey box
  * and cannot demolish-guard, which is the case the version exists for.
+ *
+ * v10 (issue #16, the events) puts the events' state on the tower - `events.decision`, `bomb`, `fire`
+ * (its fronts and guard teams), `vip` / `vipActorId` / `lastVip`, `scars`, `blast`, `dug`, `history` -
+ * adds an eighth family (`FAMILY.vip`, one standing visitor with no object, `objectId: null`), a
+ * `vipHold` on the suite it has booked, and makes `gates.vipStayFavorable` writable by the game. A
+ * v9 file resumed by v10 would carry a `vipStayFavorable` the VIP never earned if it were hand-set,
+ * and a v10 file resumed by v9 would hold a bomb mid-search and a fire mid-spread that the old build
+ * has no code to advance - the tower would be locked in a state of emergency for ever.
  */
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 10;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,
