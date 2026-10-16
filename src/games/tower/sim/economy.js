@@ -408,6 +408,38 @@ export const EXPENSE_BUCKETS = [
   'parkingRamp', 'parking',
 ];
 
+/**
+ * **Every other way cash moves** (issue #18, the Finance window). The income and expense
+ * buckets above are the operating ledger; money also leaves for construction and a new film
+ * and arrives as treasure, and a bomb's ransom and a fire's helicopter leave it with no bucket
+ * at all. A Finance window that listed only the operating buckets would not add up to the
+ * change in cash, and a statement that does not reconcile is the accounting hole this repo's
+ * brief warns about. So each of these has a line, rolled with the others at checkpoint 2533.
+ *
+ * `capLost` is income that did not fit under the $99,999,999 cap: `addIncome` mirrors what
+ * was realized and clamps what was kept, and the difference has to be somewhere. `unclassified`
+ * is a movement into a bucket name nobody declared, which `addIncome` / `addExpense` used to
+ * swallow in silence (the `bucket in ledger` guard) - recorded now, so a typo'd name is a visible
+ * line rather than missing money.
+ *
+ * Amounts are stored positive; {@link OTHER_SIGN} says which way each moves cash.
+ */
+export const OTHER_BUCKETS = [
+  'construction', 'films', 'ransom', 'helicopter', 'treasure', 'capLost', 'unclassifiedIncome', 'unclassifiedExpense',
+];
+
+/** `+1` adds to cash, `-1` takes from it. */
+export const OTHER_SIGN = {
+  construction: -1, films: -1, ransom: -1, helicopter: -1, treasure: 1, capLost: -1,
+  unclassifiedIncome: 1, unclassifiedExpense: -1,
+};
+
+/** Add `dollars` to one of the {@link OTHER_BUCKETS} on `other` (a ledger's, or a tower's). */
+export function bookOther(other, key, dollars) {
+  other[key] = (other[key] ?? 0) + dollars;
+  return other[key];
+}
+
 const zeroed = (keys) => Object.fromEntries(keys.map((k) => [k, 0]));
 
 export function createLedger({ cash = STARTING_CASH } = {}) {
@@ -416,6 +448,7 @@ export function createLedger({ cash = STARTING_CASH } = {}) {
     cashCycleBase: cash,
     income: zeroed(INCOME_BUCKETS),
     expense: zeroed(EXPENSE_BUCKETS),
+    other: zeroed(OTHER_BUCKETS),
     population: zeroed(Object.keys(POPULATION_BY_FAMILY)),
   };
 }
@@ -426,8 +459,12 @@ export function createLedger({ cash = STARTING_CASH } = {}) {
  * records what was realized, not what fitted.
  */
 export function addIncome(ledger, bucket, dollars) {
-  ledger.cash = Math.min(CASH_CAP, ledger.cash + dollars);
+  const wanted = ledger.cash + dollars;
+  ledger.cash = Math.min(CASH_CAP, wanted);
   if (bucket in ledger.income) ledger.income[bucket] += dollars;
+  else if (ledger.other) bookOther(ledger.other, 'unclassifiedIncome', dollars);
+  // What the cap refused, so the Finance window still adds up (issue #18).
+  if (ledger.other && wanted > CASH_CAP) bookOther(ledger.other, 'capLost', wanted - CASH_CAP);
   return ledger.cash;
 }
 
@@ -445,6 +482,7 @@ export function addIncome(ledger, bucket, dollars) {
 export function addExpense(ledger, bucket, dollars) {
   ledger.cash -= dollars;
   if (bucket in ledger.expense) ledger.expense[bucket] += dollars;
+  else if (ledger.other) bookOther(ledger.other, 'unclassifiedExpense', dollars);
   return ledger.cash;
 }
 
@@ -459,13 +497,29 @@ export function addExpense(ledger, bucket, dollars) {
  * `skipCost` argument to `place_object_on_floor` (`specs/facility/METRO.md`
  * notes metro passes a literal 0 for it, i.e. always charges).
  *
+ * `bucket` (issue #18) names the line of the Finance window the spend belongs to - `'construction'`
+ * for anything built, `'films'` for a new movie. It is optional on purpose: the build ghost asks
+ * `chargeConstruction({ ...ledger }, cost)` on a throwaway copy just to learn whether the player
+ * could afford a click, and that must not book anything. Only a call that names a bucket records.
+ *
  * @returns {{charged: boolean, cost: number}}
  */
-export function chargeConstruction(ledger, cost, { free = false } = {}) {
+export function chargeConstruction(ledger, cost, { free = false, bucket = null } = {}) {
   if (free) return { charged: true, cost: 0 };
   if (cost > ledger.cash) return { charged: false, cost };
   ledger.cash -= cost;
+  if (bucket && ledger.other) bookOther(ledger.other, bucket, cost);
   return { charged: true, cost };
+}
+
+/**
+ * Give back a spend that bought nothing (a placement the world then refused), so the Finance
+ * window's construction line nets to what was actually built.
+ */
+export function refundConstruction(ledger, cost, bucket = 'construction') {
+  ledger.cash += cost;
+  if (ledger.other) bookOther(ledger.other, bucket, -cost);
+  return ledger.cash;
 }
 
 /**
@@ -487,9 +541,20 @@ export function placementCost(type, { tiles = 0, floor = 0, lobbyHeight = 1 } = 
  * is built from, and it breaks if rollover is moved after the sweeps.
  */
 export function rollLedgers(ledger) {
+  // The quarter that just ended, kept whole for the Finance window (issue #18): its opening and
+  // closing balance and every line, copied before they are cleared.
+  ledger.previous = {
+    startDay: ledger.cycleStartDay ?? 0,
+    openingCash: ledger.cashCycleBase,
+    closingCash: ledger.cash,
+    income: { ...ledger.income },
+    expense: { ...ledger.expense },
+    other: { ...(ledger.other ?? {}) },
+  };
   ledger.cashCycleBase = ledger.cash;
   for (const k of Object.keys(ledger.income)) ledger.income[k] = 0;
   for (const k of Object.keys(ledger.expense)) ledger.expense[k] = 0;
+  if (ledger.other) for (const k of Object.keys(ledger.other)) ledger.other[k] = 0;
   return ledger;
 }
 
@@ -828,7 +893,10 @@ export function runLedgerCheckpoint(ledger, tower, dayCounter) {
   } = tower;
   const cashflow = isCashflowDay(dayCounter);
 
-  if (cashflow) rollLedgers(ledger);
+  if (cashflow) {
+    rollLedgers(ledger);
+    ledger.cycleStartDay = dayCounter;
+  }
 
   let deactivated = 0;
   let activated = 0;

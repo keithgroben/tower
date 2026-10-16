@@ -893,6 +893,14 @@ export function makeRenderer(canvas, options = {}) {
   let finaleSeenAt = 0;
   const FINALE_MS = 24000;
 
+  /**
+   * A map view (issue #18): object id -> `{ key, color }`, painted over the tower while the Eval,
+   * Pricing or Hotel view is on, or `null`. The renderer only paints the colours it is given - what
+   * each one MEANS is `ui/overlays.js`, read from the sim - so it cannot disagree with the sim about
+   * which room is unhappy.
+   */
+  let overlay = null;
+
   /** Last frame's answer to "is this let", per object. See `diffLetStatus`. */
   const letSeen = new Map();
   /** Rent and closure moments in flight: object id -> `{ object, direction, at, carrierId }`. */
@@ -1078,6 +1086,7 @@ export function makeRenderer(canvas, options = {}) {
     drawBlast(L, tower);
     drawFireworks(L, tower);
     for (const o of tower.objects.values()) drawUnitSignals(L, o, tower);
+    if (overlay) drawOverlay(L, tower);
     // Last of the world passes, and it has to stay last: the whole point is
     // that nothing draws over it.
     noteLetChanges(tower);
@@ -1088,6 +1097,39 @@ export function makeRenderer(canvas, options = {}) {
     drawGhost(L);
 
     drawMinimap(L, tower);
+  }
+
+  /**
+   * The map view's wash (issue #18). A room the view speaks about is tinted its colour and edged, with
+   * its word in the corner when there is room to read it; a room it does not speak about is dimmed, so
+   * the colours are what the eye lands on.
+   */
+  function drawOverlay(L, tower) {
+    for (const o of tower.objects.values()) {
+      const x = L.tileX(o.left);
+      const y = L.floorY(o.floor);
+      const w = (o.right - o.left + 1) * L.tw;
+      if (x + w < 0 || x > W || y + L.fh < 0 || y > H) continue;
+      const cell = overlay.get(o.id);
+      if (!cell) {
+        ctx.fillStyle = 'rgba(8,12,18,0.62)';
+        ctx.fillRect(x, y, w, L.fh - 2);
+        continue;
+      }
+      ctx.globalAlpha = 0.58;
+      ctx.fillStyle = cell.color;
+      ctx.fillRect(x, y, w, L.fh - 2);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = cell.color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 1, y + 1, w - 2, L.fh - 4);
+      if (L.fh >= 26 && w >= 40) {
+        ctx.fillStyle = '#0b0f14';
+        ctx.textAlign = 'left';
+        ctx.font = '700 ' + Math.min(11, Math.round(L.fh / 3)) + 'px ui-monospace, monospace';
+        ctx.fillText(cell.key, x + 4, y + Math.min(13, L.fh / 2));
+      }
+    }
   }
 
   /** Objects grouped by floor, built once a frame and shared by every pass.
@@ -1569,6 +1611,9 @@ export function makeRenderer(canvas, options = {}) {
    * @param preview `{ ok, reason, cost, footprint, note }` or null
    */
   function setGhost(preview) { ghost = preview ?? null; }
+
+  /** Show a map view (a `Map` of object id -> `{ key, color }`) over the tower, or `null` to take it off. */
+  function setOverlay(cells) { overlay = cells ?? null; }
   let ghost = null;
 
   /**
@@ -2252,7 +2297,9 @@ export function makeRenderer(canvas, options = {}) {
       const [x, w] = span(o);
       // A room with something wrong with it is the one thing the strip is for:
       // amber for dirty (a housekeeper has until the 1600 pass), red for lost.
-      ctx.fillStyle = o.family === FAMILY.lobby ? '#5aa9e6'
+      const viewCell = overlay ? overlay.get(o.id) : null;
+      ctx.fillStyle = overlay ? (viewCell ? viewCell.color : 'rgba(60,70,84,0.55)')
+        : o.family === FAMILY.lobby ? '#5aa9e6'
         : o.family === FAMILY.housekeeping ? '#2fb5a8'
         : o.family === FAMILY.security ? '#5b7fd6'
         : o.family === FAMILY.cathedral ? '#d8d1bf'
@@ -2425,7 +2472,7 @@ export function makeRenderer(canvas, options = {}) {
   }
 
   return {
-    draw, resize, layout, setGhost,
+    draw, resize, layout, setGhost, setOverlay,
     floorAt, tileAt, objectAt, linkAt, carrierAt, carrierColumnAt,
     dragBy, setZoom, zoomBy, goTo, frameLobby, minimapAt, minimapJump,
     /** The sky, so a check can put something in the air on demand rather than

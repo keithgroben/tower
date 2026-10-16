@@ -53,7 +53,7 @@ import { postNotice } from './demands.js';
 import { emergencyStairsRoute, guardResponse, securityOffices } from './security.js';
 import { cancelRequest } from './elevators.js';
 import { demolishEntertainment, isEntertainmentFamily } from './entertainment.js';
-import { POPULATION_BY_FAMILY } from './economy.js';
+import { POPULATION_BY_FAMILY, bookOther } from './economy.js';
 import { condoCashflowHooks, ledgerFor } from './ledger-adapter.js';
 import { venueOf } from './commercial.js';
 import { hotelNoiseNear, isHotelInfested, isHotelVacant } from './hotel.js';
@@ -554,6 +554,7 @@ function resolveBombDecision(tower, answer, byDefault = false) {
   if (!bomb) return {};
   if (answer === 'pay') {
     tower.cash -= bomb.ransom;
+    bookOther(ledgerFor(tower).other, 'ransom', bomb.ransom);     // a line of the Finance window (issue #18)
     events.bomb = null;
     events.bombActive = false;
     say(tower, 'bombPaid', EVENT_TEXT.bombPaid(bomb.ransom));
@@ -699,6 +700,7 @@ function resolveFireDecision(tower, answer, byDefault = false) {
   if (answer === 'helicopter') {
     const bounds = floorBounds(tower, fire.current);
     tower.cash -= HELICOPTER_COST;
+    bookOther(ledgerFor(tower).other, 'helicopter', HELICOPTER_COST);   // a line of the Finance window (issue #18)
     fire.helicopter = (bounds ? bounds.right : fire.seed + FIRE_SEED_OFFSET) - HELICOPTER_START_OFFSET;
     fire.bought = true;
     say(tower, 'fireHelicopter', EVENT_TEXT.fireHelicopter());
@@ -1128,6 +1130,7 @@ export function maybeFindTreasure(tower, floor) {
   if (!tower.rng.chance(TREASURE_ODDS)) return null;
   const amount = TREASURE_AMOUNTS[tower.rng.int(TREASURE_AMOUNTS.length)];
   tower.cash += amount;
+  bookOther(ledgerFor(tower).other, 'treasure', amount);              // a line of the Finance window (issue #18)
   say(tower, 'treasure', EVENT_TEXT.treasure(amount), 'good');
   record(tower, { kind: 'treasure', outcome: 'found', floor, amount });
   return { amount };

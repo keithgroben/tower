@@ -136,8 +136,16 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * fire's cathedral guard read the building and not the latch. A v10 file at five stars with a hand-set
  * `cathedralPlaced` would resume with no cathedral and no way to be crowned, and a v11 file
  * resumed by v10 would hold a family the old build draws as a grey box and cannot demolish-guard.
+ *
+ * v12 (issue #18, the windows) adds the Finance window's books and the player's names to the tower:
+ * `otherLedger` (construction, films, ransom, helicopter, treasure, the cap - every way cash moves
+ * outside the income and expense buckets), `previousQuarter` (the quarter that just ended, whole) and
+ * `cycleStartDay` (the day the open one began), and `names` (up to 20 people and 20 facilities, by id).
+ * A v11 file would load, but its first Finance window would not add up (the open quarter's
+ * construction was never booked) and a v12 file resumed by v11 would lose its names - and a v11 build
+ * has no ledger for the ransom it would then silently spend.
  */
-export const SAVE_VERSION = 11;
+export const SAVE_VERSION = 12;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

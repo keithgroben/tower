@@ -57,7 +57,7 @@ import { condos, recomputeCondoOperationalStatus, revertCondoToUnsold } from './
 import { rebuildEntertainment } from './entertainment.js';
 import { resetFacilitySimTripCounters } from './stress.js';
 import {
-  DEFAULT_RENT_TIER, EXPENSE_BUCKETS, INCOME_BUCKETS, POPULATION_BY_FAMILY, TYPE_CODES,
+  DEFAULT_RENT_TIER, EXPENSE_BUCKETS, INCOME_BUCKETS, OTHER_BUCKETS, POPULATION_BY_FAMILY, TYPE_CODES,
   activateFamilyCashflowIfOperational, addIncome, isCashflowDay, payout,
   reverseCashflowOnDeactivation, runLedgerCheckpoint,
 } from './economy.js';
@@ -80,9 +80,11 @@ const seedBuckets = (into, keys) => {
 export function ledgerFor(tower) {
   tower.incomeLedger ??= {};
   tower.expenseLedger ??= {};
+  tower.otherLedger ??= {};
   tower.populationLedger ??= {};
   seedBuckets(tower.incomeLedger, INCOME_BUCKETS);
   seedBuckets(tower.expenseLedger, EXPENSE_BUCKETS);
+  seedBuckets(tower.otherLedger, OTHER_BUCKETS);
   seedBuckets(tower.populationLedger, Object.keys(POPULATION_BY_FAMILY));
 
   return {
@@ -92,6 +94,14 @@ export function ledgerFor(tower) {
     set cashCycleBase(value) { tower.cycleBaseCash = value; },
     income: tower.incomeLedger,
     expense: tower.expenseLedger,
+    /** Every other way cash moves - construction, ransom, treasure... (issue #18, the Finance window). */
+    other: tower.otherLedger,
+    /** The quarter before this one, whole, or `null` before the first rollover. */
+    get previous() { return tower.previousQuarter ?? null; },
+    set previous(value) { tower.previousQuarter = value; },
+    /** The day counter the open quarter began on. */
+    get cycleStartDay() { return tower.cycleStartDay ?? 0; },
+    set cycleStartDay(value) { tower.cycleStartDay = value; },
     population: tower.populationLedger,
   };
 }

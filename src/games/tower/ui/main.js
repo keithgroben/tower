@@ -38,6 +38,12 @@ import { mountLiftPanel } from './lift-panel.js';
 import { mountTheaterPanel } from './theater-panel.js';
 import { eventDialogBlocking, mountEventDialog } from './event-dialog.js';
 import { mountFinale } from './finale.js';
+import { makePauseGate } from './pause.js';
+import { mapBarModel, overlayHoverLine, overlayModel } from './overlays.js';
+import { mountFinanceWindow } from './finance-window.js';
+import { mountFacilityWindow } from './facility-window.js';
+import { mountTenantWindow } from './tenant-window.js';
+import { hoverReasons } from './readout.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -127,6 +133,13 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') autosave.save('hidden');
 });
 
+/**
+ * Who is holding the game still, and what speed comes back (issue #18). A map view or a window holds
+ * the clock (`HELP.txt`: Eval, Pricing, Hotel, Finance and Facility pause the game); closing it gives
+ * back the speed the player had chosen. The event dialog stops the tick pump on its own, below, and a
+ * hold can neither start nor end that.
+ */
+const gate = makePauseGate({ initial: 1, onChange: (state) => showSpeed(state) });
 let speed = 1;
 let lastFrameMs = 0;
 let hudDueMs = 0;
@@ -159,15 +172,22 @@ const isBuildable = (kind) => Object.hasOwn(BUILDABLE, kind);
 
 // ------------------------------------------------------------------- speed
 
-function setSpeed(next) {
-  speed = SPEEDS.includes(next) ? next : 1;
+const HOLD_WORDS = { eval: 'Eval', pricing: 'Pricing', hotel: 'Hotel', finance: 'Finance', facility: 'facility window', tenant: 'tenant window' };
+
+/** Show the speed the pump is running at, and, if something is holding it, what. */
+function showSpeed({ speed: running, wanted, held }) {
+  speed = running;
   for (const button of document.querySelectorAll('[data-speed]')) {
-    button.classList.toggle('on', Number(button.dataset.speed) === speed);
+    button.classList.toggle('on', Number(button.dataset.speed) === wanted);
   }
-  $('pace').textContent = speed === 0
-    ? 'paused'
-    : `${TICKS_PER_SECOND * speed} ticks/s · ${(DAY_SECONDS / speed).toFixed(0)}s a day`;
+  $('pace').textContent = held.length > 0
+    ? 'paused · ' + held.map((k) => HOLD_WORDS[k] ?? k).join(', ')
+    : speed === 0
+      ? 'paused'
+      : `${TICKS_PER_SECOND * speed} ticks/s · ${(DAY_SECONDS / speed).toFixed(0)}s a day`;
 }
+
+function setSpeed(next) { gate.request(next); }
 
 for (const button of document.querySelectorAll('[data-speed]')) {
   button.addEventListener('click', () => setSpeed(Number(button.dataset.speed)));
@@ -219,9 +239,13 @@ const endDrag = (e) => {
     // Clicking a theater opens its window (issue #11): the film, and the two
     // purchases that change it. Only one panel is ever open.
     const hit = renderer.objectAt(tower, ...point);
-    if (shaft) { theaterPanel.close(); liftPanel.open(shaft.id); }
-    else if (hit?.family === FAMILY.theater) { liftPanel.close(); theaterPanel.open(hit.id); }
-    else { liftPanel.close(); theaterPanel.close(); }
+    // A map view is for looking: its rooms are read by hovering, and a click does nothing (issue #18).
+    if (viewMode) { /* inert */ }
+    else if (shaft) { closeSurfaces({ except: 'lift' }); liftPanel.open(shaft.id); }
+    else if (hit?.family === FAMILY.theater) { closeSurfaces({ except: 'theater' }); theaterPanel.open(hit.id); }
+    // Anything else you point the magnifier at opens its Facility window, and the game holds still.
+    else if (hit) openFacility(hit.id);
+    else closeSurfaces();
   }
   if (!dragged) updateHover(...point);
   try { canvas.releasePointerCapture(e.pointerId); } catch { /* pointer already gone */ }
@@ -246,10 +270,10 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { selectTool(null); liftPanel.close(); theaterPanel.close(); return; }
+  if (e.key === 'Escape') { selectTool(null); closeSurfaces(); return; }
   const tool = TOOLS.find((t) => t.key === e.key);
   if (tool) { selectTool(activeTool?.id === tool.id ? null : tool); return; }
-  if (e.key === ' ') { e.preventDefault(); setSpeed(speed === 0 ? 1 : 0); return; }
+  if (e.key === ' ') { e.preventDefault(); setSpeed(gate.wanted === 0 ? 1 : 0); return; }
   // Speeds move to the function keys' neighbours because 1-5 now pick tools.
   // A player builds far more often than they change speed.
   const index = ['q', 'w', 'e', 'r'].indexOf(e.key.toLowerCase());
@@ -303,6 +327,145 @@ const eventDialog = mountEventDialog($('eventdialog'), {
 
 // The Tower rank's banner (issue #17). It does not stop the game; the fireworks are the renderer's.
 const finale = mountFinale($('finale'), { getWorld: () => world });
+
+// The windows and the map views (issue #18). Each one that opens holds the clock; each that closes
+// lets go (`ui/pause.js`). They are exclusive: opening one closes the rest.
+const rebuilt = () => { if (tower.routeTablesDirty) { rebuildRouteTables(tower); tower.routeTablesDirty = false; } };
+const financeWindow = mountFinanceWindow($('financewindow'), {
+  getWorld: () => world,
+  onClose: () => { gate.release('finance'); refreshMapBar(); },
+});
+const facilityWindow = mountFacilityWindow($('facilitywindow'), {
+  getWorld: () => world,
+  apply: (command) => { const r = applyAction(world, command); rebuilt(); return r; },
+  onChange: () => drawHud(),
+  onOpenPerson: (actorId) => openTenant(actorId),
+  onClose: () => gate.release('facility'),
+});
+const tenantWindow = mountTenantWindow($('tenantwindow'), {
+  getWorld: () => world,
+  apply: (command) => applyAction(world, command),
+  onChange: () => drawHud(),
+  onOpenFacility: (objectId) => openFacility(objectId),
+  onFind: ({ floor, tile }) => renderer.goTo(floor, tile),
+  onClose: () => gate.release('tenant'),
+});
+
+/** The map view that is on (`'eval'`, `'pricing'`, `'hotel'`), or `null` for the ordinary Edit view. */
+let viewMode = null;
+let viewKey = '';
+
+/** Take everything down: the view, every window, the lift and theater panels. */
+function closeSurfaces({ except = null } = {}) {
+  if (except !== 'view' && viewMode) setView(null);
+  if (except !== 'finance') financeWindow.close();
+  if (except !== 'facility') facilityWindow.close();
+  if (except !== 'tenant') tenantWindow.close();
+  if (except !== 'lift') liftPanel.close();
+  if (except !== 'theater') theaterPanel.close();
+}
+
+function openFacility(id) {
+  gate.hold('facility');
+  closeSurfaces({ except: 'facility' });
+  facilityWindow.open(id);
+}
+
+function openTenant(actorId) {
+  gate.hold('tenant');
+  closeSurfaces({ except: 'tenant' });
+  tenantWindow.open(actorId);
+}
+
+function openFinance() {
+  gate.hold('finance');
+  closeSurfaces({ except: 'finance' });
+  financeWindow.open();
+  refreshMapBar();
+}
+
+/** Turn a map view on, or (`null`) off. Holds the clock while it is on and gives the speed back when it is not. */
+function setView(mode) {
+  const previous = viewMode;
+  viewMode = mode;
+  viewKey = '';
+  if (mode) {
+    selectTool(null);
+    gate.hold(mode);
+    if (previous && previous !== mode) gate.release(previous);
+  } else if (previous) {
+    gate.release(previous);
+    renderer.setOverlay(null);
+  }
+  refreshView();
+  refreshMapBar();
+}
+
+/** Recompute the colours if the tower has moved (it has not, while the view holds the clock). */
+function refreshView() {
+  const key = viewMode ? viewMode + ':' + tower.clock.dayCounter + ':' + tower.clock.dayTick + ':' + tower.objects.size : '';
+  if (viewMode && key !== viewKey) {
+    viewKey = key;
+    const model = overlayModel(tower, viewMode);
+    renderer.setOverlay(model.cells);
+    const keyEl = $('viewkey');
+    keyEl.replaceChildren();
+    const title = document.createElement('b');
+    title.textContent = model.title;
+    keyEl.append(title);
+    for (const item of model.legend) {
+      const row = document.createElement('span');
+      const dot = document.createElement('i');
+      dot.style.background = item.color;
+      row.append(dot, item.label + ' ' + item.count);
+      keyEl.append(row);
+    }
+  }
+  $('viewkey').hidden = !viewMode;
+}
+
+function pressMapButton(id) {
+  const bar = mapBarModel(tower).find((b) => b.id === id);
+  if (!bar) return;
+  if (!bar.enabled) { say(bar.reason, false); return; }
+  if (id === 'edit') { closeSurfaces(); return; }
+  if (id === 'finance') { if (financeWindow.isOpen) closeSurfaces(); else openFinance(); return; }
+  if (viewMode === id) { setView(null); return; }
+  // A window and a view are not open together; the view takes the screen.
+  closeSurfaces({ except: 'view' });
+  setView(id);
+}
+
+const MAP_TITLES = {
+  edit: 'the ordinary view',
+  eval: 'colour the tower by how happy its tenants are - this pauses the game',
+  pricing: 'colour the tower by how tenants see their rents - this pauses the game',
+  hotel: 'show the hotel rooms that need cleaning - this pauses the game',
+  finance: 'where the money comes from and goes to - this pauses the game',
+};
+
+function buildMapBar() {
+  const bar = $('mapbar');
+  for (const b of mapBarModel(tower)) {
+    const button = document.createElement('button');
+    button.dataset.map = b.id;
+    button.textContent = b.label;
+    button.addEventListener('click', () => pressMapButton(b.id));
+    bar.appendChild(button);
+  }
+  refreshMapBar();
+}
+
+function refreshMapBar() {
+  for (const b of mapBarModel(tower)) {
+    const button = document.querySelector('[data-map="' + b.id + '"]');
+    if (!button) continue;
+    button.disabled = !b.enabled;
+    button.title = b.reason ?? MAP_TITLES[b.id] ?? '';
+    const on = b.id === 'edit' ? !viewMode && !financeWindow.isOpen : b.id === 'finance' ? financeWindow.isOpen : viewMode === b.id;
+    button.classList.toggle('on', on);
+  }
+}
 
 function selectTool(tool) {
   activeTool = tool ?? null;
@@ -396,6 +559,12 @@ function updateHover(px, py) {
   const object = renderer.objectAt(tower, px, py);
   const floor = renderer.floorAt(px, py);
 
+  // A map view says what its colour means for the room under the pointer, and why (issue #18).
+  if (viewMode) {
+    $('hover').textContent = object ? overlayHoverLine(tower, viewMode, object) : (floor === null ? '' : `floor ${floor}`);
+    return;
+  }
+
   if (activeTool) {
     renderer.setGhost(preview(world, activeTool, targetAt(px, py)));
   }
@@ -421,11 +590,14 @@ function updateHover(px, py) {
   }
   const stress = occupants.map((a) => computeRuntimeTileStressAverage(a));
   const worst = stress.length ? Math.max(...stress) : 0;
-  $('hover').textContent = occupants.length
+  // What is wrong with it, in the original's own words (issue #18): "Elevator is very far away",
+  // "Neighbors are too noisy", "Room is too dirty"...
+  const why = hoverReasons(tower, object);
+  $('hover').textContent = (occupants.length
     // `objectStatusTag` is the one place that knows a condo is sold rather than
     // let, so the panel asks it instead of keeping a second copy of the word.
     ? `${officeIsLet(object) ? 'let' : objectStatusTag(object)} · ${occupants.length} occupants · worst stress ${worst} (${stressBand(worst)})`
-    : `${officeIsLet(object) ? 'let' : objectStatusTag(object)}`;
+    : `${officeIsLet(object) ? 'let' : objectStatusTag(object)}`) + (why ? ' · ' + why : '');
 }
 
 // --------------------------------------------------------------------- HUD
@@ -581,6 +753,12 @@ function drawHud() {
   theaterPanel.refresh();
   eventDialog.refresh();
   finale.refresh();
+  // The windows (issue #18). They hold the clock, so they only change when the player does something.
+  facilityWindow.refresh();
+  tenantWindow.refresh();
+  financeWindow.refresh();
+  refreshView();
+  refreshMapBar();
 }
 
 // -------------------------------------------------------------- the frame
@@ -594,7 +772,7 @@ function frame(nowMs) {
     // Real milliseconds in, whole ticks out. This is the entire boundary.
     // Every daily and 3-day rule now rides inside the scheduler's own
     // checkpoint table, so this is the whole of the sim step.
-    pump.advance(dtMs, speed, () => { if (!eventDialogBlocking(tower)) scheduler.tick(tower); });
+    pump.advance(dtMs, gate.speed, () => { if (!eventDialogBlocking(tower)) scheduler.tick(tower); });
     // Open (or close) the question the moment the tick that raised (or answered) it is done,
     // not up to a tenth of a second later when the HUD next refreshes.
     eventDialog.refresh();
@@ -619,6 +797,7 @@ renderer.resize();
 renderer.frameLobby(tower);
 setSpeed(1);
 buildPalette();
+buildMapBar();
 wireRestart();
 drawHud();
 if (resumed.note) say(resumed.note, Boolean(resumed.world), { hold: true });
@@ -683,5 +862,6 @@ function buildPalette() {
 // spirit: it is here so a playtest can say what it saw, not so the page can
 // reach in and change the game.
 window.world = world;
+window.gate = gate;
 window.tower = tower;
 window.renderer = renderer;

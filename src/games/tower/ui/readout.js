@@ -28,6 +28,7 @@ import {
   GUEST_STATE, cathedralGuests, cathedralServed, guestsAtTheCathedral, hasCathedral,
 } from '../sim/cathedral.js';
 import { WEDDING_DEADLINE_TICK, WEDDING_GUESTS } from '../sim/progression.js';
+import { unhappinessReasons } from '../sim/facility.js';
 import { SPACE_CAPACITY, rampConnected } from '../sim/parking.js';
 import {
   PARTY_HALL_MIN_HOTEL_ROOMS, PHASE, filmTitle, hotelRoomCount, payoutFor, recordOf,
@@ -97,6 +98,16 @@ export function evictionNotice(lost) {
   const units = lost === 1 ? '1 office' : lost + ' offices';
   return units + ' closed — the journeys their tenants made scored too badly to stay';
 }
+
+// ------------------------------------------------------------ why they are unhappy
+
+/**
+ * The original's plain-words causes for a room, joined for the hover line (issue #18): *"Elevator is
+ * very far away"*, *"Neighbors are too noisy"*, *"Room is too dirty"* and the rest of `STR 711`'s
+ * list, each only when the sim is actually charging the room for it (`sim/facility.js`
+ * `unhappinessReasons`). Empty for a room with nothing to say, so a happy room's hover stays short.
+ */
+export const hoverReasons = (tower, object) => unhappinessReasons(tower, object).join(' · ');
 
 // ------------------------------------------------------------ infestations
 

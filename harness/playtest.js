@@ -33,6 +33,11 @@ import {
 import { SECURITY_OFFICES_FOR_THREE_STARS } from '../src/games/tower/sim/security.js';
 import { metroCommuterCount, metroPlatformFloor, metroServed, officeWorkerCommutes } from '../src/games/tower/sim/metro.js';
 import { starClause } from '../src/games/tower/ui/readout.js';
+import { financeStatement } from '../src/games/tower/sim/finance.js';
+import { overlayModel } from '../src/games/tower/ui/overlays.js';
+import { facilityWindowModel } from '../src/games/tower/ui/facility-window.js';
+import { unhappinessReasons } from '../src/games/tower/sim/facility.js';
+import { MAX_NAMED_PEOPLE } from '../src/games/tower/sim/names.js';
 import { CARRIER_MODE } from '../src/games/tower/sim/elevators.js';
 import {
   CLOSURE_TICK, RESTAURANT_CLOSURE_TICK, closurePayout, venueOf,
@@ -1467,6 +1472,45 @@ export function treasureTrial({ seeds = 40, floors = 9 } = {}) {
   return { digs, strikes, amounts: TREASURE_AMOUNTS };
 }
 
+/**
+ * **The windows trial** (issue #18): a played tower, then what each window and map view would show.
+ *
+ * The greedy builder plays `days` days through the driver's own composition, and the function reads the
+ * Finance window (this quarter and last, with the check that its lines add up to the change in cash),
+ * the three map views' counts, the plain-words causes across the whole tower, the busiest Facility
+ * window, and names twenty-one people (the twenty-first is refused in the original's words).
+ */
+export function windowsTrial({ days = 14, seed = 1 } = {}) {
+  const world = seedDemoWorld({ seed });
+  const { tower } = world;
+  const { scheduler } = makeDriver(world);
+  const act = greedyBuilder(world);
+  for (let d = 0; d <= days; d++) {
+    for (let t = 0; t < (d === 0 ? TICKS_PER_DAY / 2 : TICKS_PER_DAY); t++) scheduler.tick(tower);
+    for (let i = 0; i < 8; i++) if (!act()) break;
+  }
+  // Midday, so the day's trips are in the counters.
+  for (let t = 0; t < 1200; t++) scheduler.tick(tower);
+
+  const causes = {};
+  for (const object of tower.objects.values()) {
+    for (const reason of unhappinessReasons(tower, object)) causes[reason] = (causes[reason] ?? 0) + 1;
+  }
+  const people = tower.actors.filter((a) => a && !isStaffActor(a));
+  const named = people.slice(0, MAX_NAMED_PEOPLE + 1).map((a, i) => applyAction(world, { type: 'name_person', actorId: a.id, name: 'Tenant ' + (i + 1) }));
+  const office = [...tower.objects.values()].find((o) => o.family === FAMILY.office && o.occupiedFlag);
+  return {
+    world,
+    current: financeStatement(tower, 'current'),
+    previous: financeStatement(tower, 'previous'),
+    views: Object.fromEntries(['eval', 'pricing', 'hotel'].map((m) => [m, overlayModel(tower, m).counts])),
+    causes,
+    window: office ? facilityWindowModel(world, office.id) : null,
+    named: { ok: named.filter((r) => r.ok).length, refused: named.filter((r) => !r.ok).map((r) => r.reason) },
+  };
+}
+const isStaffActor = (a) => a.family === FAMILY.housekeeping || a.family === FAMILY.security;
+
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   || process.argv[1]?.endsWith('playtest.js')) {
   if (process.argv.includes('--entertainment')) {
@@ -1716,6 +1760,39 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
         + String(r.arrived.length).padStart(9) + String(r.lastArrival ?? '-').padStart(14)
         + String(r.count).padStart(7) + String(r.parked).padStart(8));
     }
+    process.exit(0);
+  }
+  if (process.argv.includes('--windows')) {
+    // `node harness/playtest.js --windows [days]` - the issue #18 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 14);
+    const r = windowsTrial({ days: trialDays });
+    const money = (n) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
+    const table = (title, s) => {
+      console.log(title + ' (Y' + s.year + ' Q' + s.quarter + ', cash ' + money(s.openingCash) + ' -> ' + money(s.closingCash) + ')');
+      const row = (label, amount) => console.log('  ' + label.padEnd(34) + money(amount).padStart(14));
+      for (const l of s.income.lines.filter((x) => x.amount !== 0)) row(l.label, l.amount);
+      row('Total income', s.income.total);
+      for (const l of s.upkeep.lines.filter((x) => x.amount !== 0)) row(l.label, -l.amount);
+      row('Total upkeep', -s.upkeep.total);
+      for (const l of s.other.lines.filter((x) => x.amount !== 0)) row(l.label, l.amount);
+      row('Change in cash', s.net);
+      console.log('  ' + (s.discrepancy === 0 ? 'adds up: closing - opening = ' + money(s.closingCash - s.openingCash) + ' = the lines above'
+        : 'DOES NOT ADD UP by ' + money(s.discrepancy)) + '\n');
+    };
+    console.log('windows trial: the greedy builder, ' + trialDays + ' days, then what the windows would show\n');
+    if (r.previous) table('FINANCE, last quarter', r.previous);
+    table('FINANCE, this quarter so far', r.current);
+    console.log('MAP VIEWS');
+    for (const [mode, counts] of Object.entries(r.views)) console.log('  ' + mode.padEnd(8) + JSON.stringify(counts));
+    console.log('\nWHY THEY ARE UNHAPPY (rooms saying each, in the original\'s words)');
+    for (const [reason, n] of Object.entries(r.causes).sort((a, b) => b[1] - a[1])) console.log('  ' + String(n).padStart(4) + '  ' + reason);
+    if (r.window) {
+      const w = r.window;
+      console.log('\nFACILITY WINDOW  ' + w.title + ' - ' + w.status + ' - eval ' + w.eval.word + (w.eval.score === null ? '' : ' (stress ' + w.eval.score + ')')
+        + ' - bar ' + Math.round(w.eval.fill * 100) + '% full, dividers at ' + Math.round(w.eval.dividers.first * 100) + '% and ' + Math.round(w.eval.dividers.second * 100) + '%');
+      console.log('  rent tiers ' + w.rent.tiers.map((t) => (t.current ? '[' + t.text + ']' : t.text) + ' ' + t.perception).join(' | '));
+    }
+    console.log('\nNAMING  ' + r.named.ok + ' named; refused: ' + JSON.stringify(r.named.refused));
     process.exit(0);
   }
   if (process.argv.includes('--housekeeping')) {
