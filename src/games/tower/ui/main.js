@@ -44,6 +44,7 @@ import { mountFinanceWindow } from './finance-window.js';
 import { mountFacilityWindow } from './facility-window.js';
 import { mountTenantWindow } from './tenant-window.js';
 import { hoverReasons } from './readout.js';
+import { makeDemo, parseDemo } from './demo.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -86,10 +87,14 @@ const canvas = $('view');
  * `resumed` is shown once the bar exists; a save that could NOT be read says
  * why, because the player is about to see an empty tower where their tower was.
  */
-const resumed = await loadSavedWorld();
+//
+// `?demo=climb` (issue #19, `ui/demo.js`) is the exception: a scripted player plays a tower of its own
+// in this page, and the saved tower is neither read nor written.
+const demo = (() => { const spec = parseDemo(location.search); return spec ? makeDemo(spec) : null; })();
+const resumed = demo ? { world: null, note: null } : await loadSavedWorld();
 // An empty lot with a ground lobby. `seedDemoWorld` is a measurement fixture
 // now, not the opening position — the first office should be the player's own.
-const world = resumed.world ?? newTowerWorld({ seed: 1 });
+const world = demo ? demo.world : (resumed.world ?? newTowerWorld({ seed: 1 }));
 const { tower, ledger } = world;
 
 /**
@@ -122,7 +127,14 @@ const pump = makeTickPump();
  * `() => world` rather than `world`: a captured reference would go on saving
  * the tower the player abandoned if the world is ever replaced.
  */
-const autosave = makeAutosave(() => world, (text) => { $('saved').textContent = text; });
+const autosave = demo
+  ? { save: () => {}, tick: () => {} }
+  : makeAutosave(() => world, (text) => { $('saved').textContent = text; });
+if (demo) {
+  $('saved').textContent = 'demo · not saved';
+  $('demo').textContent = demo.banner;
+  $('demo').hidden = false;
+}
 
 // The way out matters more than the cadence. A player closes the tab; they do
 // not finish a day first. `pagehide` fires where `beforeunload` is unreliable
@@ -140,6 +152,9 @@ document.addEventListener('visibilitychange', () => {
  * hold can neither start nor end that.
  */
 const gate = makePauseGate({ initial: 1, onChange: (state) => showSpeed(state) });
+/** The demo runs the ticks this many times faster than the buttons say (1 in the ordinary game). */
+const boost = demo ? demo.boost : 1;
+let demoStar = 1;
 let speed = 1;
 let lastFrameMs = 0;
 let hudDueMs = 0;
@@ -184,7 +199,7 @@ function showSpeed({ speed: running, wanted, held }) {
     ? 'paused · ' + held.map((k) => HOLD_WORDS[k] ?? k).join(', ')
     : speed === 0
       ? 'paused'
-      : `${TICKS_PER_SECOND * speed} ticks/s · ${(DAY_SECONDS / speed).toFixed(0)}s a day`;
+      : `${TICKS_PER_SECOND * speed * boost} ticks/s · ${(DAY_SECONDS / (speed * boost)).toFixed(0)}s a day`;
 }
 
 function setSpeed(next) { gate.request(next); }
@@ -772,10 +787,17 @@ function frame(nowMs) {
     // Real milliseconds in, whole ticks out. This is the entire boundary.
     // Every daily and 3-day rule now rides inside the scheduler's own
     // checkpoint table, so this is the whole of the sim step.
-    pump.advance(dtMs, gate.speed, () => { if (!eventDialogBlocking(tower)) scheduler.tick(tower); });
+    pump.advance(dtMs, gate.speed * boost, () => {
+      if (eventDialogBlocking(tower)) return;
+      scheduler.tick(tower);
+      // The scripted player's morning and evening (`?demo=climb`); the ordinary game has none.
+      if (demo) demo.afterTick(tower);
+    });
     // Open (or close) the question the moment the tick that raised (or answered) it is done,
     // not up to a tenth of a second later when the HUD next refreshes.
     eventDialog.refresh();
+    // A watched climb steps the camera back as the tower rises, so the building stays in the frame.
+    if (demo && tower.starCount !== demoStar) { demoStar = tower.starCount; renderer.zoomBy(-1); }
     // Render dt, not sim dt: the sky and the sprite clock run at wall speed so
     // a paused tower still has weather.
     renderer.draw(tower, dtMs);
@@ -817,6 +839,13 @@ requestAnimationFrame(frame);
  */
 function wireRestart() {
   const button = $('restart');
+  if (demo) {
+    // A demo has nothing to throw away, and the button must never throw away the saved tower it did not play.
+    button.textContent = 'Leave the demo';
+    button.title = 'go back to your own tower';
+    button.addEventListener('click', () => { location.href = location.pathname; });
+    return;
+  }
   let armed = null;
   button.addEventListener('click', async () => {
     if (!armed) {
