@@ -657,6 +657,21 @@
       }
     ]
   },
+  "security": {
+    "frameW": 48,
+    "frameH": 32,
+    "fit": "stretch",
+    "states": [
+      {
+        "name": "day",
+        "frames": 1
+      },
+      {
+        "name": "night",
+        "frames": 1
+      }
+    ]
+  },
   "restaurant": {
     "frameW": 48,
     "frameH": 32,

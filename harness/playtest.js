@@ -175,7 +175,7 @@ export function hotelWatch(tower) {
  * If it never costs them, the game has no bottom, and "build more" is a button
  * that only ever prints money.
  */
-export function greedyBuilder(world, { condos = true, hotels = true, housekeeping = true } = {}) {
+export function greedyBuilder(world, { condos = true, hotels = true, housekeeping = true, security = true } = {}) {
   const { tower } = world;
 
   /**
@@ -243,9 +243,30 @@ export function greedyBuilder(world, { condos = true, hotels = true, housekeepin
     return null;
   };
 
+  /**
+   * **The security office** (issue #12): the one thing the `2 -> 3` gate asks for
+   * by name. A basement, two stars. `security: false` is the player who never
+   * builds one (`--no-security`), which is what the star-ladder trial measures.
+   */
+  const buildSecurity = () => {
+    if (tower.starCount < 2) return null;
+    if ([...tower.objects.values()].some((o) => o.family === FAMILY.security)) return null;
+    for (const floor of [-1, -2, -3]) {
+      for (let left = 0; left + BUILDABLE.security.width <= 150; left += 4) {
+        const r = applyAction(world, { type: 'build', what: 'security', floor, left });
+        if (r.ok) return 'built a security office on B' + -floor;
+        if (/afford/.test(r.reason ?? '')) return null;
+      }
+    }
+    return null;
+  };
+
   return function act() {
     const lift = tower.carriers[0];
     if (!lift) return null;
+
+    // 0. The thing the ladder is waiting for, the moment it can be bought.
+    if (security) { const did = buildSecurity(); if (did) return did; }
 
     // 1. Anything stranded above the lift is the first thing a player notices —
     //    a room saying FOR RENT that never rents.
@@ -360,6 +381,86 @@ export function housekeepingTrial({ facilities, rooms = 22, days = 10, seed = 1,
     infestedAtEnd: built.filter(isHotelInfested).length,
     earned: watch.totals.earned,
     perDay,
+  };
+}
+
+/**
+ * **The star-ladder trial: the 2 -> 3 gate, with and without a security office.**
+ * Issue #12's proof.
+ *
+ * A tower that is honestly big enough: four lifts of eight cars each, and ten
+ * floors of offices (250 of them), so the tenants come from real routes through
+ * real carriers - nothing is written into the population ledger. It starts on an
+ * empty lot at one star, and the day the star count reaches two (300 activity, no
+ * other gate) the security office becomes buildable.
+ *
+ *  - `security: false` is the player who never builds one. The activity is far
+ *    past the 1,000 the next rung asks for, and the ladder stops at two stars
+ *    with *"a security office"* as the one blocker - `specs/GAME-STATE.md`
+ *    § Star Advancement.
+ *  - `security: true` builds one in the first basement the morning after the
+ *    second star, which is the earliest a player can (it is a two-star tool, and
+ *    the trial also tries at one star and reports the refusal).
+ *
+ * Returns the numbers; the CLI prints them and `test/security.test.js` asserts on
+ * the same function, so the harness and the test cannot disagree about what was
+ * run.
+ *
+ * @returns {{security:boolean, days:number, offices:number, perDay:object[],
+ *   twoStarDay:number|null, threeStarDay:number|null, peakActivity:number,
+ *   daysPastThreshold:number, finalStar:number, finalBlockers:string[],
+ *   earlyRefusal:string|null, securityCost:number|null, securityDay:number|null}}
+ */
+export function starLadderTrial({ security, days = 8, seed = 1, floors = 10, lifts = 4 } = {}) {
+  const world = newTowerWorld({ seed, cash: 90_000_000 });
+  const { tower } = world;
+  const must = (result, what) => {
+    if (!result.ok) throw new Error('star ladder trial: ' + what + ' would not build: ' + result.reason);
+    return result;
+  };
+  for (const column of [20, 50, 80, 110, 125].slice(0, lifts)) {
+    const shaft = must(applyAction(world, { type: 'build_shaft', kind: 'standard', bottom: 0, top: floors, column }), 'a lift');
+    for (let k = 0; k < 7; k++) must(applyAction(world, { type: 'add_car', carrierId: shaft.carrier.id }), 'a car');
+  }
+  let offices = 0;
+  for (let floor = 1; floor <= floors; floor++) {
+    for (let left = 0; left + BUILDABLE.office.width <= 150; left += BUILDABLE.office.width) {
+      if (applyAction(world, { type: 'build', what: 'office', floor, left }).ok) offices++;
+    }
+  }
+  rebuildRouteTables(tower);
+  const { scheduler } = makeDriver(world);
+
+  // A one-star tower cannot place one: it is a two-star tool.
+  const early = security ? applyAction(world, { type: 'build', what: 'security', floor: -1, left: 60 }) : null;
+  const earlyRefusal = early && !early.ok ? early.reason : null;
+
+  const perDay = [];
+  let securityCost = null, securityDay = null;
+  let twoStarDay = null, threeStarDay = null, peakActivity = 0, daysPastThreshold = 0;
+  for (let d = 0; d < days; d++) {
+    for (let t = 0; t < TICKS_PER_DAY; t++) scheduler.tick(tower);
+    if (security && securityDay === null && tower.starCount >= 2) {
+      const placed = applyAction(world, { type: 'build', what: 'security', floor: -1, left: 60 });
+      if (placed.ok) { securityCost = placed.cost; securityDay = tower.clock.dayCounter; }
+    }
+    const status = starGateStatus(tower);
+    let let_ = 0;
+    for (const o of tower.objects.values()) if (o.family === FAMILY.office && isUnitLet(o)) let_++;
+    const row = {
+      day: tower.clock.dayCounter, star: tower.starCount, activity: towerActivity(tower), let: let_,
+      blockers: status.blockers,
+    };
+    perDay.push(row);
+    if (row.star >= 2 && twoStarDay === null) twoStarDay = row.day;
+    if (row.star >= 3 && threeStarDay === null) threeStarDay = row.day;
+    peakActivity = Math.max(peakActivity, row.activity);
+    if (row.star === 2 && row.activity >= 1000) daysPastThreshold++;
+  }
+  const last = perDay[perDay.length - 1];
+  return {
+    security, days, offices, perDay, twoStarDay, threeStarDay, peakActivity, daysPastThreshold,
+    finalStar: last.star, finalBlockers: last.blockers, earlyRefusal, securityCost, securityDay,
   };
 }
 
@@ -632,6 +733,31 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     }
     process.exit(0);
   }
+  if (process.argv.includes('--stars')) {
+    // `node harness/playtest.js --stars [days]` - the issue #12 proof.
+    const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 8);
+    const dollars = (n) => '$' + n.toLocaleString('en-US');
+    console.log('star ladder trial: 250 offices on 10 floors, 4 lifts x 8 cars, 90M cash, ' + trialDays
+      + ' days. The gate for 3 stars is 1,000 activity AND a security office (GAME-STATE.md).' + String.fromCharCode(10));
+    for (const security of [false, true]) {
+      const r = starLadderTrial({ security, days: trialDays });
+      console.log((security ? 'WITH a security office' : 'WITHOUT security      ') + '  ->  '
+        + (r.threeStarDay === null
+          ? 'STALLS at ' + r.finalStar + ' stars'
+          : 'reaches 3 stars on day ' + r.threeStarDay) + '  (2 stars on day ' + r.twoStarDay + ', peak activity '
+        + r.peakActivity + ', ' + r.daysPastThreshold + ' day(s) at 2 stars with activity >= 1,000)');
+      if (r.earlyRefusal) console.log('   at one star:   "' + r.earlyRefusal + '"');
+      if (r.securityDay !== null) console.log('   built on day ' + r.securityDay + ' for ' + dollars(r.securityCost) + ' ($100,000 + 16 floor tiles)');
+      console.log('   blocker at the end: ' + (r.finalBlockers.length ? r.finalBlockers.join(' | ') : '-'));
+      console.log('   day  star  activity  let/' + r.offices + '  blockers');
+      for (const row of r.perDay) {
+        console.log('   ' + String(row.day).padStart(3) + String(row.star).padStart(6) + String(row.activity).padStart(10)
+          + String(row.let).padStart(9) + '  ' + (row.blockers.join(' | ') || '-'));
+      }
+      console.log('');
+    }
+    process.exit(0);
+  }
   if (process.argv.includes('--housekeeping')) {
     // `node harness/playtest.js --housekeeping [days]` - the issue #9 proof.
     const trialDays = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a)) ?? 10);
@@ -660,9 +786,11 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
   const hotels = !process.argv.includes('--no-hotels');
   // `--no-housekeeping` is the player who built hotels and never read the manual.
   const housekeeping = !process.argv.includes('--no-housekeeping');
+  // `--no-security` is the player who never built one: the tower stalls at two stars.
+  const security = !process.argv.includes('--no-security');
   const world = seedDemoWorld({ seed });
   const { scheduler } = makeDriver(world);
-  const act = plays ? greedyBuilder(world, { condos, hotels, housekeeping }) : () => null;
+  const act = plays ? greedyBuilder(world, { condos, hotels, housekeeping, security }) : () => null;
   const condoLedger = condoWatch(world.tower);
   const hotelLedger = hotelWatch(world.tower);
 
@@ -757,6 +885,10 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`
     + rooms.hotelSuite + ' suite) · ' + booked + ' booked, ' + dirty + ' dirty, ' + infested + ' infested · ' + h.checkins
     + ' check-in(s), ' + h.checkouts + ' checkout(s) ' + money(h.earned) + ' · construction '
     + money(-spentOnRooms) + '  =  ' + money(h.earned - spentOnRooms));
+  let guards = 0, offices = 0;
+  for (const o of world.tower.objects.values()) if (o.family === FAMILY.security) { offices++; guards += 6; }
+  console.log('security  ' + offices + ' office(s) (' + guards + ' guards) · $' + (offices * 20_000).toLocaleString('en-US')
+    + ' a pass in upkeep · ' + (world.tower.gates?.securityPlaced ? 'the 2 -> 3 gate is open' : 'the 2 -> 3 gate is SHUT'));
   console.log('housekeeping  ' + facilities + ' facilit' + (facilities === 1 ? 'y' : 'ies') + ' (' + facilities * 6
     + ' staff) · ' + h.cleaned + ' room(s) cleaned · ' + h.infestations + ' infested'
     + (h.firstInfestedDay === null ? '' : ' (first on day ' + h.firstInfestedDay + ')'));

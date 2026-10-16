@@ -36,6 +36,7 @@ import { FLYERS } from '../src/games/tower/render/sky.js';
 import { SHEET_READY } from '../src/games/tower/render/sprites.js';
 import { RESTAURANT_WIDTH, RETAIL_WIDTH, finalizeCommercialVenue } from '../src/games/tower/sim/commercial.js';
 import { PHASE, placeEntertainment } from '../src/games/tower/sim/entertainment.js';
+import { SECURITY_WIDTH } from '../src/games/tower/sim/security.js';
 import {
   PRELOAD_SHEETS, SPRITE_NOT_YET_DRAWN, SPRITE_UNUSED_ANIMATIONS, SPRITE_USES,
   makeRenderer,
@@ -141,6 +142,13 @@ function towerWithEverything() {
   mopping.state = 2;                             // HK_STATE.rest: in the room, tidying
   mopping.targetRoomId = dirtyRoom.id;
   mopping.targetFloor = HOTEL_FLOOR;
+
+  // Security (issue #12): the office, in the basement as the spec has it
+  // (*"security office is basement-only"*), with its six guards on duty. Two
+  // floors under the seeded basement shops, clear of them. The guards are not
+  // drawn as figures of their own - the control room is painted with one at the
+  // desk - so the office sheet is the whole of what reaches the screen.
+  place(tower, { family: FAMILY.security, floor: -3, left: 54, right: 54 + SECURITY_WIDTH - 1 }, trips);
 
   // The commercial venues (issue #10), each with its linked record so the money
   // sign over them draws too: a restaurant (its own sheet, day and by night) and a
@@ -407,6 +415,8 @@ export const tests = {
       'an empty, ready hotel room': 'room-empty/hotel',
       'a guest with a suitcase': 'person-guest/luggage',
       'the housekeeping facility': 'housekeeping/day',
+      'a security office by day': 'security/day',
+      'a security office at night': 'security/night',
       'a restaurant by day': 'restaurant/day',
       'a restaurant at night': 'restaurant/night',
       'a shop that has not been rented': 'shop/closed-night',

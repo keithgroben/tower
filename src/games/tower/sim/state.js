@@ -78,6 +78,12 @@ export const OBJECT_TYPE = {
   fastFood: 0x0c,
   housekeeping: 0x0f,
   /**
+   * The security office, `specs/ECONOMY.md` § Construction Costs (`0x0e`,
+   * $100,000) and `specs/FACILITIES.md` § Type codes (`14` / `0x0E`). Six guards
+   * live in it; they are staff (`sim/security.js`).
+   */
+  security: 0x0e,
+  /**
    * The two entertainment venues are TWO-FLOOR facilities, and each floor is its
    * own placed object (`specs/facility/ENTERTAINMENT.md` § Placed-Object Types:
    * *"Adjacent type codes denote upper and lower halves, base type = upper,
@@ -132,6 +138,12 @@ export const FAMILY = {
    */
   housekeeping: 0x0f,
   /**
+   * The security office and its guards, `specs/FACILITIES.md` § Type codes
+   * (`14` / `0x0E`), `specs/TIME.md` § 2500 (*"14/33 (0xe/0x21 - security/hotel
+   * guest): -> `0x01`"*). The placed facility and its six guards carry one code.
+   */
+  security: 0x0e,
+  /**
    * The audience of a movie theater (`0x12`) and the guests of a party hall
    * (`0x1d`). Both halves of a facility carry its family; the half is the
    * placed `type`. Their actors are the venue's *visitors*, exactly as a
@@ -142,7 +154,7 @@ export const FAMILY = {
 };
 
 /** Families whose actors are **staff**: they work the tower, they do not live in it. */
-export const STAFF_FAMILY_CODES = new Set([FAMILY.housekeeping]);
+export const STAFF_FAMILY_CODES = new Set([FAMILY.housekeeping, FAMILY.security]);
 export const isStaffFamily = (family) => STAFF_FAMILY_CODES.has(family);
 /** Is this actor a member of staff? Staff are not population and have no stress. */
 export const isStaff = (actor) => isStaffFamily(actor?.family);
@@ -183,6 +195,12 @@ export const OCCUPANTS = {
   // game's own manual ("6 staff") agree. They are placed with the facility, not
   // hired later, exactly as an office's workers are.
   [FAMILY.housekeeping]: 6,
+  // Security: **six guards** per office (issue #12: "6 staff"). Not stated in
+  // `specs/`; the reference implementation's `ENTITY_POPULATION_BY_TYPE` gives
+  // family `0x0e` six sims, as it gives `0x0f`, and the two staff facilities
+  // share a type table. Placed with the office, never hired.
+  // `spec/DEVIATIONS.md` A47.
+  [FAMILY.security]: 6,
   // The audience a venue half can seat, `ENTERTAINMENT.md` § Runtime Budget
   // Rules: a theater's per-half budget runs 60 / 60 / 40 / 20 by film age, so
   // sixty sims per half is what lets the budget - not the headcount - be the
@@ -234,6 +252,10 @@ export const POPULATION_CONTRIBUTION = {
   // key: `population()` falls back to `OCCUPANTS` for a missing entry, which would
   // count the six staff as residents. `spec/DEVIATIONS.md` A33.
   [FAMILY.housekeeping]: 0,
+  // Guards are staff, not residents - the same explicit `0` and for the same
+  // reason (`population()` falls back to `OCCUPANTS` for a missing key, and
+  // would count six guards as six more people the star ladder never saw).
+  [FAMILY.security]: 0,
   // A venue's visitors are counted where visitors are counted - the daily
   // rebuild's `cinema` / `partyHall` population buckets (`sim/entertainment.js`),
   // not as residents. An explicit 0, for the reason housekeeping's is one: a

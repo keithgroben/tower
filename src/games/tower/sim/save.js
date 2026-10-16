@@ -85,8 +85,15 @@ export const SAVE_SCHEMA = 'tower-save/v1';
  * field, `events` (`bombActive`, `fireActive`), that entertainment reads to pay
  * nothing on a bomb or fire day. A v4 file would load, but with no `events` the
  * gate would read undefined, and a theater it never contained cannot be resumed.
+ *
+ * v6 (issue #12, security) adds a sixth staff family whose guards sit at `0x01`
+ * and never leave it, and gives the `2 -> 3` gate its first way to be satisfied
+ * (`gates.securityPlaced`). The shape does not change; the rules do. A v5 file
+ * written at two stars with a population past 1,000 would resume stalled on a
+ * gate nothing could open, and a v6 file resumed by v5 would hold a family it has
+ * no staff handling for - which is the case the version exists for.
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /**
  * Tower keys that never travel as themselves. Each is rebuilt in `restore`,

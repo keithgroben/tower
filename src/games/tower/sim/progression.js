@@ -30,17 +30,19 @@
  * needs 3 stars, and 3→4 needs recycling. Each rung buys the tool the next rung
  * demands, which is why the population thresholds alone never let you skip one.
  *
- * **Most of this checklist cannot be satisfied in this build**, because
- * security, recycling, medical and metro do not exist as families yet. The
- * gates are implemented anyway and refuse by *name*: `starGateStatus()` says
- * "a security office" rather than silently failing. Dropping a gate to make the
- * ladder passable would be the worst available option — a tower that advances
- * because a requirement was skipped teaches the player something false, and
- * `CLAUDE.md` already keeps a list of metrics that improved while the thing
- * they measured got worse.
+ * **Part of this checklist cannot be satisfied in this build**, because
+ * recycling, medical and metro do not exist as families yet (security does, since
+ * issue #12 - it is what opens `2 -> 3`). The gates are implemented anyway and
+ * refuse by *name*: `starGateStatus()` says "a recycling centre keeping up with
+ * the tower" rather than silently failing. Dropping a gate to make the ladder
+ * passable would be the worst available option — a tower that advances because a
+ * requirement was skipped teaches the player something false, and `CLAUDE.md`
+ * already keeps a list of metrics that improved while the thing they measured
+ * got worse.
  */
 import { EVENING_DAYPART } from './clock.js';
 import { TYPE_CODES } from './economy.js';
+import { SECURITY_OFFICES_FOR_THREE_STARS } from './security.js';
 import { FAMILY } from './state.js';
 
 /**
@@ -96,16 +98,29 @@ export const starGatesOf = (tower) => (tower.gates ??= createStarGates());
  * be a different game — and a demolish-to-fail loop nobody asked for.
  */
 const PLACEMENT_GATES = [
-  { flag: 'officePlaced', family: FAMILY.office },
-  // `sim/state.js` has no name for these two, because no family implements
-  // them yet. The codes are the reference's own (`specs/ECONOMY.md`
-  // § Construction Costs) and `sim/economy.js` already carries them, so they
-  // are read from there rather than written down a third time and left to
-  // drift. `FAMILY.office === TYPE_CODES.office === 7`, so the two vocabularies
-  // agree where they overlap.
-  { flag: 'securityPlaced', family: TYPE_CODES.security },
-  { flag: 'metroPlaced', family: TYPE_CODES.metroStation },
+  { flag: 'officePlaced', family: FAMILY.office, min: 1 },
+  // `sim/state.js` has no name for the metro station, because no family
+  // implements it yet. The code is the reference's own (`specs/ECONOMY.md`
+  // § Construction Costs) and `sim/economy.js` already carries it, so it is read
+  // from there rather than written down a third time and left to drift.
+  // `FAMILY.office === TYPE_CODES.office === 7`, so the two vocabularies agree
+  // where they overlap - and `FAMILY.security === TYPE_CODES.security === 0x0e`
+  // since issue #12, which a test pins.
+  //
+  // `min` is how many standing objects of the family latch the flag. `1` for all
+  // three, as `specs/GAME-STATE.md` says (*"a security office must have been
+  // placed"*); security's is `SECURITY_OFFICES_FOR_THREE_STARS` because the
+  // original's help file says two (`spec/DEVIATIONS.md` A49).
+  { flag: 'securityPlaced', family: TYPE_CODES.security, min: SECURITY_OFFICES_FOR_THREE_STARS },
+  { flag: 'metroPlaced', family: TYPE_CODES.metroStation, min: 1 },
 ];
+
+/** How many objects of a family stand in the tower. */
+const standing = (tower, family) => {
+  let n = 0;
+  for (const object of tower.objects.values()) if (object.family === family) n++;
+  return n;
+};
 
 /**
  * Latch any placement gate a standing object satisfies.
@@ -118,19 +133,25 @@ const PLACEMENT_GATES = [
  */
 export function refreshPlacementGates(tower) {
   const gates = starGatesOf(tower);
-  const wanted = PLACEMENT_GATES.filter((g) => !gates[g.flag]);
-  if (wanted.length === 0) return gates;
-
-  for (const object of tower.objects.values()) {
-    for (const gate of wanted) if (object.family === gate.family) gates[gate.flag] = true;
+  for (const gate of PLACEMENT_GATES) {
+    if (!gates[gate.flag] && standing(tower, gate.family) >= gate.min) gates[gate.flag] = true;
   }
   return gates;
 }
 
-/** Latch immediately when something is placed. `applyAction` calls this. */
+/**
+ * Latch immediately when something is placed. `applyAction` calls this.
+ *
+ * The call IS a placement, so at least one object of the family exists even when
+ * the caller has not put it in the table (the unit tests do not) - `Math.max`.
+ */
 export function notePlacement(tower, family) {
   const gates = starGatesOf(tower);
-  for (const gate of PLACEMENT_GATES) if (gate.family === family) gates[gate.flag] = true;
+  for (const gate of PLACEMENT_GATES) {
+    if (gate.family === family && !gates[gate.flag] && Math.max(1, standing(tower, family)) >= gate.min) {
+      gates[gate.flag] = true;
+    }
+  }
   return gates;
 }
 

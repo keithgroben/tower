@@ -118,6 +118,8 @@ export const tests = {
       // Housekeeping is a service: it is not let, sold or booked, and it is never
       // vacant — it has staff, not tenants — so it carries no sign.
       housekeeping: '',
+      // Security is a service of the same kind: guards, not tenants, so no sign.
+      security: '',
       // The two entertainment venues are not let, sold or booked either: they
       // have visitors, not tenants, and their sign is the attendance sign
       // (`entertainmentSignal`), not a lease tag.

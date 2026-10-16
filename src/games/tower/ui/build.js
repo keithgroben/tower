@@ -29,7 +29,7 @@
  * **its** refusal, so a disagreement surfaces as a visible sentence rather than
  * as a ghost that lied.
  */
-import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, buildCost, demolishRefusal, linkObstruction, lobbyFloorReason, placementObstruction, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
+import { BUILDABLE, LINK_KIND, LINK_WIDTH, SHAFT_KIND, buildCost, demolishRefusal, gradeReason, linkObstruction, lobbyFloorReason, placementObstruction, shaftObstruction, shaftSpanReason } from '../sim/actions.js';
 import { lockReason } from '../sim/progression.js';
 import {
   carCostForMode, chargeConstruction, payout, CONSTRUCTION_COST, TYPE_CODES,
@@ -249,9 +249,8 @@ export function preview(world, tool, target) {
     // and in the seam's own words. A refusal the sim has and the ghost does not
     // is the "passes through 12 rooms" bug again: a green ghost over a
     // basement, and a click that does nothing.
-    if (spec.aboveGrade && command.floor <= GROUND_FLOOR) {
-      return refuse('a ' + spec.label.toLowerCase() + ' has to go above the ground floor', { cost, footprint });
-    }
+    const wrongGrade = gradeReason(spec, command.floor);
+    if (wrongGrade) return refuse(wrongGrade, { cost, footprint });
     const wrongFloor = lobbyFloorReason(spec.family, command.floor);
     if (wrongFloor) return refuse(wrongFloor, { cost, footprint });
     // The seam's own predicate: a single room's span, or both floors of a venue
